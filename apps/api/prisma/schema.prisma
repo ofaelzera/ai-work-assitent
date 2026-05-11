@@ -1,0 +1,471 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Workspace ────────────────────────────────────────────────────────────────
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users           User[]
+  channels        Channel[]
+  contacts        Contact[]
+  conversations   Conversation[]
+  messages        Message[]
+  boards          Board[]
+  cards           Card[]
+  tasks           Task[]
+  agents          Agent[]
+  prompts         Prompt[]
+  aiLogs          AIExecutionLog[]
+  memoryChunks    MemoryChunk[]
+  calendarAccounts CalendarAccount[]
+  calendarEvents  CalendarEvent[]
+  vaultItems      VaultItem[]
+  vaultFolders    VaultFolder[]
+  attachments     Attachment[]
+  eventLogs       EventLog[]
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+model User {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(MEMBER)
+  twoFactor    Boolean  @default(false)
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id])
+  refreshTokens RefreshToken[]
+  vaultItems   VaultItem[]
+  vaultFolders VaultFolder[]
+
+  @@index([workspaceId])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique @db.VarChar(512)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── Channels ────────────────────────────────────────────────────────────────
+model Channel {
+  id          String        @id @default(cuid())
+  workspaceId String
+  type        ChannelType
+  label       String
+  status      ChannelStatus @default(DISCONNECTED)
+  config      Json          // segredos cifrados em repouso (AES-256-GCM)
+  deletedAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id])
+  conversations Conversation[]
+
+  @@index([workspaceId, type])
+}
+
+// ─── Contacts ────────────────────────────────────────────────────────────────
+model Contact {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String?
+  phone       String?
+  email       String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id])
+  conversations Conversation[]
+  cards         Card[]
+
+  @@index([workspaceId, phone])
+  @@index([workspaceId, email])
+}
+
+// ─── Conversations ───────────────────────────────────────────────────────────
+model Conversation {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  channelId     String
+  contactId     String?
+  externalId    String    // chatId WA / threadId Gmail
+  subject       String?
+  isGroup       Boolean   @default(false)
+  lastMessageAt DateTime?
+  unreadCount   Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  channel   Channel   @relation(fields: [channelId], references: [id])
+  contact   Contact?  @relation(fields: [contactId], references: [id])
+  messages  Message[]
+  cards     Card[]
+
+  @@unique([channelId, externalId])
+  @@index([workspaceId, lastMessageAt])
+}
+
+// ─── Messages ────────────────────────────────────────────────────────────────
+model Message {
+  id               String           @id @default(cuid())
+  workspaceId      String
+  conversationId   String
+  direction        MessageDirection
+  externalId       String?
+  fromContactId    String?
+  fromUserId       String?
+  body             String           @db.Text
+  bodyHtml         String?          @db.LongText
+  attachments      Json?
+  sentAt           DateTime
+  receivedAt       DateTime         @default(now())
+  aiClassification Json?
+  taskId           String?
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id])
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@unique([conversationId, externalId])
+  @@index([workspaceId, conversationId, sentAt])
+}
+
+// ─── Kanban ──────────────────────────────────────────────────────────────────
+model Board {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  columns   Column[]
+
+  @@index([workspaceId])
+}
+
+model Column {
+  id        String   @id @default(cuid())
+  boardId   String
+  name      String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  board Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  cards Card[]
+
+  @@index([boardId, position])
+}
+
+model Card {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  columnId       String
+  title          String
+  description    String?   @db.Text
+  priority       Priority  @default(MEDIUM)
+  dueDate        DateTime?
+  contactId      String?
+  conversationId String?
+  createdBy      CreatedBy @default(USER)
+  assigneeId     String?
+  position       Int
+  labels         Json?
+  checklist      Json?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id])
+  column       Column        @relation(fields: [columnId], references: [id])
+  contact      Contact?      @relation(fields: [contactId], references: [id])
+  conversation Conversation? @relation(fields: [conversationId], references: [id])
+  history      CardHistory[]
+  comments     CardComment[]
+  attachments  Attachment[]
+  tasks        Task[]
+
+  @@index([workspaceId, columnId, position])
+}
+
+model CardComment {
+  id        String   @id @default(cuid())
+  cardId    String
+  userId    String?
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+}
+
+model CardHistory {
+  id        String   @id @default(cuid())
+  cardId    String
+  userId    String?
+  action    String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+}
+
+// ─── Tasks ───────────────────────────────────────────────────────────────────
+model Task {
+  id          String    @id @default(cuid())
+  workspaceId String
+  cardId      String?
+  title       String
+  done        Boolean   @default(false)
+  remindAt    DateTime?
+  recurrence  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  card      Card?     @relation(fields: [cardId], references: [id])
+
+  @@index([workspaceId, done])
+}
+
+// ─── AI ──────────────────────────────────────────────────────────────────────
+model Agent {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  name         String
+  description  String?
+  systemPrompt String   @db.Text
+  model        String
+  provider     String
+  temperature  Float    @default(0.4)
+  tools        Json?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id])
+  logs      AIExecutionLog[]
+
+  @@index([workspaceId, isActive])
+}
+
+model Prompt {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  body        String   @db.Text
+  version     Int      @default(1)
+  tags        Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId])
+}
+
+model AIExecutionLog {
+  id          String   @id @default(cuid())
+  workspaceId String
+  agentId     String?
+  provider    String
+  model       String
+  input       Json
+  output      Json?
+  tokensIn    Int?
+  tokensOut   Int?
+  costUsd     Decimal? @db.Decimal(10, 6)
+  latencyMs   Int?
+  error       String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  agent     Agent?    @relation(fields: [agentId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([agentId])
+}
+
+model MemoryChunk {
+  id          String   @id @default(cuid())
+  workspaceId String
+  sourceType  String   // conversation | card | document
+  sourceId    String
+  content     String   @db.Text
+  embedding   Bytes?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, sourceType, sourceId])
+}
+
+// ─── Calendar ────────────────────────────────────────────────────────────────
+model CalendarAccount {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  provider    String   @default("google")
+  tokens      Json     // cifrado
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id])
+  events    CalendarEvent[]
+
+  @@unique([workspaceId, userId, provider])
+}
+
+model CalendarEvent {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  calendarAccountId String
+  externalId      String
+  title           String
+  startAt         DateTime
+  endAt           DateTime
+  cardId          String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id])
+  calendarAccount CalendarAccount @relation(fields: [calendarAccountId], references: [id])
+
+  @@unique([calendarAccountId, externalId])
+  @@index([workspaceId, startAt])
+}
+
+// ─── Vault ───────────────────────────────────────────────────────────────────
+model VaultItem {
+  id          String   @id @default(cuid())
+  workspaceId String
+  ownerId     String
+  type        String   // password | ssh | ftp | db | api | note | file
+  title       String
+  folderId    String?
+  tags        Json?
+  favorite    Boolean  @default(false)
+  ciphertext  Bytes
+  iv          Bytes
+  authTag     Bytes
+  metadata    Json?
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id])
+  owner     User         @relation(fields: [ownerId], references: [id])
+  folder    VaultFolder? @relation(fields: [folderId], references: [id])
+
+  @@index([workspaceId, ownerId])
+}
+
+model VaultFolder {
+  id          String   @id @default(cuid())
+  workspaceId String
+  ownerId     String
+  name        String
+  parentId    String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id])
+  owner     User        @relation(fields: [ownerId], references: [id])
+  items     VaultItem[]
+
+  @@index([workspaceId, ownerId])
+}
+
+// ─── Storage ─────────────────────────────────────────────────────────────────
+model Attachment {
+  id          String   @id @default(cuid())
+  workspaceId String
+  uploadedBy  String
+  filename    String
+  mimeType    String
+  sizeBytes   Int
+  storageKey  String   // path relativo em /storage/
+  cardId      String?
+  vaultItemId String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  card      Card?     @relation(fields: [cardId], references: [id])
+
+  @@index([workspaceId, cardId])
+}
+
+// ─── Events ──────────────────────────────────────────────────────────────────
+model EventLog {
+  id          String   @id @default(cuid())
+  workspaceId String
+  type        String   // message.received, card.created, ai.executed, ...
+  payload     Json
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, type, createdAt])
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum ChannelType {
+  WHATSAPP
+  GMAIL
+  IMAP_SMTP
+}
+
+enum ChannelStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum CreatedBy {
+  USER
+  AI
+}
