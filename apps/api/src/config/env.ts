@@ -17,6 +17,7 @@ const envSchema = z.object({
 
   EVOLUTION_SERVER_URL: z.string().url().optional(),
   EVOLUTION_API_KEY: z.string().optional(),
+  EVOLUTION_WEBHOOK_URL: z.string().optional(),
   EVOLUTION_WEBHOOK_SECRET: z.string().optional(),
 
   GOOGLE_CLIENT_ID: z.string().optional(),

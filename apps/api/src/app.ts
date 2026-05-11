@@ -11,6 +11,9 @@ import { logger } from './lib/logger.js'
 import { redis } from './lib/redis.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes.js'
+import { channelsRoutes } from './modules/channels/channels.routes.js'
+import { webhookRoutes } from './modules/channels/webhook.routes.js'
+import { conversationsRoutes } from './modules/messages/conversations.routes.js'
 import type { JwtPayload } from '@aiwa/shared'
 
 declare module '@fastify/jwt' {
@@ -65,8 +68,19 @@ export async function buildApp() {
   // Healthcheck
   app.get('/health', async () => ({ status: 'ok', ts: Date.now() }))
 
-  // SSE — stream de eventos para o front
-  app.get('/sse', { onRequest: [app.authenticate] }, async (req, reply) => {
+  // SSE — aceita token via query string (EventSource não suporta headers)
+  app.get('/sse', async (req: FastifyRequest<{ Querystring: { token?: string } }>, reply) => {
+    const token = (req.query as any).token as string | undefined
+    if (!token) return reply.unauthorized('Token obrigatório')
+
+    try {
+      req.jwtVerify({ onlyCookie: false, ...{ token } })
+      // Verificação manual do token
+      app.jwt.verify(token)
+    } catch {
+      return reply.unauthorized('Token inválido')
+    }
+
     reply.raw.setHeader('Content-Type', 'text/event-stream')
     reply.raw.setHeader('Cache-Control', 'no-cache')
     reply.raw.setHeader('Connection', 'keep-alive')
@@ -86,6 +100,9 @@ export async function buildApp() {
   // Rotas
   await app.register(authRoutes)
   await app.register(dashboardRoutes)
+  await app.register(channelsRoutes)
+  await app.register(webhookRoutes)
+  await app.register(conversationsRoutes)
 
   return app
 }
