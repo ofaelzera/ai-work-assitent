@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, RefreshCw, Trash2, Wifi, WifiOff, QrCode, X } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, QrCode, X, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Channel {
@@ -18,6 +18,8 @@ interface Channel {
 interface QrData {
   base64?: string
   code?: string
+  pairingCode?: string
+  count?: number
 }
 
 export default function ChannelsPage() {
@@ -25,6 +27,30 @@ export default function ChannelsPage() {
   const [newLabel, setNewLabel] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [qr, setQr] = useState<{ channelId: string; data: QrData } | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Poll status enquanto modal QR está aberto
+  useEffect(() => {
+    if (!qr) {
+      if (pollRef.current) clearInterval(pollRef.current)
+      return
+    }
+    const poll = async () => {
+      try {
+        const res = await apiFetch<{ status: string }>(`/channels/${qr.channelId}/status`)
+        queryClient.invalidateQueries({ queryKey: ['channels'] })
+        if (res.status === 'CONNECTED') {
+          setQr(null)
+          toast.success('WhatsApp conectado com sucesso!')
+          if (pollRef.current) clearInterval(pollRef.current)
+        }
+      } catch {
+        // silencioso
+      }
+    }
+    pollRef.current = setInterval(poll, 3000)
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [qr?.channelId])
 
   const { data: channels = [], isLoading } = useQuery({
     queryKey: ['channels'],
@@ -196,7 +222,7 @@ export default function ChannelsPage() {
             </div>
             {qr.data.base64 ? (
               <img
-                src={`data:image/png;base64,${qr.data.base64}`}
+                src={qr.data.base64.startsWith('data:') ? qr.data.base64 : `data:image/png;base64,${qr.data.base64}`}
                 alt="QR Code WhatsApp"
                 className="w-full rounded-lg border"
               />

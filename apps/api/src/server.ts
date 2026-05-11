@@ -8,7 +8,6 @@ async function main() {
   const app = await buildApp()
 
   try {
-    await redis.connect()
     startWorkers()
     await app.listen({ port: env.PORT, host: env.HOST })
     console.log(`🚀 API rodando em http://${env.HOST}:${env.PORT}`)
@@ -20,7 +19,7 @@ async function main() {
   const graceful = async () => {
     await app.close()
     await prisma.$disconnect()
-    await redis.quit()
+    if (redis.status === 'ready') await redis.quit()
     process.exit(0)
   }
 

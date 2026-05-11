@@ -50,20 +50,26 @@ export async function syncChannelStatus(channelId: string) {
   )
 
   try {
-    const instances = await evolutionClient.getInstance(decrypted.instanceName) as unknown as EvolutionInstanceResponse
+    // Evolution API v2 retorna array flat com `connectionStatus`
+    const instances = await evolutionClient.getInstance(decrypted.instanceName) as unknown as EvolutionInstanceV2[]
     const inst = Array.isArray(instances) ? instances[0] : instances
-    const connected = inst?.instance?.status === 'open'
+    const connectionStatus = (inst as any)?.connectionStatus ?? (inst as any)?.instance?.status
+    const connected = connectionStatus === 'open'
     const status = connected ? 'CONNECTED' : 'DISCONNECTED'
     await prisma.channel.update({ where: { id: channelId }, data: { status } })
-    return { status, instanceName: decrypted.instanceName }
+    return { status, instanceName: decrypted.instanceName, connectionStatus }
   } catch {
     await prisma.channel.update({ where: { id: channelId }, data: { status: 'ERROR' } })
     return { status: 'ERROR', instanceName: decrypted.instanceName }
   }
 }
 
-interface EvolutionInstanceResponse {
-  instance?: { status?: string }
+interface EvolutionInstanceV2 {
+  id?: string
+  name?: string
+  connectionStatus?: string
+  ownerJid?: string
+  profileName?: string
 }
 
 export async function deleteChannel(channelId: string) {
