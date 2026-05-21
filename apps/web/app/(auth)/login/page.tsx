@@ -8,7 +8,7 @@ import { toast } from 'sonner'
 import { LoginSchema, type LoginInput } from '@aiwa/shared'
 import { login } from '@/lib/auth'
 import { useAuthStore } from '@/store/auth'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, getAccessToken } from '@/lib/api'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -28,7 +28,7 @@ export default function LoginPage() {
     try {
       await login(data)
       const me = await apiFetch<{ sub: string; workspaceId: string; role: 'ADMIN' | 'MEMBER' }>('/auth/me')
-      setUser(me, null)
+      setUser(me, getAccessToken())
       router.replace('/dashboard')
     } catch {
       toast.error('Email ou senha incorretos')

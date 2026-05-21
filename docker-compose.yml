@@ -47,6 +47,8 @@ services:
       CACHE_REDIS_PREFIX_KEY: evolution
       WEBHOOK_GLOBAL_URL: ${EVOLUTION_WEBHOOK_URL:-http://host.docker.internal:3333/webhooks/whatsapp}
       WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: 'false'
+      WEBSOCKET_ENABLED: 'true'
+      WEBSOCKET_GLOBAL_EVENTS: 'true'
       CONFIG_SESSION_PHONE_CLIENT: AI Work Assistant
       CONFIG_SESSION_PHONE_NAME: Chrome
       LOG_LEVEL: ERROR

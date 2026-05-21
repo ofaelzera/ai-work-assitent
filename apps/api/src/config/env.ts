@@ -27,6 +27,8 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
+  OPENROUTER_API_KEY: z.string().optional(),
+  OPENROUTER_SITE_URL: z.string().optional(),
 
   STORAGE_PATH: z.string().default('./storage'),
 })

@@ -1,0 +1,13 @@
+-- Agenda local: eventos podem existir sem Google Calendar conectado.
+-- Esta migration foi aplicada em partes durante o desenvolvimento.
+-- Estado final esperado em CalendarEvent:
+--   • calendarAccountId VARCHAR(191) NULL  (era NOT NULL)
+--   • externalId        VARCHAR(191) NULL  (era NOT NULL)
+--   • ownerId           VARCHAR(191) NOT NULL  (novo)
+--   • description       TEXT NULL  (novo)
+--   • FK calendarAccountId com ON DELETE SET NULL
+--   • Index (workspaceId, ownerId, startAt)
+--
+-- Como o estado já existe no banco (aplicado manualmente nas tentativas anteriores),
+-- esta migration fica vazia. Em ambientes novos, o Prisma aplica via schema.prisma.
+SELECT 1;

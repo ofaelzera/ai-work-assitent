@@ -58,17 +58,32 @@ async function main() {
   "confidence": 0.0 a 1.0
 }
 Considere URGENT apenas para problemas de produção ou sistema fora do ar.`,
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-flash',
       provider: 'gemini',
       temperature: 0.3,
     },
     {
       name: 'Sugestão de Resposta',
       description: 'Sugere respostas para mensagens recebidas',
-      systemPrompt: `Você é um assistente que sugere respostas profissionais e cordiais.
-Dado o histórico da conversa e a última mensagem, sugira 2 opções de resposta curtas e diretas.
-Responda em JSON: { "suggestions": ["opção 1", "opção 2"] }`,
-      model: 'gemini-1.5-flash',
+      systemPrompt: `Você é um assistente que sugere respostas profissionais e empáticas para mensagens de negócios.
+
+Analise o histórico da conversa e a última mensagem, e sugira 3 opções de resposta.
+
+Responda APENAS com um JSON válido:
+{
+  "suggestions": [
+    { "label": string, "text": string },
+    { "label": string, "text": string },
+    { "label": string, "text": string }
+  ]
+}
+
+Regras:
+- label: rótulo curto descrevendo o tom (ex: "Formal", "Amigável", "Direto")
+- text: a resposta completa, pronta para enviar
+- Mantenha o idioma da conversa
+- Seja conciso — respostas de 1 a 3 frases`,
+      model: 'gemini-2.5-flash',
       provider: 'gemini',
       temperature: 0.7,
     },
@@ -77,7 +92,7 @@ Responda em JSON: { "suggestions": ["opção 1", "opção 2"] }`,
       description: 'Resume conversas longas',
       systemPrompt: `Você é um resumidor. Dado o histórico de mensagens de uma conversa, produza um resumo conciso em 3-5 bullet points do que foi discutido, decisões tomadas e próximos passos (se houver).
 Responda em JSON: { "summary": "texto", "bullets": ["item1", "item2"] }`,
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-flash',
       provider: 'gemini',
       temperature: 0.4,
     },

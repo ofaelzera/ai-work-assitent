@@ -17,8 +17,9 @@ interface FetchOptions extends RequestInit {
 export async function apiFetch<T>(path: string, options: FetchOptions = {}): Promise<T> {
   const { skipAuth, ...rest } = options
 
+  const isFormData = rest.body instanceof FormData
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(rest.body !== undefined && !isFormData ? { 'Content-Type': 'application/json' } : {}),
     ...(rest.headers as Record<string, string>),
   }
 
@@ -54,7 +55,15 @@ export async function apiFetch<T>(path: string, options: FetchOptions = {}): Pro
 
   if (!res.ok) {
     const text = await res.text()
-    throw new ApiError(res.status, text)
+    // Extrai campo "message" do JSON de erro do Fastify/Zod e preserva o body completo
+    let message = text
+    let body: unknown = undefined
+    try {
+      const json = JSON.parse(text)
+      message = json.message ?? json.error ?? text
+      body = json
+    } catch {}
+    throw new ApiError(res.status, message, body)
   }
 
   if (res.status === 204) return undefined as T
@@ -65,6 +74,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public body?: unknown,
   ) {
     super(message)
     this.name = 'ApiError'

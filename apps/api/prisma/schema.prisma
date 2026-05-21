@@ -11,6 +11,7 @@ datasource db {
 model Workspace {
   id        String   @id @default(cuid())
   name      String
+  settings  Json?    // { distributionMode, defaultAssigneeId, roundRobinUserIds, claimTimeoutMinutes }
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -31,7 +32,9 @@ model Workspace {
   vaultItems      VaultItem[]
   vaultFolders    VaultFolder[]
   attachments     Attachment[]
+  storageFolders  StorageFolder[]
   eventLogs       EventLog[]
+  companies       Company[]
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -51,6 +54,8 @@ model User {
   refreshTokens RefreshToken[]
   vaultItems   VaultItem[]
   vaultFolders VaultFolder[]
+  assignedConversations Conversation[] @relation("ConversationAssignee")
+  assignedTasks         Task[]         @relation("TaskAssignee")
 
   @@index([workspaceId])
 }
@@ -75,6 +80,9 @@ model Channel {
   label       String
   status      ChannelStatus @default(DISCONNECTED)
   config      Json          // segredos cifrados em repouso (AES-256-GCM)
+  signature   String?       @db.Text  // assinatura de email (HTML ou texto)
+  settings    Json?         // não-criptografado: { ignoreGroups, defaultAssigneeId, autoResolveOnRead, distributionMode, imapFolders, lastAssignedUserId }
+  lastSyncedAt DateTime?    // última sincronização bem-sucedida (usado pra delta sync)
   deletedAt   DateTime?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
@@ -89,43 +97,90 @@ model Channel {
 model Contact {
   id          String   @id @default(cuid())
   workspaceId String
-  name        String?
-  phone       String?
-  email       String?
-  metadata    Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  name              String?
+  phone             String?    // PN (Phone Number) — telefone real, ex: 5511999999999
+  phoneType         PhoneType  @default(PN)  // PN = telefone real | LID = ID opaco WhatsApp
+  lid               String?    // Linked ID opaco do WhatsApp (quando phoneType=LID)
+  email             String?
+  metadata          Json?
+  companyId         String?
+  mergedIntoId      String?   // aponta para o contato primário ao mesclar
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  workspace     Workspace      @relation(fields: [workspaceId], references: [id])
-  conversations Conversation[]
-  cards         Card[]
+  workspace        Workspace      @relation(fields: [workspaceId], references: [id])
+  company          Company?       @relation(fields: [companyId], references: [id])
+  conversations    Conversation[]
+  cards            Card[]
+  sentMessages     Message[]      @relation("MessageSender")
+  tasks            Task[]
+  calendarEvents   CalendarEvent[]
 
   @@index([workspaceId, phone])
+  @@index([workspaceId, lid])
   @@index([workspaceId, email])
+  @@index([workspaceId, companyId])
+}
+
+// ─── Companies ───────────────────────────────────────────────────────────────
+model Company {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  color       String    @default("#6366f1")
+  domain      String?   // ex: empresa.com.br
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  contacts  Contact[]
+
+  @@index([workspaceId])
 }
 
 // ─── Conversations ───────────────────────────────────────────────────────────
 model Conversation {
-  id            String    @id @default(cuid())
-  workspaceId   String
-  channelId     String
-  contactId     String?
-  externalId    String    // chatId WA / threadId Gmail
-  subject       String?
-  isGroup       Boolean   @default(false)
-  lastMessageAt DateTime?
-  unreadCount   Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id               String             @id @default(cuid())
+  workspaceId      String
+  channelId        String
+  contactId        String?
+  assigneeId       String?            // usuário responsável (Fase 1: regras de canal)
+  externalId       String             // chatId WA / threadId Gmail
+  folder           String?            // pasta IMAP de origem (só pra emails)
+  subject          String?
+  isGroup          Boolean            @default(false)
+  favorite         Boolean            @default(false)
+  archived         Boolean            @default(false)
+  status           ConversationStatus @default(OPEN)
+  source           ConvSource         @default(LIVE)  // LIVE = real-time, IMPORTED = veio do sync histórico
+  importedAt       DateTime?          // marca quando foi importada via sync histórico
+  claimedAt        DateTime?          // quando alguém assumiu a conversa (Fase B)
+  releasedFrom     Json?              // [{ userId, at, reason }] — audit de devoluções (Fase B)
+  lastMessageAt    DateTime?
+  firstResponseAt  DateTime?          // quando demos a primeira resposta
+  resolvedAt       DateTime?          // quando foi finalizada
+  reopenCount      Int                @default(0) // vezes que reabriu
+  triageCount      Int                @default(0) // vezes que foi triada
+  unreadCount      Int                @default(0)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id])
   channel   Channel   @relation(fields: [channelId], references: [id])
   contact   Contact?  @relation(fields: [contactId], references: [id])
+  assignee  User?     @relation("ConversationAssignee", fields: [assigneeId], references: [id])
   messages  Message[]
   cards     Card[]
+  tasks     Task[]
+  calendarEvents CalendarEvent[]
 
-  @@unique([channelId, externalId])
+  // Sem unique — múltiplos tickets por contato são permitidos (modelo ticket)
+  @@index([channelId, externalId])
+  @@index([workspaceId, status, lastMessageAt])
   @@index([workspaceId, lastMessageAt])
+  @@index([workspaceId, assigneeId])
+  @@index([channelId, folder])
+  @@index([workspaceId, source])
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
@@ -137,16 +192,22 @@ model Message {
   externalId       String?
   fromContactId    String?
   fromUserId       String?
-  body             String           @db.Text
+  body             String           @db.MediumText
   bodyHtml         String?          @db.LongText
   attachments      Json?
   sentAt           DateTime
   receivedAt       DateTime         @default(now())
   aiClassification Json?
   taskId           String?
+  deliveryStatus   String?          // PENDING | SENT | DELIVERED | READ | PLAYED (outbound WA)
+  metadata         Json?            // dados específicos do canal (ex: imapUid, imapFolder p/ email)
+  quotedMsgId      String?          // externalId da mensagem citada
+  quotedBody       String?          @db.Text
+  quotedSender     String?
 
   workspace    Workspace    @relation(fields: [workspaceId], references: [id])
   conversation Conversation @relation(fields: [conversationId], references: [id])
+  fromContact  Contact?     @relation("MessageSender", fields: [fromContactId], references: [id])
 
   @@unique([conversationId, externalId])
   @@index([workspaceId, conversationId, sentAt])
@@ -240,20 +301,31 @@ model CardHistory {
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 model Task {
-  id          String    @id @default(cuid())
-  workspaceId String
-  cardId      String?
-  title       String
-  done        Boolean   @default(false)
-  remindAt    DateTime?
-  recurrence  String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  workspaceId    String
+  cardId         String?
+  contactId      String?
+  conversationId String?
+  messageId      String?
+  assigneeId     String?   // quem deve cumprir (User)
+  title          String
+  description    String?   @db.Text
+  done           Boolean   @default(false)
+  remindAt       DateTime?
+  recurrence     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
-  card      Card?     @relation(fields: [cardId], references: [id])
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id])
+  card         Card?         @relation(fields: [cardId], references: [id])
+  contact      Contact?      @relation(fields: [contactId], references: [id])
+  conversation Conversation? @relation(fields: [conversationId], references: [id])
+  assignee     User?         @relation("TaskAssignee", fields: [assigneeId], references: [id])
 
   @@index([workspaceId, done])
+  @@index([workspaceId, assigneeId, done])
+  @@index([contactId])
+  @@index([conversationId])
 }
 
 // ─── AI ──────────────────────────────────────────────────────────────────────
@@ -347,20 +419,29 @@ model CalendarAccount {
 model CalendarEvent {
   id              String   @id @default(cuid())
   workspaceId     String
-  calendarAccountId String
-  externalId      String
+  ownerId         String   // user dono do evento (sempre obrigatório; eventos são por usuário)
+  calendarAccountId String? // nullable: evento local (sem Google sync). Quando preenchido, está sincronizado.
+  externalId      String?  // nullable: ID no Google Calendar quando sincronizado
   title           String
+  description     String?  @db.Text
   startAt         DateTime
   endAt           DateTime
   cardId          String?
+  contactId       String?
+  conversationId  String?
+  messageId       String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  workspace       Workspace       @relation(fields: [workspaceId], references: [id])
-  calendarAccount CalendarAccount @relation(fields: [calendarAccountId], references: [id])
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id])
+  calendarAccount CalendarAccount? @relation(fields: [calendarAccountId], references: [id])
+  contact         Contact?         @relation(fields: [contactId], references: [id])
+  conversation    Conversation?    @relation(fields: [conversationId], references: [id])
 
   @@unique([calendarAccountId, externalId])
-  @@index([workspaceId, startAt])
+  @@index([workspaceId, ownerId, startAt])
+  @@index([contactId])
+  @@index([conversationId])
 }
 
 // ─── Vault ───────────────────────────────────────────────────────────────────
@@ -404,6 +485,44 @@ model VaultFolder {
 }
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
+enum StorageVisibility {
+  PRIVATE  // só o dono vê
+  SHARED   // dono + usuários listados em StorageFolderShare
+  PUBLIC   // todos do workspace veem
+}
+
+model StorageFolder {
+  id          String            @id @default(cuid())
+  workspaceId String
+  ownerId     String            // criador da pasta
+  name        String
+  visibility  StorageVisibility @default(PRIVATE)
+  parentId    String?           // null = raiz
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id])
+  parent    StorageFolder? @relation("FolderTree", fields: [parentId], references: [id])
+  children  StorageFolder[] @relation("FolderTree")
+  files     Attachment[]
+  shares    StorageFolderShare[]
+
+  @@index([workspaceId, parentId])
+  @@index([workspaceId, ownerId])
+}
+
+model StorageFolderShare {
+  id        String   @id @default(cuid())
+  folderId  String
+  userId    String   // usuário com acesso (além do dono)
+  createdAt DateTime @default(now())
+
+  folder StorageFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+
+  @@unique([folderId, userId])
+  @@index([userId])
+}
+
 model Attachment {
   id          String   @id @default(cuid())
   workspaceId String
@@ -414,12 +533,30 @@ model Attachment {
   storageKey  String   // path relativo em /storage/
   cardId      String?
   vaultItemId String?
+  folderId    String?  // pasta da biblioteca de arquivos (null = "Meus arquivos" raiz)
+  visibility  StorageVisibility @default(PRIVATE)
   createdAt   DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
-  card      Card?     @relation(fields: [cardId], references: [id])
+  workspace Workspace      @relation(fields: [workspaceId], references: [id])
+  card      Card?          @relation(fields: [cardId], references: [id])
+  folder    StorageFolder? @relation(fields: [folderId], references: [id])
+  shares    AttachmentShare[]
 
   @@index([workspaceId, cardId])
+  @@index([workspaceId, folderId])
+  @@index([workspaceId, uploadedBy])
+}
+
+model AttachmentShare {
+  id           String   @id @default(cuid())
+  attachmentId String
+  userId       String
+  createdAt    DateTime @default(now())
+
+  attachment Attachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+
+  @@unique([attachmentId, userId])
+  @@index([userId])
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -439,6 +576,12 @@ model EventLog {
 enum Role {
   ADMIN
   MEMBER
+}
+
+enum PhoneType {
+  PN       // Phone Number — telefone real, contactável
+  LID      // Linked ID — identificador opaco do WhatsApp (privacidade)
+  UNKNOWN  // ainda não classificado
 }
 
 enum ChannelType {
@@ -468,4 +611,15 @@ enum Priority {
 enum CreatedBy {
   USER
   AI
+}
+
+enum ConversationStatus {
+  OPEN      // em atendimento
+  WAITING   // aguardando resposta do cliente
+  RESOLVED  // finalizada
+}
+
+enum ConvSource {
+  LIVE      // criada por mensagem real-time (Evolution socket)
+  IMPORTED  // veio do sync de histórico — nasce RESOLVED
 }

@@ -5,6 +5,7 @@ import fastifyHelmet from '@fastify/helmet'
 import fastifyCors from '@fastify/cors'
 import fastifyRateLimit from '@fastify/rate-limit'
 import fastifySensible from '@fastify/sensible'
+import fastifyMultipart from '@fastify/multipart'
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod'
 import { env } from './config/env.js'
 import { logger } from './lib/logger.js'
@@ -14,6 +15,17 @@ import { dashboardRoutes } from './modules/dashboard/dashboard.routes.js'
 import { channelsRoutes } from './modules/channels/channels.routes.js'
 import { webhookRoutes } from './modules/channels/webhook.routes.js'
 import { conversationsRoutes } from './modules/messages/conversations.routes.js'
+import { kanbanRoutes } from './modules/kanban/kanban.routes.js'
+import { contactsRoutes } from './modules/contacts/contacts.routes.js'
+import { companiesRoutes } from './modules/contacts/companies.routes.js'
+import { aiRoutes } from './modules/ai/ai.routes.js'
+import { tasksRoutes } from './modules/tasks/tasks.routes.js'
+import { vaultRoutes } from './modules/vault/vault.routes.js'
+import { calendarRoutes } from './modules/calendar/calendar.routes.js'
+import { eventsRoutes } from './modules/events/events.routes.js'
+import { usersRoutes } from './modules/users/users.routes.js'
+import { workspaceRoutes } from './modules/workspaces/workspace.routes.js'
+import { storageRoutes } from './modules/storage/storage.routes.js'
 import type { JwtPayload } from '@aiwa/shared'
 
 declare module '@fastify/jwt' {
@@ -40,6 +52,9 @@ export async function buildApp() {
 
   // Sensible (httpErrors helpers)
   await app.register(fastifySensible)
+
+  // Multipart (upload de arquivos)
+  await app.register(fastifyMultipart, { limits: { fileSize: 64 * 1024 * 1024 } }) // 64 MB
 
   // Plugins de segurança
   await app.register(fastifyHelmet, { contentSecurityPolicy: false })
@@ -74,16 +89,21 @@ export async function buildApp() {
     if (!token) return reply.unauthorized('Token obrigatório')
 
     try {
-      req.jwtVerify({ onlyCookie: false, ...{ token } })
-      // Verificação manual do token
       app.jwt.verify(token)
     } catch {
       return reply.unauthorized('Token inválido')
     }
 
+    // CORS manual — reply.raw bypassa os hooks do @fastify/cors
+    const origin = req.headers.origin
+    if (origin) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', origin)
+      reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
+    }
     reply.raw.setHeader('Content-Type', 'text/event-stream')
     reply.raw.setHeader('Cache-Control', 'no-cache')
     reply.raw.setHeader('Connection', 'keep-alive')
+    reply.raw.setHeader('X-Accel-Buffering', 'no') // evita buffer em proxies (nginx)
     reply.raw.flushHeaders()
 
     const { eventBus } = await import('./lib/eventBus.js')
@@ -103,6 +123,17 @@ export async function buildApp() {
   await app.register(channelsRoutes)
   await app.register(webhookRoutes)
   await app.register(conversationsRoutes)
+  await app.register(kanbanRoutes)
+  await app.register(contactsRoutes)
+  await app.register(companiesRoutes)
+  await app.register(aiRoutes)
+  await app.register(tasksRoutes)
+  await app.register(vaultRoutes)
+  await app.register(calendarRoutes)
+  await app.register(eventsRoutes)
+  await app.register(usersRoutes)
+  await app.register(workspaceRoutes)
+  await app.register(storageRoutes)
 
   return app
 }
