@@ -48,10 +48,10 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId } = req.user
       const { done, cardId, contactId, conversationId, assigneeId } = req.query
 
-      // Tarefas são pessoais por padrão. ADMIN/Supervisor (via `admin.users`)
+      // Tarefas são pessoais por padrão. Quem tem `tasks.viewAll` (ADMIN/Supervisor)
       // pode ver tarefas de outros usando ?assigneeId=<id>. Sem essa permissão,
       // o filtro de assignee é forçado pra o próprio user.
-      const canViewOthers = await hasPermission(req.user, 'admin.users')
+      const canViewOthers = await hasPermission(req.user, 'tasks.viewAll')
       const effectiveAssigneeFilter = canViewOthers
         ? (assigneeId !== undefined
           ? { assigneeId: assigneeId === 'me' ? userId : assigneeId === 'all' ? undefined : assigneeId }
@@ -96,9 +96,9 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId } = req.user
       const { title, description, cardId, contactId, conversationId, messageId, assigneeId, remindAt, recurrence } = req.body
 
-      // Quem pode atribuir tarefa pra outro: tem `admin.users` (ADMIN/Supervisor).
+      // Quem pode atribuir tarefa pra outro: tem `tasks.manageAll` (ADMIN/Supervisor).
       // Caso contrário: força assignee = self.
-      const canAssignToOthers = await hasPermission(req.user, 'admin.users')
+      const canAssignToOthers = await hasPermission(req.user, 'tasks.manageAll')
       const finalAssigneeId = canAssignToOthers
         ? (assigneeId ?? userId)   // se admin não escolheu, ele cria pra si
         : userId                    // member: sempre pra si
@@ -157,13 +157,13 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId } = req.user
       const { title, description, done, remindAt, recurrence, cardId, contactId, conversationId, assigneeId } = req.body
 
-      // Guard: só o assignee atual ou quem tem admin.users pode editar
+      // Guard: só o assignee atual ou quem tem tasks.manageAll pode editar
       const task = await prisma.task.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { assigneeId: true },
       })
       if (!task) return reply.notFound()
-      const canManageAll = await hasPermission(req.user, 'admin.users')
+      const canManageAll = await hasPermission(req.user, 'tasks.manageAll')
       if (!canManageAll && task.assigneeId !== userId) {
         return reply.forbidden('Sem permissão pra editar tarefa de outro usuário')
       }
@@ -209,7 +209,7 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
         select: { assigneeId: true },
       })
       if (!task) return reply.notFound()
-      const canManageAll = await hasPermission(req.user, 'admin.users')
+      const canManageAll = await hasPermission(req.user, 'tasks.manageAll')
       if (!canManageAll && task.assigneeId !== userId) {
         return reply.forbidden('Sem permissão pra deletar tarefa de outro usuário')
       }

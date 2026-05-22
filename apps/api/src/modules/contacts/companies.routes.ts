@@ -5,7 +5,7 @@ import { hasPermission, requirePerm } from '../../lib/acl.js'
 
 export const companiesRoutes: FastifyPluginAsyncZod = async (app) => {
   // Listar empresas — quem não tem contacts.viewAll vê só empresas dos contatos que atende
-  app.get('/companies', { onRequest: [app.authenticate] }, async (req) => {
+  app.get('/companies', { onRequest: [app.authenticate, requirePerm('companies.view')] }, async (req) => {
     const { workspaceId, sub: userId } = req.user
     const canViewAll = await hasPermission(req.user, 'contacts.viewAll')
     return prisma.company.findMany({

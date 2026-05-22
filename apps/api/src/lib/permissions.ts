@@ -27,10 +27,16 @@ export const PERMISSIONS = {
   'boards.manage':             'Criar / editar / deletar boards e colunas',
 
   // ── Contatos & Empresas ───────────────────────────────────────────────────
-  'contacts.viewAll':          'Ver todos os contatos do workspace',
+  'contacts.view':             'Acessar o módulo de Contatos (sem isso, o menu nem aparece)',
+  'contacts.viewAll':          'Ver todos os contatos do workspace (não só os ligados a mim)',
   'contacts.edit':             'Editar contatos',
   'contacts.delete':           'Deletar contatos',
+  'companies.view':            'Acessar o módulo de Empresas (sem isso, o menu nem aparece)',
   'companies.manage':          'Gerenciar empresas',
+
+  // ── Tarefas ───────────────────────────────────────────────────────────────
+  'tasks.viewAll':             'Ver tarefas de outros usuários (não só as minhas)',
+  'tasks.manageAll':           'Editar / atribuir / deletar tarefas de qualquer usuário',
 
   // ── Storage ───────────────────────────────────────────────────────────────
   'storage.viewAll':           'Ver arquivos/pastas privados de outros usuários',
@@ -61,6 +67,7 @@ export const ALL_PERMISSION_KEYS = Object.keys(PERMISSIONS) as PermissionKey[]
 export const DEFAULT_MEMBER_PERMISSIONS: PermissionKey[] = [
   'cards.create',
   'cards.edit',
+  'contacts.view',
   'contacts.edit',
   'conversations.assign',  // pode encaminhar a própria
 ]
@@ -87,7 +94,9 @@ export const SYSTEM_ROLES: SystemRoleTemplate[] = [
     permissions: [
       'conversations.viewAll', 'conversations.assign', 'conversations.archive', 'conversations.takeover',
       'cards.create', 'cards.edit', 'cards.delete', 'boards.manage',
-      'contacts.viewAll', 'contacts.edit', 'contacts.delete', 'companies.manage',
+      'contacts.view', 'contacts.viewAll', 'contacts.edit', 'contacts.delete',
+      'companies.view', 'companies.manage',
+      'tasks.viewAll', 'tasks.manageAll',
       'storage.viewAll',
       'admin.events', 'admin.users',
       'reports.view',
@@ -98,7 +107,7 @@ export const SYSTEM_ROLES: SystemRoleTemplate[] = [
     description: 'Atende conversas atribuídas a si; cria cards e edita contatos',
     permissions: [
       'cards.create', 'cards.edit',
-      'contacts.edit',
+      'contacts.view', 'contacts.edit',
       'conversations.assign',
     ],
   },

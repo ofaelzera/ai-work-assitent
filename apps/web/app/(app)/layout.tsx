@@ -25,29 +25,47 @@ import { apiFetch, getAccessToken } from '@/lib/api'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useQuery } from '@tanstack/react-query'
 
-const navItems = [
+/**
+ * Itens do menu principal.
+ *
+ * `perm` (opcional): permissão necessária pra o item aparecer no menu.
+ * Quando omitido, item aparece pra qualquer user autenticado.
+ * ADMIN base sempre vê tudo (bypass no usePermission).
+ */
+const navItems: Array<{ href: string; label: string; icon: any; perm?: string }> = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/inbox', label: 'Inbox', icon: MessageSquare },
-  { href: '/kanban', label: 'Kanban', icon: Kanban },
-  { href: '/calendar', label: 'Agenda', icon: Calendar },
-  { href: '/tasks', label: 'Tarefas', icon: CheckSquare },
-  { href: '/contacts', label: 'Contatos', icon: Users },
-  { href: '/companies', label: 'Empresas', icon: Building2 },
-  { href: '/vault', label: 'Cofre', icon: Lock },
-  { href: '/storage', label: 'Arquivos', icon: FolderOpen },
+  { href: '/inbox',     label: 'Inbox',     icon: MessageSquare },
+  { href: '/kanban',    label: 'Kanban',    icon: Kanban },
+  { href: '/calendar',  label: 'Agenda',    icon: Calendar },
+  { href: '/tasks',     label: 'Tarefas',   icon: CheckSquare },
+  { href: '/contacts',  label: 'Contatos',  icon: Users,     perm: 'contacts.view' },
+  { href: '/companies', label: 'Empresas',  icon: Building2, perm: 'companies.view' },
+  { href: '/vault',     label: 'Cofre',     icon: Lock },
+  { href: '/storage',   label: 'Arquivos',  icon: FolderOpen },
 ]
 
-const adminItems = [
-  { href: '/admin/channels', label: 'Canais' },
-  { href: '/admin/agents', label: 'Agentes IA' },
-  { href: '/admin/prompts', label: 'Prompts' },
-  { href: '/admin/ai-logs', label: 'Logs IA' },
-  { href: '/admin/events', label: 'Eventos' },
-  { href: '/admin/reports', label: 'Relatórios' },
-  { href: '/admin/users', label: 'Usuários' },
-  { href: '/admin/roles', label: 'Roles e permissões' },
-  { href: '/admin/settings', label: 'Configurações' },
+/**
+ * Itens admin — cada um exige sua perm granular.
+ * A seção inteira só aparece se o user tiver pelo menos UMA.
+ */
+const adminItems: Array<{ href: string; label: string; perm: string }> = [
+  { href: '/admin/channels', label: 'Canais',              perm: 'admin.channels' },
+  { href: '/admin/agents',   label: 'Agentes IA',          perm: 'admin.agents' },
+  { href: '/admin/prompts',  label: 'Prompts',             perm: 'admin.agents' },
+  { href: '/admin/ai-logs',  label: 'Logs IA',             perm: 'admin.agents' },
+  { href: '/admin/events',   label: 'Eventos',             perm: 'admin.events' },
+  { href: '/admin/reports',  label: 'Relatórios',          perm: 'reports.view' },
+  { href: '/admin/users',    label: 'Usuários',            perm: 'admin.users' },
+  { href: '/admin/roles',    label: 'Roles e permissões',  perm: 'admin.users' },
+  { href: '/admin/settings', label: 'Configurações',       perm: 'admin.settings' },
 ]
+
+function userHasPerm(user: { role: string; permissions?: string[] } | null, perm?: string): boolean {
+  if (!user) return false
+  if (!perm) return true
+  if (user.role === 'ADMIN') return true
+  return (user.permissions ?? []).includes(perm)
+}
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -68,6 +86,21 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       .catch(() => { clear(); router.replace('/login') })
       .finally(() => setReady(true))
   }, [])
+
+  // Re-busca permissões quando a aba volta a ter foco (resolve perms stale após
+  // admin editar role, sem precisar de logout/refresh manual)
+  useEffect(() => {
+    if (!ready || !user?.sub) return
+    const refetchMe = async () => {
+      try {
+        const me = await apiFetch<{ sub: string; workspaceId: string; role: 'ADMIN' | 'MEMBER'; permissions?: string[] }>('/auth/me')
+        setUser(me, getAccessToken())
+      } catch { /* silencioso */ }
+    }
+    const onFocus = () => refetchMe()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [ready, user?.sub, setUser])
 
   const handleLogout = async () => {
     await logout()
@@ -114,7 +147,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-4 space-y-1 py-2">
-          {navItems.map((item, index) => {
+          {navItems.filter(it => userHasPerm(user, it.perm)).map((item, index) => {
             const isActive = pathname.startsWith(item.href)
             return (
               <Link
@@ -137,8 +170,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             )
           })}
 
-          {/* Itens admin só aparecem para ADMINs */}
-          {user?.role === 'ADMIN' && (
+          {/* Itens admin — cada um exige sua perm; seção aparece se houver pelo menos um visível */}
+          {(() => {
+            const visibleAdmin = adminItems.filter(it => userHasPerm(user, it.perm))
+            if (visibleAdmin.length === 0) return null
+            return (
             <div className="animate-slide-up delay-400">
               <div className="pt-6 pb-2">
                 <p className="px-3 text-[11px] font-bold text-muted-foreground/60 uppercase tracking-widest">
@@ -146,7 +182,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 </p>
               </div>
 
-              {adminItems.map((item) => {
+              {visibleAdmin.map((item) => {
                 const isActive = pathname.startsWith(item.href)
                 return (
                   <Link
@@ -168,7 +204,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 )
               })}
             </div>
-          )}
+            )
+          })()}
         </nav>
 
         <div className="p-4 mt-auto">

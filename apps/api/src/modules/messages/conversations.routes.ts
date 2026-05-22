@@ -37,7 +37,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, q, cursor, limit, filter, includeImported } = req.query
 
       // Resolve filtro de canal por tipo (single, CSV-in ou CSV-not-in)
@@ -51,14 +51,15 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         if (list.length) channelTypeFilter.type = { notIn: list }
       }
 
-      // ── Guard de visibilidade por role ────────────────────────────────────
-      // ADMIN: vê tudo, respeita o `assigneeId` que o frontend mandar.
-      // MEMBER: só vê o que é dele. A única exceção é quando ele pede explicitamente
-      //         a Fila (`assigneeId=unassigned`) — aí mostra as não atribuídas
-      //         pra ele poder assumir. Em qualquer outra aba (Resolv., Minhas, Fav,
-      //         Não lidas, Grupos), só aparece o que está atribuído a ele.
+      // ── Guard de visibilidade por permissão ───────────────────────────────
+      // Quem tem `conversations.viewAll` (ADMIN/Supervisor): vê tudo, respeita
+      //   o `assigneeId` que o frontend mandar.
+      // Demais (Atendente): só vê o que é dele. Única exceção é quando ele pede
+      //   explicitamente a Fila (`assigneeId=unassigned`) — aí mostra as não
+      //   atribuídas pra ele poder assumir.
+      const canViewAll = await hasPermission(req.user, 'conversations.viewAll')
       let assigneeFilter: Record<string, unknown> | null = null
-      if (role === 'ADMIN') {
+      if (canViewAll) {
         assigneeFilter = assigneeId === 'unassigned'
           ? { assigneeId: null }
           : assigneeId === 'mine_and_queue'
@@ -70,7 +71,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           ? { assigneeId: assigneeId === 'me' ? userId : assigneeId }
           : null
       } else {
-        // MEMBER
+        // Sem conversations.viewAll: só vê o que é dele
         if (assigneeId === 'unassigned') {
           assigneeFilter = { assigneeId: null }
         } else {

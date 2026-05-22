@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { Building2, Plus, Pencil, Trash2, Users, X, Phone, Mail, UserMinus, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/lib/usePermission'
+import { PermissionGate } from '@/components/PermissionGate'
 
 interface Company {
   id: string
@@ -263,6 +264,14 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
 
 // ─── Página principal ─────────────────────────────────────────────────────────
 export default function CompaniesPage() {
+  return (
+    <PermissionGate perm="companies.view">
+      <CompaniesPageInner />
+    </PermissionGate>
+  )
+}
+
+function CompaniesPageInner() {
   const queryClient = useQueryClient()
   const canManage = usePermission('companies.manage')
   const [formModal, setFormModal] = useState<null | 'new' | Company>(null)

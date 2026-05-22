@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/lib/usePermission'
+import { PermissionGate } from '@/components/PermissionGate'
 
 interface Company { id: string; name: string; color: string }
 
@@ -357,6 +358,14 @@ function MergeModal({ contact, onClose, onMerge, isPending }: {
 
 // ─── Página principal ─────────────────────────────────────────────────────────
 export default function ContactsPage() {
+  return (
+    <PermissionGate perm="contacts.view">
+      <ContactsPageInner />
+    </PermissionGate>
+  )
+}
+
+function ContactsPageInner() {
   const queryClient = useQueryClient()
   const canEditContact   = usePermission('contacts.edit')
   const canDeleteContact = usePermission('contacts.delete')

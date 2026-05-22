@@ -13,6 +13,7 @@ import {
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
+import { usePermission } from '@/lib/usePermission'
 import RichEditor from '@/components/RichEditor'
 import {
   DndContext,
@@ -345,6 +346,8 @@ export default function CardModal({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
+  const canEditCard   = usePermission('cards.edit')
+  const canDeleteCard = usePermission('cards.delete')
   const [title, setTitle] = useState('')
   const [editingTitle, setEditingTitle] = useState(false)
   const [comment, setComment] = useState('')
@@ -375,10 +378,15 @@ export default function CardModal({
   }
 
   const patchMutation = useMutation({
-    mutationFn: (data: Record<string, unknown>) =>
-      apiFetch(`/kanban/cards/${cardId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    mutationFn: (data: Record<string, unknown>) => {
+      if (!canEditCard) {
+        toast.error('Sem permissão pra editar cards')
+        return Promise.reject(new Error('forbidden'))
+      }
+      return apiFetch(`/kanban/cards/${cardId}`, { method: 'PATCH', body: JSON.stringify(data) })
+    },
     onSuccess: invalidate,
-    onError: () => toast.error('Erro ao atualizar card'),
+    onError: (e: any) => { if (e?.message !== 'forbidden') toast.error('Erro ao atualizar card') },
   })
 
   const deleteMutation = useMutation({
@@ -500,12 +508,15 @@ export default function CardModal({
                 <ExternalLink className="h-4 w-4" />
               </Link>
             )}
-            <button
-              onClick={() => { if (confirm('Remover este card?')) deleteMutation.mutate() }}
-              className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-red-500"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            {canDeleteCard && (
+              <button
+                onClick={() => { if (confirm('Remover este card?')) deleteMutation.mutate() }}
+                className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-red-500"
+                title="Remover card"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
             <button onClick={onClose} className="p-1.5 rounded hover:bg-accent text-muted-foreground">
               <X className="h-4 w-4" />
             </button>

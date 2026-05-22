@@ -6,14 +6,14 @@ import { logger } from '../../lib/logger.js'
 import { mergeContacts } from './merge.service.js'
 import { autoDedupContacts } from '../channels/sync.service.js'
 import { evolutionClient } from '../channels/evolution.client.js'
-import { hasPermission } from '../../lib/acl.js'
+import { hasPermission, requirePerm } from '../../lib/acl.js'
 
 export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
   // ── Listar / buscar contatos ───────────────────────────────────────────────
   app.get(
     '/contacts',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('contacts.view')],
       schema: {
         querystring: z.object({
           q: z.string().optional(),

@@ -2,7 +2,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
 import { eventBus } from '../../lib/eventBus.js'
-import { hasPermission } from '../../lib/acl.js'
+import { hasPermission, requirePerm } from '../../lib/acl.js'
 import { env } from '../../config/env.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -66,7 +66,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     '/kanban/boards',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('boards.manage')],
       schema: {
         body: z.object({
           name: z.string().min(1),
@@ -77,7 +77,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      // Qualquer um cria PRIVATE/SHARED próprio. Só quem tem boards.manage cria PUBLIC.
+      // Criação requer boards.manage (gate no onRequest). PUBLIC já está coberto.
       const wantsPublic = req.body.visibility === 'PUBLIC'
       if (wantsPublic && !(await hasPermission(req.user, 'boards.manage'))) {
         return reply.forbidden('Sem permissão pra criar board público')
@@ -252,6 +252,18 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: { params: z.object({ id: z.string() }) },
     },
     async (req, reply) => {
+      const existing = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId },
+        select: { ownerId: true },
+      })
+      if (!existing) return reply.notFound()
+
+      // Só dono ou quem tem boards.manage pode deletar
+      const canManage = await hasPermission(req.user, 'boards.manage')
+      if (existing.ownerId !== req.user.sub && !canManage) {
+        return reply.forbidden('Só o dono ou quem tem boards.manage pode deletar')
+      }
+
       await prisma.board.updateMany({
         where: { id: req.params.id, workspaceId: req.user.workspaceId },
         data: { deletedAt: new Date() },
@@ -370,7 +382,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     '/kanban/columns',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('boards.manage')],
       schema: { body: z.object({ boardId: z.string(), name: z.string().min(1) }) },
     },
     async (req, reply) => {
@@ -389,7 +401,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.patch(
     '/kanban/columns/:id',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('boards.manage')],
       schema: {
         params: z.object({ id: z.string() }),
         body: z.object({ name: z.string().min(1) }),
@@ -414,7 +426,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     '/kanban/boards/:id/columns/reorder',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('boards.manage')],
       schema: {
         params: z.object({ id: z.string() }),
         body: z.object({ columnIds: z.array(z.string()).min(1) }),
@@ -450,7 +462,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.delete(
     '/kanban/columns/:id',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('boards.manage')],
       schema: {
         params: z.object({ id: z.string() }),
         querystring: z.object({
@@ -511,7 +523,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     '/kanban/cards',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('cards.create')],
       schema: {
         body: z.object({
           columnId: z.string(),
@@ -577,7 +589,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.patch(
     '/kanban/cards/:id',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
       schema: {
         params: z.object({ id: z.string() }),
         body: z.object({
@@ -614,7 +626,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     '/kanban/cards/:id/move',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
       schema: {
         params: z.object({ id: z.string() }),
         body: z.object({ columnId: z.string(), position: z.number().int().min(0) }),
@@ -711,7 +723,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.delete(
     '/kanban/cards/:id',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('cards.delete')],
       schema: { params: z.object({ id: z.string() }) },
     },
     async (req, reply) => {
@@ -728,7 +740,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     '/kanban/cards/:id/comments',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
       schema: {
         params: z.object({ id: z.string() }),
         body: z.object({ body: z.string().min(1) }),
@@ -770,7 +782,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     '/kanban/cards/:id/attachments/from-message',
     {
-      onRequest: [app.authenticate],
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
       schema: {
         params: z.object({ id: z.string() }),
         body: z.object({ messageId: z.string() }),

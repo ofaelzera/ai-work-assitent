@@ -39,6 +39,8 @@ import {
 import { cn } from '@/lib/utils'
 import CardModal from './CardModal'
 import { useConfirm } from '@/components/ui/confirm-dialog'
+import { usePermission } from '@/lib/usePermission'
+import { useAuthStore } from '@/store/auth'
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -67,6 +69,7 @@ interface Column {
 interface Board {
   id: string
   name: string
+  ownerId: string | null
   columns: Column[]
 }
 
@@ -194,6 +197,8 @@ function KanbanColumn({
 }) {
   const queryClient = useQueryClient()
   const confirm = useConfirm()
+  const canCreateCard  = usePermission('cards.create')
+  const canManageBoard = usePermission('boards.manage')
   const cardIds = column.cards.map((c) => c.id)
   const [editing, setEditing] = useState(false)
   const [nameDraft, setNameDraft] = useState(column.name)
@@ -311,51 +316,55 @@ function KanbanColumn({
         )}
 
         <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            onClick={() => onAddCard(column.id)}
-            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-            title="Adicionar card">
-            <Plus className="h-4 w-4" />
-          </button>
-
-          {/* Menu de ações */}
-          <div className="relative">
+          {canCreateCard && (
             <button
-              onClick={() => setMenuOpen(v => !v)}
-              onBlur={() => setTimeout(() => setMenuOpen(false), 150)}
+              onClick={() => onAddCard(column.id)}
               className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-              title="Mais ações">
-              <MoreVertical className="h-4 w-4" />
+              title="Adicionar card">
+              <Plus className="h-4 w-4" />
             </button>
-            {menuOpen && (
-              <div className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-40">
-                <button
-                  onMouseDown={() => { setEditing(true); setMenuOpen(false) }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
-                  <Pencil className="h-3 w-3" /> Renomear
-                </button>
-                <button
-                  onMouseDown={async () => {
-                    setMenuOpen(false)
-                    if (column.cards.length === 0) {
-                      const ok = await confirm({
-                        type: 'danger',
-                        title: `Remover coluna "${column.name}"?`,
-                        message: 'A coluna está vazia. Esta ação não pode ser desfeita.',
-                        confirmLabel: 'Remover',
-                      })
-                      if (ok) remove.mutate({})
-                    } else {
-                      // Tem cards — fluxo de "mover pra onde?" é tratado pelo onError da mutation
-                      remove.mutate({})
-                    }
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-destructive/10 text-destructive text-left border-t">
-                  <Trash2 className="h-3 w-3" /> Remover coluna
-                </button>
-              </div>
-            )}
-          </div>
+          )}
+
+          {/* Menu de ações (renomear/remover) — só boards.manage */}
+          {canManageBoard && (
+            <div className="relative">
+              <button
+                onClick={() => setMenuOpen(v => !v)}
+                onBlur={() => setTimeout(() => setMenuOpen(false), 150)}
+                className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                title="Mais ações">
+                <MoreVertical className="h-4 w-4" />
+              </button>
+              {menuOpen && (
+                <div className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-40">
+                  <button
+                    onMouseDown={() => { setEditing(true); setMenuOpen(false) }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
+                    <Pencil className="h-3 w-3" /> Renomear
+                  </button>
+                  <button
+                    onMouseDown={async () => {
+                      setMenuOpen(false)
+                      if (column.cards.length === 0) {
+                        const ok = await confirm({
+                          type: 'danger',
+                          title: `Remover coluna "${column.name}"?`,
+                          message: 'A coluna está vazia. Esta ação não pode ser desfeita.',
+                          confirmLabel: 'Remover',
+                        })
+                        if (ok) remove.mutate({})
+                      } else {
+                        // Tem cards — fluxo de "mover pra onde?" é tratado pelo onError da mutation
+                        remove.mutate({})
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-destructive/10 text-destructive text-left border-t">
+                    <Trash2 className="h-3 w-3" /> Remover coluna
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -384,8 +393,11 @@ function KanbanColumn({
 // "+ Adicionar coluna" no fim do board
 function AddColumnButton({ boardId }: { boardId: string }) {
   const queryClient = useQueryClient()
+  const canManage = usePermission('boards.manage')
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
+
+  if (!canManage) return null
 
   const create = useMutation({
     mutationFn: () => apiFetch('/kanban/columns', {
@@ -446,6 +458,7 @@ function QuickAddCard({
   const [title, setTitle] = useState('')
   const queryClient = useQueryClient()
   const { boardId } = useParams<{ boardId: string }>()
+  const canCreate = usePermission('cards.create')
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -456,6 +469,8 @@ function QuickAddCard({
     },
     onError: () => toast.error('Erro ao criar card'),
   })
+
+  if (!canCreate) { onDone(); return null }
 
   return (
     <div className="px-2 pb-2">
@@ -491,11 +506,15 @@ function QuickAddCard({
 
 // ── Board actions (renomear, deletar) ─────────────────────────────────────
 
-function BoardActions({ boardId, boardName }: { boardId: string; boardName: string }) {
+function BoardActions({ boardId, boardName, isOwner }: { boardId: string; boardName: string; isOwner: boolean }) {
   const router = useRouter()
   const queryClient = useQueryClient()
   const confirm = useConfirm()
+  const canManage = usePermission('boards.manage')
   const [menuOpen, setMenuOpen] = useState(false)
+
+  // Só dono ou quem tem boards.manage pode renomear/deletar. Senão, menu nem aparece.
+  if (!isOwner && !canManage) return null
 
   const rename = useMutation({
     mutationFn: (name: string) => apiFetch(`/kanban/boards/${boardId}`, {
@@ -645,6 +664,9 @@ function BoardSwitcher({ currentBoardId, currentName }: { currentBoardId: string
 export default function BoardPage() {
   const { boardId } = useParams<{ boardId: string }>()
   const queryClient = useQueryClient()
+  const canEditCard = usePermission('cards.edit')
+  const canManageBoard = usePermission('boards.manage')
+  const currentUserId = useAuthStore(s => s.user?.sub) ?? null
 
   const [activeCard, setActiveCard] = useState<Card | null>(null)
   const [selectedCard, setSelectedCard] = useState<Card | null>(null)
@@ -797,6 +819,7 @@ export default function BoardPage() {
       // ─── Reorder de coluna ──────────────────────────────────────────────
       if (activeData?.type === 'column-handle') {
         isDraggingRef.current = false
+        if (!canManageBoard) { toast.error('Sem permissão pra reordenar colunas'); return }
         if (!over || !localBoardRef.current) return
         const overData = over.data.current as any
         // Só reordena se soltou sobre outra coluna (não sobre um card)
@@ -826,6 +849,11 @@ export default function BoardPage() {
       const origin = dragOriginRef.current
       dragOriginRef.current = null
 
+      if (!canEditCard) {
+        toast.error('Sem permissão pra mover cards')
+        queryClient.invalidateQueries({ queryKey: ['board', boardId] })
+        return
+      }
       if (!localBoardRef.current || !origin) return
 
       const draggedCardId = String(active.id)
@@ -877,7 +905,7 @@ export default function BoardPage() {
 
       moveMutation.mutate({ cardId: draggedCardId, columnId: finalColId, position: toIdx })
     },
-    [moveMutation, reorderColumnsMutation],
+    [moveMutation, reorderColumnsMutation, canEditCard, canManageBoard, queryClient, boardId],
   )
 
   if (isLoading || !displayBoard) {
@@ -897,7 +925,7 @@ export default function BoardPage() {
           <span className="text-xs text-muted-foreground">
             {displayBoard.columns.reduce((n, c) => n + c.cards.length, 0)} cards
           </span>
-          <BoardActions boardId={boardId} boardName={displayBoard.name} />
+          <BoardActions boardId={boardId} boardName={displayBoard.name} isOwner={displayBoard.ownerId === currentUserId} />
         </div>
 
         {/* Board */}

@@ -9,6 +9,17 @@ import { randomUUID } from 'node:crypto'
 import { evolutionClient } from '../channels/evolution.client.js'
 import { getChannelConfig } from '../channels/channels.service.js'
 import type { MediaAttachment } from '../channels/media.utils.js'
+import { hasPermission } from '../../lib/acl.js'
+import type { JwtPayload } from '@aiwa/shared'
+
+/**
+ * "Posso mexer/deletar/compartilhar uma pasta/arquivo de outro?"
+ * Dono passa sempre. Quem tem `storage.delete` (admin/supervisor) também.
+ */
+async function canManageOthers(user: JwtPayload, ownerId: string): Promise<boolean> {
+  if (user.sub === ownerId) return true
+  return hasPermission(user, 'storage.delete')
+}
 
 /**
  * Biblioteca de arquivos (estilo Drive):
@@ -19,22 +30,97 @@ import type { MediaAttachment } from '../channels/media.utils.js'
  */
 export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
   // Helper: pasta acessível pelo usuário?
-  // Regras: PUBLIC = todos; PRIVATE = só dono; SHARED = dono + usuários em StorageFolderShare
+  // Regras: PUBLIC = todos; PRIVATE = só dono; SHARED = dono + usuários em StorageFolderShare.
+  //
+  // Herança: se a pasta-pai (ou qualquer ancestral) já é acessível, a filha também é.
+  // Ou seja, basta dar acesso à pasta-raiz pra liberar todo o conteúdo dela em cascata.
+  // Se o user quiser restringir um item específico, pode dar visibilidade PRIVATE a ele
+  // — mas pra checagens de listagem usamos a herança (queremos abrir o conteúdo).
   async function canAccessFolder(folderId: string, userId: string, workspaceId: string): Promise<boolean> {
-    const folder = await prisma.storageFolder.findFirst({
-      where: { id: folderId, workspaceId },
-      select: { ownerId: true, visibility: true },
-    })
-    if (!folder) return false
-    if (folder.visibility === 'PUBLIC') return true
-    if (folder.ownerId === userId) return true
-    if (folder.visibility === 'SHARED') {
-      const share = await prisma.storageFolderShare.findUnique({
-        where: { folderId_userId: { folderId, userId } },
-      })
-      return !!share
+    let cursor: string | null = folderId
+    const seen = new Set<string>()
+    while (cursor && !seen.has(cursor)) {
+      seen.add(cursor)
+      const folder: { ownerId: string; visibility: 'PRIVATE' | 'SHARED' | 'PUBLIC'; parentId: string | null } | null =
+        await prisma.storageFolder.findFirst({
+          where: { id: cursor, workspaceId },
+          select: { ownerId: true, visibility: true, parentId: true },
+        })
+      if (!folder) return false
+      if (folder.visibility === 'PUBLIC') return true
+      if (folder.ownerId === userId) return true
+      if (folder.visibility === 'SHARED') {
+        const share = await prisma.storageFolderShare.findUnique({
+          where: { folderId_userId: { folderId: cursor, userId } },
+        })
+        if (share) return true
+      }
+      // Não passou aqui — tenta o pai
+      cursor = folder.parentId
     }
     return false
+  }
+
+  /**
+   * Conjunto de IDs de pastas "visíveis" para o user (devem aparecer em listagens):
+   *  - tem acesso direto/herdado (PUBLIC, dono, SHARED), OU
+   *  - é ANCESTRAL de algo acessível (subpasta ou arquivo compartilhado individualmente)
+   *
+   * Isso permite o caso "arquivo X dentro de pasta A (não compartilhada) é compartilhado
+   * com o user" → user enxerga A na raiz, navega pra dentro e vê SÓ o arquivo X (não os outros).
+   */
+  async function getVisibleFolderIds(userId: string, workspaceId: string): Promise<Set<string>> {
+    // 1) Pastas diretamente acessíveis
+    const directlyAccessible = await prisma.storageFolder.findMany({
+      where: {
+        workspaceId,
+        OR: [
+          { visibility: 'PUBLIC' },
+          { ownerId: userId },
+          { visibility: 'SHARED', shares: { some: { userId } } },
+        ],
+      },
+      select: { id: true },
+    })
+    const visible = new Set<string>(directlyAccessible.map(f => f.id))
+
+    // 2) Pais de arquivos individualmente acessíveis (compartilhados com o user)
+    const accessibleFiles = await prisma.attachment.findMany({
+      where: {
+        workspaceId,
+        folderId: { not: null },
+        OR: [
+          { visibility: 'PUBLIC' },
+          { uploadedBy: userId },
+          { visibility: 'SHARED', shares: { some: { userId } } },
+        ],
+      },
+      select: { folderId: true },
+    })
+
+    // 3) Mapa parentId pra subir a árvore eficientemente
+    const allFolders = await prisma.storageFolder.findMany({
+      where: { workspaceId },
+      select: { id: true, parentId: true },
+    })
+    const parentMap = new Map<string, string | null>(allFolders.map(f => [f.id, f.parentId]))
+
+    // Marca todos os ancestrais de uma pasta como visíveis
+    const markAncestors = (startId: string | null) => {
+      let cursor = startId
+      while (cursor && parentMap.has(cursor)) {
+        visible.add(cursor)
+        cursor = parentMap.get(cursor) ?? null
+      }
+    }
+
+    // Sobe ancestrais dos arquivos acessíveis (pra exibir o caminho até eles)
+    for (const f of accessibleFiles) markAncestors(f.folderId)
+
+    // Sobe ancestrais das pastas diretamente acessíveis (pra exibir o caminho)
+    for (const id of [...visible]) markAncestors(parentMap.get(id) ?? null)
+
+    return visible
   }
 
   // ── GET /storage/folders ─────────────────────────────────────────────────
@@ -53,20 +139,27 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId } = req.user
       const { parentId } = req.query
 
-      // Se pediu uma subpasta, valida acesso à mãe
-      if (parentId && !(await canAccessFolder(parentId, userId, workspaceId))) {
-        return []
+      // storage.viewAll: vê pastas privadas de outros (bypass total)
+      const canViewAll = await hasPermission(req.user, 'storage.viewAll')
+
+      // Quem tem acesso direto/herdado à pasta-pai vê TUDO dentro dela (cascata).
+      // Senão, mostra só as pastas "visíveis" (acessíveis OU ancestrais de algo acessível).
+      const hasFullParentAccess = !parentId
+        ? false  // raiz nunca tem "acesso total" — sempre filtra
+        : await canAccessFolder(parentId, userId, workspaceId)
+
+      let visibleSet: Set<string> | null = null
+      if (!canViewAll && !hasFullParentAccess) {
+        // Se pediu subpasta e nem visibleSet pode justificar, retorna vazio
+        visibleSet = await getVisibleFolderIds(userId, workspaceId)
+        if (parentId && !visibleSet.has(parentId)) return []
       }
 
       const folders = await prisma.storageFolder.findMany({
         where: {
           workspaceId,
           parentId: parentId ?? null,
-          OR: [
-            { visibility: 'PUBLIC' },
-            { ownerId: userId },                                // o dono sempre vê
-            { visibility: 'SHARED', shares: { some: { userId } } }, // compartilhada comigo
-          ],
+          ...(visibleSet && { id: { in: [...visibleSet] } }),
         },
         orderBy: [{ visibility: 'asc' }, { name: 'asc' }],
         select: {
@@ -88,13 +181,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: { params: z.object({ id: z.string() }) },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const folder = await prisma.storageFolder.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { ownerId: true },
       })
       if (!folder) return reply.notFound()
-      if (role !== 'ADMIN' && folder.ownerId !== userId) return reply.forbidden('Só o dono ou admin')
+      if (!(await canManageOthers(req.user, folder.ownerId))) return reply.forbidden('Só o dono ou quem tem storage.delete')
 
       const shares = await prisma.storageFolderShare.findMany({
         where: { folderId: req.params.id },
@@ -129,13 +222,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const folder = await prisma.storageFolder.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { ownerId: true, visibility: true },
       })
       if (!folder) return reply.notFound()
-      if (role !== 'ADMIN' && folder.ownerId !== userId) return reply.forbidden('Só o dono ou admin')
+      if (!(await canManageOthers(req.user, folder.ownerId))) return reply.forbidden('Só o dono ou quem tem storage.delete')
 
       // Não compartilha consigo mesmo
       if (req.body.userId === folder.ownerId) {
@@ -178,13 +271,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const folder = await prisma.storageFolder.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { ownerId: true },
       })
       if (!folder) return reply.notFound()
-      if (role !== 'ADMIN' && folder.ownerId !== userId) return reply.forbidden('Só o dono ou admin')
+      if (!(await canManageOthers(req.user, folder.ownerId))) return reply.forbidden('Só o dono ou quem tem storage.delete')
 
       await prisma.storageFolderShare.deleteMany({
         where: { folderId: req.params.id, userId: req.params.userId },
@@ -242,13 +335,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const folder = await prisma.storageFolder.findFirst({
         where: { id: req.params.id, workspaceId },
       })
       if (!folder) return reply.notFound('Pasta não encontrada')
-      if (role !== 'ADMIN' && folder.ownerId !== userId) {
-        return reply.forbidden('Só o dono ou admin pode editar')
+      if (!(await canManageOthers(req.user, folder.ownerId))) {
+        return reply.forbidden('Só o dono ou quem tem storage.delete pode editar')
       }
 
       // Se mudar parent, valida acesso ao novo pai + previne ciclos
@@ -294,13 +387,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: { params: z.object({ id: z.string() }) },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const folder = await prisma.storageFolder.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { id: true, name: true, ownerId: true },
       })
       if (!folder) return reply.notFound()
-      if (role !== 'ADMIN' && folder.ownerId !== userId) return reply.forbidden('Só o dono ou admin')
+      if (!(await canManageOthers(req.user, folder.ownerId))) return reply.forbidden('Só o dono ou quem tem storage.delete')
 
       // Coleta IDs de todas as subpastas recursivamente (BFS)
       const allFolderIds = [folder.id]
@@ -344,14 +437,14 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const folder = await prisma.storageFolder.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { id: true, ownerId: true, _count: { select: { files: true, children: true } } },
       })
       if (!folder) return reply.notFound()
-      if (role !== 'ADMIN' && folder.ownerId !== userId) {
-        return reply.forbidden('Só o dono ou admin pode deletar')
+      if (!(await canManageOthers(req.user, folder.ownerId))) {
+        return reply.forbidden('Só o dono ou quem tem storage.delete pode deletar')
       }
 
       const isEmpty = folder._count.files === 0 && folder._count.children === 0
@@ -389,29 +482,48 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId } = req.user
       const { folderId, q } = req.query
 
-      // Pra arquivos DENTRO de pasta: visibilidade herdada da pasta.
-      // Se o user pode ver a pasta (canAccessFolder), pode ver TODOS os arquivos
-      // dentro dela — independente da visibility do arquivo individual.
+      // Regras de visibilidade de arquivos dentro de uma pasta:
+      //  1) Tem acesso direto/herdado à pasta? Mostra TODOS os arquivos (cascata).
+      //  2) Só "enxerga" a pasta porque um arquivo dentro foi compartilhado individualmente?
+      //     → Mostra APENAS os arquivos com acesso individual (PUBLIC, dono, SHARED com user).
+      //  3) Nenhum dos dois? → Pasta não é dele, retorna [].
       //
-      // Pra arquivos na raiz (folderId=null): aplica visibility individual.
+      // storage.viewAll: bypass total (vê tudo).
+      const canViewAll = await hasPermission(req.user, 'storage.viewAll')
+
+      const individualFilter = {
+        OR: [
+          { visibility: 'PUBLIC' as const },
+          { uploadedBy: userId },
+          { visibility: 'SHARED' as const, shares: { some: { userId } } },
+        ],
+      }
+
       let where: any
       if (folderId) {
-        if (!(await canAccessFolder(folderId, userId, workspaceId))) {
-          return []
-        }
-        where = {
-          workspaceId, cardId: null, vaultItemId: null, folderId,
-          ...(q && { filename: { contains: q } }),
+        const hasFullAccess = canViewAll || await canAccessFolder(folderId, userId, workspaceId)
+        if (hasFullAccess) {
+          // Caso 1: acesso total — todos os arquivos
+          where = {
+            workspaceId, cardId: null, vaultItemId: null, folderId,
+            ...(q && { filename: { contains: q } }),
+          }
+        } else {
+          // Caso 2 ou 3: precisa que a pasta esteja no visibleSet (algum filho acessível)
+          const visibleSet = await getVisibleFolderIds(userId, workspaceId)
+          if (!visibleSet.has(folderId)) return []
+          // Filtra só arquivos individualmente acessíveis
+          where = {
+            workspaceId, cardId: null, vaultItemId: null, folderId,
+            ...individualFilter,
+            ...(q && { filename: { contains: q } }),
+          }
         }
       } else {
-        // Raiz: respeita visibilidade do próprio arquivo
+        // Raiz: respeita visibilidade do próprio arquivo (bypass se storage.viewAll)
         where = {
           workspaceId, cardId: null, vaultItemId: null, folderId: null,
-          OR: [
-            { visibility: 'PUBLIC' as const },
-            { uploadedBy: userId },
-            { visibility: 'SHARED' as const, shares: { some: { userId } } },
-          ],
+          ...(!canViewAll && individualFilter),
           ...(q && { filename: { contains: q } }),
         }
       }
@@ -437,13 +549,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: { params: z.object({ id: z.string() }) },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const file = await prisma.attachment.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { uploadedBy: true },
       })
       if (!file) return reply.notFound()
-      if (role !== 'ADMIN' && file.uploadedBy !== userId) return reply.forbidden('Só o dono ou admin')
+      if (!(await canManageOthers(req.user, file.uploadedBy))) return reply.forbidden('Só o dono ou quem tem storage.delete')
 
       const shares = await prisma.attachmentShare.findMany({
         where: { attachmentId: req.params.id },
@@ -476,13 +588,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const file = await prisma.attachment.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { uploadedBy: true, visibility: true },
       })
       if (!file) return reply.notFound()
-      if (role !== 'ADMIN' && file.uploadedBy !== userId) return reply.forbidden('Só o dono ou admin')
+      if (!(await canManageOthers(req.user, file.uploadedBy))) return reply.forbidden('Só o dono ou quem tem storage.delete')
 
       if (req.body.userId === file.uploadedBy) {
         return reply.badRequest('Dono do arquivo já tem acesso')
@@ -518,13 +630,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: { params: z.object({ id: z.string(), userId: z.string() }) },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const file = await prisma.attachment.findFirst({
         where: { id: req.params.id, workspaceId },
         select: { uploadedBy: true },
       })
       if (!file) return reply.notFound()
-      if (role !== 'ADMIN' && file.uploadedBy !== userId) return reply.forbidden('Só o dono ou admin')
+      if (!(await canManageOthers(req.user, file.uploadedBy))) return reply.forbidden('Só o dono ou quem tem storage.delete')
 
       await prisma.attachmentShare.deleteMany({
         where: { attachmentId: req.params.id, userId: req.params.userId },
@@ -597,13 +709,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const file = await prisma.attachment.findFirst({
         where: { id: req.params.id, workspaceId },
       })
       if (!file) return reply.notFound()
-      if (role !== 'ADMIN' && file.uploadedBy !== userId) {
-        return reply.forbidden('Só quem subiu ou admin pode editar')
+      if (!(await canManageOthers(req.user, file.uploadedBy))) {
+        return reply.forbidden('Só quem subiu ou quem tem storage.delete pode editar')
       }
 
       if (req.body.folderId && !(await canAccessFolder(req.body.folderId, userId, workspaceId))) {
@@ -629,13 +741,13 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: { params: z.object({ id: z.string() }) },
     },
     async (req, reply) => {
-      const { workspaceId, sub: userId, role } = req.user
+      const { workspaceId, sub: userId } = req.user
       const file = await prisma.attachment.findFirst({
         where: { id: req.params.id, workspaceId },
       })
       if (!file) return reply.notFound()
-      if (role !== 'ADMIN' && file.uploadedBy !== userId) {
-        return reply.forbidden('Só quem subiu ou admin pode deletar')
+      if (!(await canManageOthers(req.user, file.uploadedBy))) {
+        return reply.forbidden('Só quem subiu ou quem tem storage.delete pode deletar')
       }
 
       // Tenta remover do disco (silencioso se não existir)
@@ -658,20 +770,30 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req, reply) => {
       const { workspaceId, sub: userId } = req.user
+
+      // Gate: precisa ter acesso direto/herdado OU a pasta estar no conjunto visível
+      // (por causa de um arquivo compartilhado dentro dela)
+      const canViewAll = await hasPermission(req.user, 'storage.viewAll')
+      const hasDirectAccess = await canAccessFolder(req.params.folderId, userId, workspaceId)
+      if (!canViewAll && !hasDirectAccess) {
+        const visibleSet = await getVisibleFolderIds(userId, workspaceId)
+        if (!visibleSet.has(req.params.folderId)) return reply.forbidden()
+      }
+
+      // Reconstrói o trail completo. Como a folha está acessível por herança,
+      // todos os ancestrais podem ser exibidos como caminho.
       const trail: Array<{ id: string; name: string }> = []
       let currentId: string | null | undefined = req.params.folderId
       const seen = new Set<string>()
-
       while (currentId && !seen.has(currentId)) {
         const id: string = currentId
         seen.add(id)
-        const f: { id: string; name: string; parentId: string | null; ownerId: string; visibility: 'PRIVATE' | 'SHARED' | 'PUBLIC' } | null =
+        const f: { id: string; name: string; parentId: string | null } | null =
           await prisma.storageFolder.findFirst({
             where: { id, workspaceId },
-            select: { id: true, name: true, parentId: true, ownerId: true, visibility: true },
+            select: { id: true, name: true, parentId: true },
           })
         if (!f) break
-        if (f.visibility === 'PRIVATE' && f.ownerId !== userId) return reply.forbidden()
         trail.unshift({ id: f.id, name: f.name })
         currentId = f.parentId
       }

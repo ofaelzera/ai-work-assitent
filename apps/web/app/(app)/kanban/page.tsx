@@ -302,12 +302,14 @@ function EditBoardModal({ board, onClose, onSaved }: { board: Board; onClose: ()
         </div>
 
         <div className="flex items-center justify-between gap-2 px-5 py-4 border-t shrink-0">
-          <button
-            onClick={handleDelete}
-            disabled={remove.isPending}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50">
-            <Trash2 className="h-3.5 w-3.5" /> Deletar
-          </button>
+          {(board.isMine || canShareBoard) ? (
+            <button
+              onClick={handleDelete}
+              disabled={remove.isPending}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50">
+              <Trash2 className="h-3.5 w-3.5" /> Deletar
+            </button>
+          ) : <div />}
           <div className="flex gap-2">
             <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm hover:bg-accent">Cancelar</button>
             <button
@@ -356,15 +358,19 @@ export default function KanbanPage() {
             <Kanban className="h-12 w-12 mx-auto text-muted-foreground opacity-40" />
             <div>
               <p className="font-medium">Nenhum board ainda</p>
-              <p className="text-sm text-muted-foreground">Crie seu primeiro board para começar</p>
+              <p className="text-sm text-muted-foreground">
+                {canShareBoard ? 'Crie seu primeiro board para começar' : 'Peça a um admin pra criar um board e compartilhar com você'}
+              </p>
             </div>
-            <button
-              onClick={() => setCreating(true)}
-              className="flex items-center gap-2 mx-auto rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-            >
-              <Plus className="h-4 w-4" />
-              Criar board
-            </button>
+            {canShareBoard && (
+              <button
+                onClick={() => setCreating(true)}
+                className="flex items-center gap-2 mx-auto rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                <Plus className="h-4 w-4" />
+                Criar board
+              </button>
+            )}
           </div>
         </div>
         {creating && <NewBoardModal onClose={() => setCreating(false)} onCreated={handleCreated} />}
@@ -383,13 +389,15 @@ export default function KanbanPage() {
             {boards.length}
           </span>
         </div>
-        <button
-          onClick={() => setCreating(true)}
-          className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          <Plus className="h-4 w-4" />
-          Novo board
-        </button>
+        {canShareBoard && (
+          <button
+            onClick={() => setCreating(true)}
+            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            <Plus className="h-4 w-4" />
+            Novo board
+          </button>
+        )}
       </div>
 
       {/* Grid */}
