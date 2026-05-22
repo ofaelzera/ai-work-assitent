@@ -6,6 +6,7 @@ import { runAgentWithTools } from './agents/runAgentWithTools.js'
 import { REPLY_SUGGESTER_SYSTEM_PROMPT } from './agents/prompts.js'
 import { listAvailableTools } from './tools/registry.js'
 import { invalidateAgentCache } from '../../workers/agentDispatcher.worker.js'
+import { syncAgentCron, removeAgentCron } from './cronSync.js'
 
 const triggerSchema = z.object({
   type: z.enum(['message.received', 'conversation.created', 'cron', 'manual']),
@@ -58,6 +59,7 @@ export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
       invalidateAgentCache(req.user.workspaceId)
+      void syncAgentCron(agent.id)
       return reply.code(201).send(agent)
     },
   )
@@ -92,6 +94,7 @@ export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
       invalidateAgentCache(req.user.workspaceId)
+      void syncAgentCron(req.params.id)
       return updated
     },
   )
@@ -99,6 +102,7 @@ export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
   app.delete('/ai/agents/:id', { onRequest: [app.authenticate] }, async (req: any, reply) => {
     await prisma.agent.delete({ where: { id: req.params.id, workspaceId: req.user.workspaceId } })
     invalidateAgentCache(req.user.workspaceId)
+    void removeAgentCron(req.params.id)
     return reply.code(204).send()
   })
 

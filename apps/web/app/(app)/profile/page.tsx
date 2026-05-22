@@ -1,18 +1,24 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, UserRound, MessageSquare } from 'lucide-react'
+import { Save, UserRound, MessageSquare, KeyRound, Calendar as CalendarIcon, Plug, Trash2, Camera, Upload } from 'lucide-react'
 import MessageTemplateField from '@/components/MessageTemplateField'
 import { useAuthStore } from '@/store/auth'
 
+interface MeProfile {
+  id: string; name: string; email: string; role: string
+  settings?: { avatarUrl?: string | null } & Record<string, unknown> | null
+}
 interface UserSettings {
   welcomeMessage?: string | null
   closingMessage?: string | null
   signature?: string | null
+  avatarUrl?: string | null
 }
+interface CalendarAccount { id: string; provider: string; createdAt: string }
 
 function Section({ title, description, icon: Icon, children }: {
   title: string
@@ -34,24 +40,288 @@ function Section({ title, description, icon: Icon, children }: {
   )
 }
 
-interface MeProfile { id: string; name: string; email: string; role: string }
+// ─── Foto de perfil ──────────────────────────────────────────────────────────
+function initials(name?: string | null, email?: string | null): string {
+  const src = (name ?? email ?? '?').trim()
+  const parts = src.split(/\s+/).slice(0, 2)
+  return parts.map((p) => p[0]?.toUpperCase() ?? '').join('') || '?'
+}
 
-export default function ProfilePage() {
-  const queryClient = useQueryClient()
-  const meAuth = useAuthStore(s => s.user)
+function AvatarUploader({ profile }: { profile: MeProfile }) {
+  const qc = useQueryClient()
+  const inputRef = React.useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const avatarUrl = profile.settings?.avatarUrl ?? null
 
-  const { data: profile } = useQuery<MeProfile>({
-    queryKey: ['me-profile'],
-    queryFn: () => apiFetch(`/users/${meAuth!.sub}`),
-    enabled: !!meAuth?.sub,
+  const handleFile = async (file: File) => {
+    if (!file.type.startsWith('image/')) { toast.error('Selecione uma imagem'); return }
+    if (file.size > 2 * 1024 * 1024) { toast.error('Máximo 2 MB'); return }
+    setUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      await apiFetch('/users/me/avatar', { method: 'POST', body: form })
+      await qc.invalidateQueries({ queryKey: ['me-profile'] })
+      await qc.invalidateQueries({ queryKey: ['users'] })
+      toast.success('Foto atualizada')
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Erro ao enviar foto')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const remove = useMutation({
+    mutationFn: () => apiFetch('/users/me/avatar', { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['me-profile'] })
+      qc.invalidateQueries({ queryKey: ['users'] })
+      toast.success('Foto removida')
+    },
+    onError: () => toast.error('Erro ao remover'),
   })
 
+  return (
+    <div className="flex items-center gap-4">
+      <div className="relative group">
+        <input
+          ref={inputRef} type="file" accept="image/*" className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = '' }}
+        />
+        <button
+          type="button" onClick={() => inputRef.current?.click()} disabled={uploading}
+          className="relative h-20 w-20 rounded-full overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+          title="Clique para trocar a foto"
+        >
+          {avatarUrl ? (
+            <img src={avatarUrl} alt={profile.name} className="h-full w-full object-cover" />
+          ) : (
+            <div className="h-full w-full flex items-center justify-center text-2xl font-bold text-white bg-gradient-to-br from-primary to-violet-600">
+              {initials(profile.name, profile.email)}
+            </div>
+          )}
+          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+            <Camera className="h-5 w-5 text-white" />
+          </div>
+        </button>
+      </div>
+      <div className="flex-1 space-y-1">
+        <p className="text-sm font-medium">Foto de perfil</p>
+        <p className="text-xs text-muted-foreground">JPG, PNG ou GIF — até 2 MB.</p>
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button" onClick={() => inputRef.current?.click()} disabled={uploading}
+            className="flex items-center gap-1.5 text-xs border rounded px-2.5 py-1.5 hover:bg-accent disabled:opacity-50">
+            <Upload className="h-3 w-3" /> {uploading ? 'Enviando...' : avatarUrl ? 'Trocar' : 'Enviar foto'}
+          </button>
+          {avatarUrl && (
+            <button
+              type="button" onClick={() => { if (confirm('Remover foto?')) remove.mutate() }}
+              disabled={remove.isPending}
+              className="flex items-center gap-1.5 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded px-2.5 py-1.5">
+              <Trash2 className="h-3 w-3" /> Remover
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Identidade (nome + email) ───────────────────────────────────────────────
+function IdentityForm({ profile }: { profile: MeProfile }) {
+  const qc = useQueryClient()
+  const [name, setName] = useState(profile.name ?? '')
+  const [email, setEmail] = useState(profile.email ?? '')
+
+  useEffect(() => {
+    setName(profile.name ?? '')
+    setEmail(profile.email ?? '')
+  }, [profile.id, profile.name, profile.email])
+
+  const save = useMutation({
+    mutationFn: (patch: { name?: string; email?: string }) =>
+      apiFetch('/users/me', { method: 'PATCH', body: JSON.stringify(patch) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['me-profile'] })
+      qc.invalidateQueries({ queryKey: ['users'] })
+      toast.success('Perfil atualizado')
+    },
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao salvar'),
+  })
+
+  const dirty = name !== (profile.name ?? '') || email !== (profile.email ?? '')
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="text-xs font-medium">Nome</label>
+          <input value={name} onChange={(e) => setName(e.target.value)}
+            className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium">Email</label>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+            className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/40" />
+        </div>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Função: <span className="font-semibold text-foreground">{profile.role}</span>
+        <span className="ml-2 italic">(só admin pode alterar a função)</span>
+      </p>
+      <div className="flex justify-end pt-2 border-t">
+        <button onClick={() => save.mutate({ name: name.trim(), email: email.trim() })}
+          disabled={!dirty || save.isPending}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">
+          <Save className="h-3.5 w-3.5" />
+          {save.isPending ? 'Salvando...' : 'Salvar'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Senha ──────────────────────────────────────────────────────────────────
+function PasswordForm() {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+
+  const save = useMutation({
+    mutationFn: () =>
+      apiFetch('/users/me/password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword: current, newPassword: next }),
+      }),
+    onSuccess: () => {
+      toast.success('Senha alterada')
+      setCurrent(''); setNext(''); setConfirm('')
+    },
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao alterar senha'),
+  })
+
+  const tooShort = next.length > 0 && next.length < 8
+  const mismatch = confirm.length > 0 && next !== confirm
+  const canSubmit = !!current && next.length >= 8 && next === confirm
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="space-y-1">
+          <label className="text-xs font-medium">Senha atual</label>
+          <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)}
+            autoComplete="current-password"
+            className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium">Nova senha</label>
+          <input type="password" value={next} onChange={(e) => setNext(e.target.value)}
+            autoComplete="new-password" minLength={8}
+            className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+          {tooShort && <p className="text-[10px] text-rose-600">Mínimo 8 caracteres</p>}
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium">Confirmar</label>
+          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+            autoComplete="new-password"
+            className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+          {mismatch && <p className="text-[10px] text-rose-600">Senhas não conferem</p>}
+        </div>
+      </div>
+      <div className="flex justify-end pt-2 border-t">
+        <button onClick={() => save.mutate()} disabled={!canSubmit || save.isPending}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">
+          <KeyRound className="h-3.5 w-3.5" />
+          {save.isPending ? 'Salvando...' : 'Alterar senha'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Google Calendar ─────────────────────────────────────────────────────────
+function GoogleAccounts() {
+  const qc = useQueryClient()
+  const { data: accounts = [], isLoading } = useQuery<CalendarAccount[]>({
+    queryKey: ['calendar-accounts'],
+    queryFn: () => apiFetch('/calendar/accounts'),
+  })
+
+  const connect = async () => {
+    try {
+      const { url } = await apiFetch<{ url: string }>('/calendar/auth')
+      window.location.href = url
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Erro ao iniciar OAuth')
+    }
+  }
+
+  const remove = useMutation({
+    mutationFn: (id: string) => apiFetch(`/calendar/accounts/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['calendar-accounts'] })
+      toast.success('Conta desconectada')
+    },
+    onError: () => toast.error('Erro ao desconectar'),
+  })
+
+  return (
+    <div className="space-y-3">
+      {isLoading && <p className="text-xs text-muted-foreground">Carregando...</p>}
+
+      {!isLoading && accounts.length === 0 && (
+        <div className="rounded-lg bg-muted/30 p-4 text-center space-y-2">
+          <p className="text-xs text-muted-foreground">Nenhuma conta Google conectada ainda.</p>
+          <p className="text-[11px] text-muted-foreground/80">
+            Conecte sua conta pra criar eventos sincronizados em <strong>/calendar</strong> e habilitar
+            que agentes IA agendem direto no seu Google Calendar.
+          </p>
+        </div>
+      )}
+
+      {accounts.length > 0 && (
+        <div className="space-y-2">
+          {accounts.map((a) => (
+            <div key={a.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-8 w-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+                  <CalendarIcon className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate capitalize">{a.provider}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Conectada em {new Date(a.createdAt).toLocaleDateString('pt-BR')}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => { if (confirm('Desconectar esta conta?')) remove.mutate(a.id) }}
+                disabled={remove.isPending}
+                className="flex items-center gap-1 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded px-2 py-1.5">
+                <Trash2 className="h-3 w-3" /> Desconectar
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button onClick={connect}
+        className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/40 text-sm py-3 hover:bg-primary/5 transition-colors text-primary font-medium">
+        <Plug className="h-4 w-4" />
+        {accounts.length > 0 ? 'Conectar outra conta Google' : 'Conectar conta Google'}
+      </button>
+    </div>
+  )
+}
+
+// ─── Mensagens automáticas ───────────────────────────────────────────────────
+function MessageTemplates() {
+  const qc = useQueryClient()
   const { data: settings, isLoading } = useQuery<UserSettings>({
     queryKey: ['user-settings'],
     queryFn: () => apiFetch('/users/me/settings'),
   })
 
-  // Estado local pra editar sem disparar mutation a cada keystroke
   const [welcome, setWelcome] = useState('')
   const [closing, setClosing] = useState('')
 
@@ -66,13 +336,71 @@ export default function ProfilePage() {
     mutationFn: (patch: Partial<UserSettings>) =>
       apiFetch('/users/me/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['user-settings'] })
-      toast.success('Configurações salvas')
+      qc.invalidateQueries({ queryKey: ['user-settings'] })
+      toast.success('Mensagens salvas')
     },
     onError: () => toast.error('Erro ao salvar'),
   })
 
-  const dirty = (welcome !== (settings?.welcomeMessage ?? '')) || (closing !== (settings?.closingMessage ?? ''))
+  const dirty =
+    welcome !== (settings?.welcomeMessage ?? '') ||
+    closing !== (settings?.closingMessage ?? '')
+
+  if (isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>
+
+  return (
+    <div className="space-y-5">
+      <MessageTemplateField
+        label="Apresentação ao assumir conversa"
+        helperText="Enviada quando você clica em 'Assumir atendimento'. Adicional à mensagem de boas-vindas do canal."
+        value={welcome}
+        onChange={setWelcome}
+        placeholder="Olá {cliente}, aqui é {atendente} 👋 Em que posso ajudar?"
+      />
+      <MessageTemplateField
+        label="Mensagem ao finalizar conversa"
+        helperText="Substitui a mensagem padrão do canal. Deixe vazio pra usar a do canal."
+        value={closing}
+        onChange={setClosing}
+        placeholder="Por hoje encerro o atendimento. Qualquer dúvida estou à disposição! - {atendente}"
+      />
+      <div className="flex justify-end pt-2 border-t">
+        <button
+          onClick={() => save.mutate({
+            welcomeMessage: welcome.trim() || null,
+            closingMessage: closing.trim() || null,
+          })}
+          disabled={!dirty || save.isPending}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">
+          <Save className="h-3.5 w-3.5" />
+          {save.isPending ? 'Salvando...' : 'Salvar'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Página ──────────────────────────────────────────────────────────────────
+export default function ProfilePage() {
+  // Mount guard: evita hydration mismatch — várias subseções dependem de estado
+  // assíncrono (auth, queries, OAuth account list) que diverge entre SSR e CSR.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  const meAuth = useAuthStore((s) => s.user)
+  const { data: profile, isLoading } = useQuery<MeProfile>({
+    queryKey: ['me-profile'],
+    queryFn: () => apiFetch('/users/me'),
+    enabled: mounted && !!meAuth?.sub,
+  })
+
+  if (!mounted) {
+    return (
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+        Carregando perfil...
+      </div>
+    )
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -80,60 +408,34 @@ export default function ProfilePage() {
         <div>
           <h1 className="text-xl font-bold">Meu perfil</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Personalize suas mensagens automáticas como atendente.
+            Gerencie sua identidade, senha, integrações e mensagens automáticas.
           </p>
         </div>
 
-        {/* Identidade */}
-        <Section title="Identidade" icon={UserRound} description="Como você aparece pra clientes e colegas">
-          <div className="space-y-2">
-            <div className="rounded-lg bg-muted/40 px-3 py-2.5 text-xs space-y-1">
-              <p className="text-muted-foreground">Nome: <span className="font-semibold text-foreground">{profile?.name ?? '—'}</span></p>
-              <p className="text-muted-foreground">Email: <span className="font-mono text-foreground">{profile?.email ?? '—'}</span></p>
-              <p className="text-muted-foreground">Função: <span className="font-semibold text-foreground">{meAuth?.role ?? '—'}</span></p>
-            </div>
-            <p className="text-[11px] text-muted-foreground italic">
-              Pra alterar nome ou senha, vá em <strong>Configurações</strong>.
-            </p>
-          </div>
+        <Section title="Foto de perfil" icon={Camera} description="Aparece no menu lateral e ao lado das suas mensagens">
+          {isLoading || !profile
+            ? <p className="text-sm text-muted-foreground">Carregando...</p>
+            : <AvatarUploader profile={profile} />}
         </Section>
 
-        {/* Mensagens automáticas */}
+        <Section title="Identidade" icon={UserRound} description="Como você aparece pra clientes e colegas">
+          {isLoading || !profile
+            ? <p className="text-sm text-muted-foreground">Carregando...</p>
+            : <IdentityForm profile={profile} />}
+        </Section>
+
+        <Section title="Senha" icon={KeyRound} description="Altere sua senha de acesso ao sistema">
+          <PasswordForm />
+        </Section>
+
+        <Section title="Google Calendar" icon={CalendarIcon}
+          description="Conecte sua conta Google pra sincronizar eventos da Agenda">
+          <GoogleAccounts />
+        </Section>
+
         <Section title="Mensagens automáticas" icon={MessageSquare}
           description="Enviadas em momentos específicos do atendimento. Use variáveis pra personalizar.">
-          {isLoading ? (
-            <p className="text-sm text-muted-foreground">Carregando...</p>
-          ) : (
-            <div className="space-y-5">
-              <MessageTemplateField
-                label="Apresentação ao assumir conversa"
-                helperText="Enviada automaticamente quando você clica em 'Assumir atendimento'. Adicional à mensagem de boas-vindas do canal."
-                value={welcome}
-                onChange={setWelcome}
-                placeholder="Olá {cliente}, aqui é {atendente} 👋 Em que posso ajudar?"
-              />
-              <MessageTemplateField
-                label="Mensagem ao finalizar conversa"
-                helperText="Substitui a mensagem padrão do canal. Deixe vazio pra usar a do canal."
-                value={closing}
-                onChange={setClosing}
-                placeholder="Por hoje encerro o atendimento. Qualquer dúvida estou à disposição! - {atendente}"
-              />
-
-              <div className="flex justify-end pt-2 border-t">
-                <button
-                  onClick={() => save.mutate({
-                    welcomeMessage: welcome.trim() || null,
-                    closingMessage: closing.trim() || null,
-                  })}
-                  disabled={!dirty || save.isPending}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">
-                  <Save className="h-3.5 w-3.5" />
-                  {save.isPending ? 'Salvando...' : 'Salvar'}
-                </button>
-              </div>
-            </div>
-          )}
+          <MessageTemplates />
         </Section>
       </div>
     </div>

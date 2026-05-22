@@ -23,6 +23,7 @@ import { useAuthStore } from '@/store/auth'
 import { logout, refreshToken } from '@/lib/auth'
 import { apiFetch, getAccessToken } from '@/lib/api'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { useQuery } from '@tanstack/react-query'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -73,6 +74,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     clear()
     router.push('/login')
   }
+
+  // Busca dados do "me" (inclui settings.avatarUrl) só depois do auth pronto
+  const { data: me } = useQuery<{ id: string; name: string; email: string; settings?: { avatarUrl?: string | null } | null }>({
+    queryKey: ['me-profile'],
+    queryFn: () => apiFetch('/users/me'),
+    enabled: ready && !!user?.sub,
+    staleTime: 60_000,
+  })
+  const avatarUrl = me?.settings?.avatarUrl ?? null
+  const displayName = me?.name ?? me?.email ?? 'Meu Perfil'
+  const fallback = ((displayName ?? '?').trim()[0] ?? '?').toUpperCase()
 
   if (!ready) {
     return (
@@ -164,14 +176,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Link
               href="/profile"
               className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',
+                'flex items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium transition-all',
                 pathname.startsWith('/profile')
                   ? 'bg-primary/10 text-primary'
                   : 'text-muted-foreground hover:bg-background hover:text-foreground shadow-sm'
               )}
             >
-              <UserCircle className="h-[18px] w-[18px]" />
-              Meu Perfil
+              {avatarUrl ? (
+                <img src={avatarUrl} alt={displayName} className="h-7 w-7 rounded-full object-cover shrink-0" />
+              ) : (
+                <div className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-violet-600 flex items-center justify-center text-[11px] font-semibold text-white shrink-0">
+                  {fallback}
+                </div>
+              )}
+              <span className="truncate">{me?.name ? 'Meu Perfil' : 'Meu Perfil'}</span>
             </Link>
             <button
               onClick={handleLogout}

@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/auth'
 import { usePermission } from '@/lib/usePermission'
 import { useSSE } from '@/lib/sse'
 import { presenceLabel, type PresenceState } from '@/lib/usePresence'
+import { stripWhatsappMarks } from '@/lib/whatsappText'
 import {
   MessageSquare, Search, Star, Users, Mic, Image, FileText,
   Video, Paperclip, SquarePen, Archive, ArchiveRestore, Folder, Inbox, ChevronRight,
@@ -103,7 +104,7 @@ function Avatar({ name, isGroup, avatarUrl, channelType }: { name: string; isGro
 function MessagePreview({ msg, direction }: { msg: Conversation['messages'][0]; direction: string }) {
   const att = msg.attachments?.[0]
   const type = att?.type ?? att?.mimetype ?? ''
-  let preview: React.ReactNode = msg.body || ''
+  let preview: React.ReactNode = stripWhatsappMarks(msg.body) || ''
   if (type.startsWith('image') || type === 'image') preview = <><Image className="h-3 w-3 inline-block mr-1" />Foto</>
   else if (type.startsWith('audio') || type === 'audio' || type === 'ptt') preview = <><Mic className="h-3 w-3 inline-block mr-1" />Áudio</>
   else if (type.startsWith('video') || type === 'video') preview = <><Video className="h-3 w-3 inline-block mr-1" />Vídeo</>

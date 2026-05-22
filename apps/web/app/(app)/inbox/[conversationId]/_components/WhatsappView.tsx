@@ -1,5 +1,6 @@
 'use client'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, getAccessToken } from '@/lib/api'
 import { useSSE } from '@/lib/sse'
@@ -13,6 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
 import { formatPhone, isInternalId } from '@/lib/phone'
+import { renderWhatsappText, stripWhatsappMarks } from '@/lib/whatsappText'
 import { toast } from 'sonner'
 import CreateCardModal from '@/components/CreateCardModal'
 import CreateTaskModal from '@/components/CreateTaskModal'
@@ -59,7 +61,8 @@ export interface Message {
   fromContactId: string | null
   fromUserId: string | null
   attachments?: MediaAttachment[] | null
-  fromContact?: { id: string; name: string | null; phone: string | null } | null
+  fromContact?: { id: string; name: string | null; phone: string | null; metadata?: { avatarUrl?: string | null } | null } | null
+  fromUser?: { id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null } | null
   deliveryStatus?: string | null
   quotedMsgId?: string | null
   quotedBody?: string | null
@@ -137,17 +140,40 @@ function useMediaBlob(msgId: string, enabled: boolean) {
 }
 
 function MediaModal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h)
+    window.addEventListener('keydown', h)
+    // Trava scroll do body enquanto modal aberto
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', h)
+      document.body.style.overflow = prev
+    }
   }, [onClose])
-  return (
-    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center" onClick={onClose}>
-      <div className="relative max-w-[90vw] max-h-[90vh]" onClick={e => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute -top-9 right-0 text-white/80 hover:text-white"><X className="h-5 w-5" /></button>
+
+  if (!mounted) return null
+  // Portal pro document.body — escapa qualquer stacking context / transform de ancestrais
+  return createPortal(
+    <div
+      className="fixed inset-0 bg-black/85 flex items-center justify-center p-6"
+      style={{ zIndex: 9999 }}
+      onClick={onClose}
+    >
+      <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={onClose}
+          className="absolute -top-10 right-0 text-white/90 hover:text-white p-1 rounded-full hover:bg-white/10"
+          title="Fechar (Esc)"
+        >
+          <X className="h-5 w-5" />
+        </button>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -171,7 +197,7 @@ function MediaImage({ msgId, caption }: { msgId: string; caption?: string }) {
           </div>
         )}
       </div>
-      {caption && <p className="text-sm whitespace-pre-wrap mt-1">{caption}</p>}
+      {caption && <p className="text-sm whitespace-pre-wrap mt-1">{renderWhatsappText(caption)}</p>}
       {modal && src && (
         <MediaModal onClose={() => setModal(false)}>
           <img src={src} alt="imagem" className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain" />
@@ -206,7 +232,7 @@ function VideoPlayer({ msgId, caption }: { msgId: string; caption?: string }) {
     <div>
       {src ? <video src={src} controls className="max-w-[280px] rounded-lg" />
         : <div className="w-48 h-28 bg-black/10 rounded-lg animate-pulse" />}
-      {caption && <p className="text-sm whitespace-pre-wrap mt-1">{caption}</p>}
+      {caption && <p className="text-sm whitespace-pre-wrap mt-1">{renderWhatsappText(caption)}</p>}
     </div>
   )
 }
@@ -249,12 +275,12 @@ function DocumentBubble({ msgId, filename, mimetype }: { msgId: string; filename
 
 function MediaBubble({ msg }: { msg: Message }) {
   const att = msg.attachments?.[0]
-  if (!att) return <p className="whitespace-pre-wrap break-words text-sm">{msg.body}</p>
+  if (!att) return <p className="whitespace-pre-wrap break-words text-sm">{renderWhatsappText(msg.body)}</p>
   if (att.type === 'image' || att.type === 'sticker') return <MediaImage msgId={msg.id} caption={att.caption} />
   if (att.type === 'audio') return <AudioPlayer msgId={msg.id} seconds={att.seconds} />
   if (att.type === 'video') return <VideoPlayer msgId={msg.id} caption={att.caption} />
   if (att.type === 'document') return <DocumentBubble msgId={msg.id} filename={att.filename} mimetype={att.mimetype} />
-  return <p className="whitespace-pre-wrap break-words text-sm">{msg.body}</p>
+  return <p className="whitespace-pre-wrap break-words text-sm">{renderWhatsappText(msg.body)}</p>
 }
 
 function groupByDate(messages: Message[]) {
@@ -437,7 +463,7 @@ function HistoryTicket({ conv, isCurrent }: { conv: any; isCurrent: boolean }) {
         </div>
         {lastMsg && !open && (
           <p className="text-muted-foreground truncate">
-            {lastMsg.direction === 'OUTBOUND' ? 'Você: ' : ''}{lastMsg.body}
+            {lastMsg.direction === 'OUTBOUND' ? 'Você: ' : ''}{stripWhatsappMarks(lastMsg.body)}
           </p>
         )}
         {conv.resolvedAt && (
@@ -757,7 +783,7 @@ function SuggestReplyButton({ conversationId, onSelect }: { conversationId: stri
  */
 export function AssigneeChip({ assignee }: {
   conversationId?: string  // mantido na assinatura por compat — não usado
-  assignee?: { id: string; name: string | null; email: string } | null
+  assignee?: { id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null } | null
 }) {
   if (!assignee) {
     return (
@@ -768,12 +794,20 @@ export function AssigneeChip({ assignee }: {
     )
   }
   const label = assignee.name ?? assignee.email.split('@')[0]
+  const avatarUrl = assignee.settings?.avatarUrl
+  const ini = ((assignee.name ?? assignee.email).trim()[0] ?? '?').toUpperCase()
   return (
     <span
-      className="flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 border bg-primary/10 border-primary/20 text-primary"
+      className="flex items-center gap-1.5 text-[11px] font-medium rounded-full pl-0.5 pr-2 py-0.5 border bg-primary/10 border-primary/20 text-primary"
       title={`Em atendimento por ${assignee.name ?? assignee.email}`}
     >
-      <UserRound className="h-3 w-3 shrink-0" />
+      {avatarUrl ? (
+        <img src={avatarUrl} alt={label} className="h-5 w-5 rounded-full object-cover shrink-0" />
+      ) : (
+        <span className="h-5 w-5 rounded-full bg-gradient-to-br from-primary to-violet-600 flex items-center justify-center text-[9px] font-semibold text-white shrink-0">
+          {ini}
+        </span>
+      )}
       <span className="max-w-[120px] truncate">{label}</span>
     </span>
   )
@@ -1437,12 +1471,22 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                       <div className="shrink-0 mb-0.5">
                         {isFirstOfSender
                           ? (
-                            <div
-                              className="h-7 w-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
-                              style={{ background: senderColor(senderId) }}
-                            >
-                              {initials(senderName ?? 'D')}
-                            </div>
+                            msg.fromContact?.metadata?.avatarUrl ? (
+                              <img
+                                src={msg.fromContact.metadata.avatarUrl}
+                                alt={senderName ?? 'Contato'}
+                                title={senderName ?? undefined}
+                                className="h-7 w-7 rounded-full object-cover"
+                              />
+                            ) : (
+                              <div
+                                className="h-7 w-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
+                                style={{ background: senderColor(senderId) }}
+                                title={senderName ?? undefined}
+                              >
+                                {initials(senderName ?? 'D')}
+                              </div>
+                            )
                           )
                           : <div className="h-7 w-7" />
                         }
@@ -1450,11 +1494,36 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                     )}
 
                     {/* Bolha */}
+                    {/* Avatar do atendente (outbound) */}
+                    {isOut && msg.fromUser && (
+                      <div className="shrink-0 mb-0.5 order-2">
+                        {isFirstOfSender ? (
+                          msg.fromUser.settings?.avatarUrl ? (
+                            <img
+                              src={msg.fromUser.settings.avatarUrl}
+                              alt={msg.fromUser.name ?? msg.fromUser.email}
+                              title={`Enviado por ${msg.fromUser.name ?? msg.fromUser.email}`}
+                              className="h-7 w-7 rounded-full object-cover"
+                            />
+                          ) : (
+                            <div
+                              className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-violet-600 flex items-center justify-center text-[10px] font-bold text-white"
+                              title={`Enviado por ${msg.fromUser.name ?? msg.fromUser.email}`}
+                            >
+                              {((msg.fromUser.name ?? msg.fromUser.email).trim()[0] ?? '?').toUpperCase()}
+                            </div>
+                          )
+                        ) : <div className="h-7 w-7" />}
+                      </div>
+                    )}
+
                     <div className="relative max-w-[72%]">
-                      {/* Botões de ação (hover) */}
+                      {/* Toolbar de ações (hover) — pílula horizontal sobre o balão */}
                       <div className={cn(
-                        'absolute top-1 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10',
-                        isOut ? '-left-8' : '-right-8',
+                        'absolute -top-3 z-30 flex items-center gap-0.5 rounded-full border bg-card shadow-md px-1 py-0.5',
+                        'opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all',
+                        'pointer-events-none group-hover:pointer-events-auto',
+                        isOut ? 'right-1' : 'left-1',
                       )}>
                         <button
                           onClick={() => setReplyTo({
@@ -1463,7 +1532,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                             sender: senderName ?? (isOut ? 'Você' : contactName),
                             color: bubbleColor ?? (isOut ? '#6366f1' : undefined),
                           })}
-                          className="p-1 rounded-full bg-card border shadow-sm text-muted-foreground hover:text-foreground"
+                          className="p-1 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                           title="Responder"
                         >
                           <Reply className="h-3 w-3" />
@@ -1472,7 +1541,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                           <>
                             <button
                               onClick={() => setAttachMessageId(msg.id)}
-                              className="p-1 rounded-full bg-card border shadow-sm text-muted-foreground hover:text-primary"
+                              className="p-1 rounded-full text-muted-foreground hover:bg-accent hover:text-primary transition-colors"
                               title="Anexar ao Card"
                             >
                               <Kanban className="h-3 w-3" />
@@ -1482,7 +1551,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                                 id: msg.id,
                                 filename: (msg.attachments?.[0] as any)?.filename ?? undefined,
                               })}
-                              className="p-1 rounded-full bg-card border shadow-sm text-muted-foreground hover:text-amber-500"
+                              className="p-1 rounded-full text-muted-foreground hover:bg-accent hover:text-amber-500 transition-colors"
                               title="Salvar nos meus arquivos"
                             >
                               <Save className="h-3 w-3" />
@@ -1494,7 +1563,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                             initialTitle: (msg.body ?? '').slice(0, 80),
                             messageId: msg.id,
                           })}
-                          className="p-1 rounded-full bg-card border shadow-sm text-muted-foreground hover:text-blue-500"
+                          className="p-1 rounded-full text-muted-foreground hover:bg-accent hover:text-blue-500 transition-colors"
                           title="Criar tarefa a partir desta mensagem"
                         >
                           <ListTodo className="h-3 w-3" />
@@ -1504,7 +1573,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                             initialTitle: (msg.body ?? '').slice(0, 80),
                             messageId: msg.id,
                           })}
-                          className="p-1 rounded-full bg-card border shadow-sm text-muted-foreground hover:text-emerald-500"
+                          className="p-1 rounded-full text-muted-foreground hover:bg-accent hover:text-emerald-500 transition-colors"
                           title="Criar evento a partir desta mensagem"
                         >
                           <CalendarPlus className="h-3 w-3" />

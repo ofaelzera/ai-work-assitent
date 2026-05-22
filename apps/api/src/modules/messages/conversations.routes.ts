@@ -122,7 +122,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         include: {
           contact: { select: { id: true, name: true, phone: true, email: true, metadata: true, company: { select: { id: true, name: true, color: true } } } },
           channel: { select: { id: true, type: true, label: true } },
-          assignee: { select: { id: true, name: true, email: true } },
+          assignee: { select: { id: true, name: true, email: true, settings: true } },
           messages: {
             orderBy: { sentAt: 'desc' },
             take: 1,
@@ -237,7 +237,8 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         orderBy: { sentAt: 'desc' },
         take: limit,
         include: {
-          fromContact: { select: { id: true, name: true, phone: true } },
+          fromContact: { select: { id: true, name: true, phone: true, metadata: true } },
+          fromUser: { select: { id: true, name: true, email: true, settings: true } },
         },
       })
 
@@ -246,7 +247,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         include: {
           contact: { select: { id: true, name: true, phone: true, email: true, metadata: true, companyId: true } },
           channel: { select: { id: true, type: true, label: true, signature: true, settings: true } },
-          assignee: { select: { id: true, name: true, email: true } },
+          assignee: { select: { id: true, name: true, email: true, settings: true } },
         },
       })
 
@@ -308,7 +309,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         include: {
           channel: true,
           contact: { select: { email: true } },
-          assignee: { select: { id: true, name: true, email: true } },
+          assignee: { select: { id: true, name: true, email: true, settings: true } },
         },
       })
 
@@ -570,7 +571,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const conversation = await prisma.conversation.findUniqueOrThrow({
         where: { id, workspaceId },
-        include: { channel: true, assignee: { select: { id: true, name: true, email: true } } },
+        include: { channel: true, assignee: { select: { id: true, name: true, email: true, settings: true } } },
       })
 
       // Mesmo guard de escrita das mensagens normais
@@ -857,7 +858,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         take: limit,
         include: {
           channel: { select: { id: true, type: true, label: true } },
-          assignee: { select: { id: true, name: true, email: true } },
+          assignee: { select: { id: true, name: true, email: true, settings: true } },
           messages: {
             orderBy: { sentAt: 'desc' },
             take: 1,
@@ -1031,7 +1032,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         select: {
           id: true,
           assigneeId: true,
-          assignee: { select: { id: true, name: true, email: true } },
+          assignee: { select: { id: true, name: true, email: true, settings: true } },
         },
       })
     },
@@ -1063,7 +1064,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         // Conv já tem outro assignee
         const current = await prisma.conversation.findUnique({
           where: { id },
-          select: { assigneeId: true, assignee: { select: { id: true, name: true, email: true } } },
+          select: { assigneeId: true, assignee: { select: { id: true, name: true, email: true, settings: true } } },
         })
 
         // Já é minha → ok, idempotente
@@ -1103,7 +1104,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           id: true,
           assigneeId: true,
           claimedAt: true,
-          assignee: { select: { id: true, name: true, email: true } },
+          assignee: { select: { id: true, name: true, email: true, settings: true } },
         },
       })
 

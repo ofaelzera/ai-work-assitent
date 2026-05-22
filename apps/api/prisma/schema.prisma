@@ -61,6 +61,7 @@ model User {
   assignedConversations Conversation[] @relation("ConversationAssignee")
   assignedTasks         Task[]         @relation("TaskAssignee")
   events                EventLog[]     @relation("EventActor")
+  sentMessages          Message[]      @relation("MessageUserSender")
 
   @@index([workspaceId])
   @@index([customRoleId])
@@ -233,9 +234,11 @@ model Message {
   workspace    Workspace    @relation(fields: [workspaceId], references: [id])
   conversation Conversation @relation(fields: [conversationId], references: [id])
   fromContact  Contact?     @relation("MessageSender", fields: [fromContactId], references: [id])
+  fromUser     User?        @relation("MessageUserSender", fields: [fromUserId], references: [id])
 
   @@unique([conversationId, externalId])
   @@index([workspaceId, conversationId, sentAt])
+  @@index([fromUserId])
 }
 
 // ─── Kanban ──────────────────────────────────────────────────────────────────

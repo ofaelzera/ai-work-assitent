@@ -320,7 +320,9 @@ export default function AgentsPage() {
                   onChange={e => updateTriggerField({ schedule: e.target.value })}
                   placeholder="0 8 * * *  (todos os dias às 8h)"
                   className="mt-0.5 w-full rounded-lg border bg-transparent px-2 py-1 text-xs font-mono" />
-                <p className="text-[10px] text-muted-foreground/70 mt-1">Cron não está executando ainda (fase 8b).</p>
+                <p className="text-[10px] text-muted-foreground/70 mt-1">
+                  Formato Unix cron (5 campos). Exs: <code className="font-mono">0 8 * * *</code> (todo dia 8h UTC), <code className="font-mono">*/15 * * * *</code> (a cada 15min).
+                </p>
               </div>
             )}
 

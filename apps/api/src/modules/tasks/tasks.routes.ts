@@ -22,7 +22,7 @@ const taskSelect = {
   updatedAt: true,
   contact: { select: { id: true, name: true, phone: true, email: true } },
   conversation: { select: { id: true, isGroup: true, subject: true, externalId: true } },
-  assignee: { select: { id: true, name: true, email: true } },
+  assignee: { select: { id: true, name: true, email: true, settings: true } },
 } as const
 
 export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {

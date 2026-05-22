@@ -1,7 +1,7 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
-import { hashPassword } from '../auth/auth.service.js'
+import { hashPassword, verifyPassword } from '../auth/auth.service.js'
 import { AVAILABLE_TEMPLATE_VARIABLES } from '../../lib/templates.js'
 
 const USER_SELECT = {
@@ -13,6 +13,7 @@ const USER_SELECT = {
   customRoleId: true,
   customRole: { select: { id: true, name: true, isSystem: true } },
   twoFactor: true,
+  settings: true,        // inclui avatarUrl, welcomeMessage, etc.
   deletedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -25,6 +26,124 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
     '/templates/variables',
     { onRequest: [app.authenticate] },
     async () => AVAILABLE_TEMPLATE_VARIABLES,
+  )
+
+  // ── Perfil do usuário logado (read/write) ────────────────────────────────
+  // Qualquer usuário pode mexer no próprio nome/email/senha aqui, sem precisar
+  // de admin.users.
+  app.get('/users/me', { onRequest: [app.authenticate] }, async (req) => {
+    return prisma.user.findUniqueOrThrow({
+      where: { id: req.user.sub },
+      select: USER_SELECT,
+    })
+  })
+
+  app.patch(
+    '/users/me',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        body: z.object({
+          name: z.string().min(1).max(80).optional(),
+          email: z.string().email().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { name, email } = req.body
+      if (email) {
+        const taken = await prisma.user.findFirst({
+          where: { email, NOT: { id: req.user.sub } },
+          select: { id: true },
+        })
+        if (taken) return reply.conflict('Já existe um usuário com este email')
+      }
+      return prisma.user.update({
+        where: { id: req.user.sub },
+        data: {
+          ...(name !== undefined && { name }),
+          ...(email !== undefined && { email }),
+        },
+        select: USER_SELECT,
+      })
+    },
+  )
+
+  app.post(
+    '/users/me/password',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        body: z.object({
+          currentPassword: z.string().min(1),
+          newPassword: z.string().min(8).max(128),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const me = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: { id: true, passwordHash: true },
+      })
+      const ok = await verifyPassword(me.passwordHash, req.body.currentPassword)
+      if (!ok) return reply.unauthorized('Senha atual incorreta')
+      const passwordHash = await hashPassword(req.body.newPassword)
+      await prisma.user.update({ where: { id: me.id }, data: { passwordHash } })
+      return { ok: true }
+    },
+  )
+
+  // ── Upload de foto de perfil ─────────────────────────────────────────────
+  // Salva como data URL base64 em User.settings.avatarUrl (mesmo padrão de Contact).
+  app.post(
+    '/users/me/avatar',
+    { onRequest: [app.authenticate] },
+    async (req: any, reply) => {
+      const data = await req.file()
+      if (!data) return reply.badRequest('Arquivo obrigatório')
+      if (!data.mimetype.startsWith('image/')) return reply.badRequest('Apenas imagens')
+
+      const chunks: Buffer[] = []
+      for await (const chunk of data.file) chunks.push(chunk)
+      const buffer = Buffer.concat(chunks)
+
+      // Limita a 2 MB pra não inflar o banco
+      if (buffer.length > 2 * 1024 * 1024) {
+        return reply.badRequest('Imagem muito grande — máximo 2 MB')
+      }
+
+      const avatarUrl = `data:${data.mimetype};base64,${buffer.toString('base64')}`
+
+      const current = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: { settings: true },
+      })
+      const merged = { ...(current.settings as Record<string, unknown> ?? {}), avatarUrl }
+      await prisma.user.update({
+        where: { id: req.user.sub },
+        data: { settings: merged as any },
+      })
+      return reply.code(201).send({ ok: true, avatarUrl })
+    },
+  )
+
+  // DELETE /users/me/avatar — remove foto
+  app.delete(
+    '/users/me/avatar',
+    { onRequest: [app.authenticate] },
+    async (req, reply) => {
+      const current = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: { settings: true },
+      })
+      const merged = { ...(current.settings as Record<string, unknown> ?? {}) }
+      delete merged.avatarUrl
+      await prisma.user.update({
+        where: { id: req.user.sub },
+        data: { settings: merged as any },
+      })
+      return reply.code(204).send()
+    },
   )
 
   // ── Settings pessoais do usuário logado ──────────────────────────────────

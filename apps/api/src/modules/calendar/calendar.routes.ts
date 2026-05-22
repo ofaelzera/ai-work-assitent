@@ -4,15 +4,13 @@ import { prisma } from '../../lib/prisma.js'
 import { encryptJson, decryptJson } from '../../lib/crypto.js'
 import { eventBus } from '../../lib/eventBus.js'
 import { env } from '../../config/env.js'
+import {
+  getValidGoogleToken as getValidToken,
+  googleCalendarFetch,
+  type GoogleTokens,
+} from './google.service.js'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface GoogleTokens {
-  access_token: string
-  refresh_token: string
-  expiry_date: number
-  token_type: string
-}
+// ─── Types locais (encryption blob é só usado dentro deste módulo agora) ──────
 
 interface EncryptedBlob {
   ciphertext: { type: 'Buffer'; data: number[] } | number[]
@@ -20,80 +18,9 @@ interface EncryptedBlob {
   authTag: { type: 'Buffer'; data: number[] } | number[]
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 function toBuffer(val: EncryptedBlob['ciphertext']): Buffer {
   if (Array.isArray(val)) return Buffer.from(val)
   return Buffer.from((val as { type: 'Buffer'; data: number[] }).data)
-}
-
-async function getValidToken(account: { id: string; tokens: unknown }): Promise<string> {
-  const raw = account.tokens as EncryptedBlob
-  const tokens = decryptJson<GoogleTokens>(
-    toBuffer(raw.ciphertext),
-    toBuffer(raw.iv),
-    toBuffer(raw.authTag),
-  )
-
-  // Token still valid for at least 1 minute
-  if (tokens.expiry_date > Date.now() + 60_000) {
-    return tokens.access_token
-  }
-
-  // Refresh
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: env.GOOGLE_CLIENT_ID ?? '',
-      client_secret: env.GOOGLE_CLIENT_SECRET ?? '',
-      refresh_token: tokens.refresh_token,
-      grant_type: 'refresh_token',
-    }),
-  })
-
-  if (!res.ok) {
-    throw new Error(`Google token refresh failed: ${res.status}`)
-  }
-
-  const refreshed = (await res.json()) as Partial<GoogleTokens>
-
-  const newTokens: GoogleTokens = {
-    access_token: refreshed.access_token ?? tokens.access_token,
-    refresh_token: tokens.refresh_token,
-    expiry_date: Date.now() + ((refreshed as any).expires_in ?? 3600) * 1000,
-    token_type: refreshed.token_type ?? tokens.token_type,
-  }
-
-  const encrypted = encryptJson(newTokens)
-
-  await prisma.calendarAccount.update({
-    where: { id: account.id },
-    data: {
-      tokens: {
-        ciphertext: Array.from(encrypted.ciphertext),
-        iv: Array.from(encrypted.iv),
-        authTag: Array.from(encrypted.authTag),
-      },
-    },
-  })
-
-  return newTokens.access_token
-}
-
-async function googleCalendarFetch(
-  accessToken: string,
-  path: string,
-  options: RequestInit = {},
-): Promise<Response> {
-  return fetch(`https://www.googleapis.com/calendar/v3${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    },
-  })
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
