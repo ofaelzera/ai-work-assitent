@@ -642,16 +642,60 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.badRequest('Não é possível mover card entre boards diferentes')
       }
 
-      // Shift cards na coluna destino pra abrir espaço (não shifta o próprio card)
-      await prisma.card.updateMany({
-        where: { columnId, position: { gte: position }, deletedAt: null, id: { not: cardId } },
-        data: { position: { increment: 1 } },
-      })
+      if (card.columnId === columnId) {
+        // Same column move
+        const colCards = await prisma.card.findMany({
+          where: { columnId, deletedAt: null, id: { not: cardId } },
+          orderBy: { position: 'asc' },
+          select: { id: true },
+        })
+        
+        // Insert at new index
+        colCards.splice(position, 0, { id: cardId })
+        
+        await prisma.$transaction(
+          colCards.map((c, idx) => 
+            prisma.card.update({
+              where: { id: c.id },
+              data: { position: idx, columnId },
+            })
+          )
+        )
+      } else {
+        // Cross column move
+        const targetCards = await prisma.card.findMany({
+          where: { columnId, deletedAt: null, id: { not: cardId } },
+          orderBy: { position: 'asc' },
+          select: { id: true },
+        })
+        
+        targetCards.splice(position, 0, { id: cardId })
+        
+        const originCards = await prisma.card.findMany({
+          where: { columnId: card.columnId, deletedAt: null, id: { not: cardId } },
+          orderBy: { position: 'asc' },
+          select: { id: true },
+        })
+        
+        await prisma.$transaction([
+          ...targetCards.map((c, idx) => 
+            prisma.card.update({
+              where: { id: c.id },
+              data: { position: idx, columnId },
+            })
+          ),
+          ...originCards.map((c, idx) => 
+            prisma.card.update({
+              where: { id: c.id },
+              data: { position: idx, columnId: card.columnId },
+            })
+          )
+        ])
+      }
 
-      // Update real do card — usa `update` (não updateMany) pra garantir que rodou
-      const updated = await prisma.card.update({
+      // Fetch the updated card to return
+      const updated = await prisma.card.findUnique({
         where: { id: cardId },
-        data: { columnId, position },
         select: { id: true, columnId: true, position: true },
       })
 

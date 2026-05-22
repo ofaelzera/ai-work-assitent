@@ -131,8 +131,8 @@ function SortableCard({
       ref={setNodeRef}
       style={style}
       className={cn(
-        'bg-card border rounded-lg p-3 cursor-pointer hover:border-primary/40 transition-colors group',
-        isDragging && 'opacity-30',
+        'glass-card rounded-xl p-4 cursor-pointer hover:border-primary/40 hover:shadow-md transition-all group',
+        isDragging && 'opacity-60 scale-105 shadow-2xl ring-2 ring-primary/20',
       )}
       onClick={onClick}
     >
@@ -268,8 +268,8 @@ function KanbanColumn({
   }
 
   return (
-    <div ref={setColRef} style={style} className="flex flex-col w-72 shrink-0 bg-muted/40 rounded-xl">
-      <div className="flex items-center justify-between gap-1 px-3 py-2.5">
+    <div ref={setColRef} style={style} className="flex flex-col w-[300px] shrink-0 bg-accent/20 dark:bg-accent/10 backdrop-blur-sm border border-border/50 rounded-2xl overflow-hidden">
+      <div className="flex items-center justify-between gap-1 px-4 py-3 border-b border-border/30 bg-card/30">
         {/* Handle pra arrastar coluna */}
         <button
           {...colAttrs}
@@ -403,8 +403,8 @@ function AddColumnButton({ boardId }: { boardId: string }) {
   if (!adding) {
     return (
       <button onClick={() => setAdding(true)}
-        className="flex items-center gap-2 w-72 shrink-0 h-12 rounded-xl border-2 border-dashed border-border hover:border-primary/40 hover:bg-accent/30 text-sm text-muted-foreground hover:text-foreground transition-colors px-3">
-        <Plus className="h-4 w-4" /> Adicionar coluna
+        className="flex items-center justify-center gap-2 w-[300px] shrink-0 h-14 rounded-2xl border-2 border-dashed border-border hover:border-primary/40 hover:bg-primary/5 text-sm font-medium text-muted-foreground hover:text-primary transition-all">
+        <Plus className="h-5 w-5" /> Adicionar coluna
       </button>
     )
   }

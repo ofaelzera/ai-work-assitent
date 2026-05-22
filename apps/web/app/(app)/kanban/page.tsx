@@ -409,37 +409,47 @@ export default function KanbanPage() {
                 key={board.id}
                 onClick={() => router.push(`/kanban/${board.id}`)}
                 className={cn(
-                  'relative flex flex-col gap-3 text-left border rounded-xl p-4 bg-card cursor-pointer',
-                  'hover:border-primary/40 hover:shadow-sm transition-all group',
+                  'relative flex flex-col gap-3 text-left glass-card rounded-xl p-4 cursor-pointer overflow-hidden',
+                  'hover:border-primary/40 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 group',
                 )}
               >
-                {canEdit && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setEditing(board) }}
-                    title="Editar board"
-                    className="absolute top-2 right-2 p-1.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent transition-opacity">
-                    <Settings className="h-3.5 w-3.5 text-muted-foreground" />
-                  </button>
-                )}
-                <div className="flex items-start justify-between">
-                  <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary to-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                
+                <div className="flex items-start justify-between relative z-10">
+                  <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shrink-0">
                     <Kanban className="h-5 w-5 text-primary" />
                   </div>
-                  <span className={cn('flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full', badge.cls)}>
-                    <badge.Icon className="h-3 w-3" /> {badge.label}
-                  </span>
+                  <div className="flex items-center gap-1.5 h-8">
+                    <span className={cn('flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider', badge.cls)}>
+                      <badge.Icon className="h-3 w-3" /> {badge.label}
+                    </span>
+                    {canEdit ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setEditing(board) }}
+                        title="Editar board"
+                        className="p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-accent transition-all shrink-0">
+                        <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    ) : (
+                      <div className="w-5" /> /* Placeholder para manter alinhamento */
+                    )}
+                  </div>
                 </div>
-                <div className="flex-1">
-                  <p className="font-medium text-sm group-hover:text-primary transition-colors line-clamp-2">
+                
+                <div className="flex-1 mt-1">
+                  <p className="font-bold text-base group-hover:text-primary transition-colors tracking-tight line-clamp-2 leading-tight">
                     {board.name}
                   </p>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs font-medium text-muted-foreground mt-1">
                     {board.cardCount} {board.cardCount === 1 ? 'card' : 'cards'}
                   </p>
                 </div>
-                <p className="text-[11px] text-muted-foreground/60">
-                  Criado em {new Date(board.createdAt).toLocaleDateString('pt-BR')}
-                </p>
+                
+                <div className="pt-2.5 mt-1 border-t border-border/50">
+                  <p className="text-[10px] text-muted-foreground/60 font-semibold uppercase tracking-wider">
+                    Criado em {new Date(board.createdAt).toLocaleDateString('pt-BR')}
+                  </p>
+                </div>
               </div>
             )
           })}
