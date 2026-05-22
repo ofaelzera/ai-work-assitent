@@ -23,7 +23,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         querystring: z.object({
           channelId: z.string().optional(),
-          channelType: z.enum(['WHATSAPP', 'GMAIL', 'IMAP_SMTP']).optional(),
+          channelType: z.enum(['WHATSAPP', 'GMAIL', 'IMAP_SMTP', 'INTERNAL']).optional(),
           channelTypeIn: z.string().optional(), // CSV: "WHATSAPP,GMAIL"
           excludeChannelType: z.string().optional(), // CSV
           folder: z.string().optional(),
@@ -91,10 +91,21 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(channelId && { channelId }),
           ...(Object.keys(channelTypeFilter).length && { channel: channelTypeFilter as any }),
           ...(folder && { folder }),
-          // Combina escopo de visibilidade + filtro pedido (ambos restringem)
-          AND: [
-            ...(memberScope ? [memberScope] : []),
-            ...(assigneeFilter ? [assigneeFilter] : []),
+          // Chat interno (DIRECT/GROUP) ignora as regras de assignee — o usuário
+          // só vê salas em que é participante ativo. Conversas externas (EXTERNAL)
+          // seguem a lógica clássica de assigneeFilter / memberScope.
+          OR: [
+            {
+              type: 'EXTERNAL',
+              AND: [
+                ...(memberScope ? [memberScope] : []),
+                ...(assigneeFilter ? [assigneeFilter] : []),
+              ],
+            },
+            {
+              type: { in: ['DIRECT', 'GROUP'] },
+              participants: { some: { userId, leftAt: null } },
+            },
           ],
           // Arquivadas ficam separadas; demais filtros excluem arquivadas
           archived: filter === 'archived' ? true : false,
@@ -127,7 +138,12 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           messages: {
             orderBy: { sentAt: 'desc' },
             take: 1,
-            select: { body: true, sentAt: true, direction: true, attachments: true },
+            select: { body: true, sentAt: true, direction: true, attachments: true, fromUserId: true },
+          },
+          // Chat interno: participantes ativos (vazio em EXTERNAL — custo mínimo)
+          participants: {
+            where: { leftAt: null },
+            include: { user: { select: { id: true, name: true, email: true } } },
           },
         },
       })

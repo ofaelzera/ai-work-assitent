@@ -11,57 +11,59 @@ datasource db {
 model Workspace {
   id        String   @id @default(cuid())
   name      String
-  settings  Json?    // { distributionMode, defaultAssigneeId, roundRobinUserIds, claimTimeoutMinutes }
+  settings  Json? // { distributionMode, defaultAssigneeId, roundRobinUserIds, claimTimeoutMinutes }
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users           User[]
-  channels        Channel[]
-  contacts        Contact[]
-  conversations   Conversation[]
-  messages        Message[]
-  boards          Board[]
-  cards           Card[]
-  tasks           Task[]
-  agents          Agent[]
-  prompts         Prompt[]
-  aiLogs          AIExecutionLog[]
-  memoryChunks    MemoryChunk[]
+  users            User[]
+  channels         Channel[]
+  contacts         Contact[]
+  conversations    Conversation[]
+  messages         Message[]
+  boards           Board[]
+  cards            Card[]
+  tasks            Task[]
+  agents           Agent[]
+  prompts          Prompt[]
+  aiLogs           AIExecutionLog[]
+  memoryChunks     MemoryChunk[]
   calendarAccounts CalendarAccount[]
-  calendarEvents  CalendarEvent[]
-  vaultItems      VaultItem[]
-  vaultFolders    VaultFolder[]
-  attachments     Attachment[]
-  storageFolders  StorageFolder[]
-  eventLogs       EventLog[]
-  companies       Company[]
-  customRoles     CustomRole[]
+  calendarEvents   CalendarEvent[]
+  vaultItems       VaultItem[]
+  vaultFolders     VaultFolder[]
+  attachments      Attachment[]
+  storageFolders   StorageFolder[]
+  eventLogs        EventLog[]
+  companies        Company[]
+  customRoles      CustomRole[]
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 model User {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   workspaceId  String
-  email        String   @unique
+  email        String    @unique
   passwordHash String
   name         String
-  role         Role     @default(MEMBER)
+  role         Role      @default(MEMBER)
   customRoleId String?
-  twoFactor    Boolean  @default(false)
-  settings     Json?    // { welcomeMessage?, closingMessage?, signature?, ... }
+  twoFactor    Boolean   @default(false)
+  settings     Json? // { welcomeMessage?, closingMessage?, signature?, ... }
   deletedAt    DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  workspace    Workspace @relation(fields: [workspaceId], references: [id])
-  customRole   CustomRole? @relation(fields: [customRoleId], references: [id])
-  refreshTokens RefreshToken[]
-  vaultItems   VaultItem[]
-  vaultFolders VaultFolder[]
-  assignedConversations Conversation[] @relation("ConversationAssignee")
-  assignedTasks         Task[]         @relation("TaskAssignee")
-  events                EventLog[]     @relation("EventActor")
-  sentMessages          Message[]      @relation("MessageUserSender")
+  workspace             Workspace                 @relation(fields: [workspaceId], references: [id])
+  customRole            CustomRole?               @relation(fields: [customRoleId], references: [id])
+  refreshTokens         RefreshToken[]
+  vaultItems            VaultItem[]
+  vaultFolders          VaultFolder[]
+  assignedConversations Conversation[]            @relation("ConversationAssignee")
+  assignedTasks         Task[]                    @relation("TaskAssignee")
+  events                EventLog[]                @relation("EventActor")
+  sentMessages          Message[]                 @relation("MessageUserSender")
+  chatParticipations    ConversationParticipant[]
+  messageReads          MessageRead[]
 
   @@index([workspaceId])
   @@index([customRoleId])
@@ -75,7 +77,7 @@ model CustomRole {
   workspaceId String
   name        String
   description String?
-  permissions Json     // string[] de permissions concedidas
+  permissions Json // string[] de permissions concedidas
   isSystem    Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -100,18 +102,18 @@ model RefreshToken {
 
 // ─── Channels ────────────────────────────────────────────────────────────────
 model Channel {
-  id          String        @id @default(cuid())
-  workspaceId String
-  type        ChannelType
-  label       String
-  status      ChannelStatus @default(DISCONNECTED)
-  config      Json          // segredos cifrados em repouso (AES-256-GCM)
-  signature   String?       @db.Text  // assinatura de email (HTML ou texto)
-  settings    Json?         // não-criptografado: { ignoreGroups, defaultAssigneeId, autoResolveOnRead, distributionMode, imapFolders, lastAssignedUserId }
-  lastSyncedAt DateTime?    // última sincronização bem-sucedida (usado pra delta sync)
-  deletedAt   DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id           String        @id @default(cuid())
+  workspaceId  String
+  type         ChannelType
+  label        String
+  status       ChannelStatus @default(DISCONNECTED)
+  config       Json // segredos cifrados em repouso (AES-256-GCM)
+  signature    String?       @db.Text // assinatura de email (HTML ou texto)
+  settings     Json? // não-criptografado: { ignoreGroups, defaultAssigneeId, autoResolveOnRead, distributionMode, imapFolders, lastAssignedUserId }
+  lastSyncedAt DateTime? // última sincronização bem-sucedida (usado pra delta sync)
+  deletedAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   workspace     Workspace      @relation(fields: [workspaceId], references: [id])
   conversations Conversation[]
@@ -121,26 +123,26 @@ model Channel {
 
 // ─── Contacts ────────────────────────────────────────────────────────────────
 model Contact {
-  id          String   @id @default(cuid())
-  workspaceId String
-  name              String?
-  phone             String?    // PN (Phone Number) — telefone real, ex: 5511999999999
-  phoneType         PhoneType  @default(PN)  // PN = telefone real | LID = ID opaco WhatsApp
-  lid               String?    // Linked ID opaco do WhatsApp (quando phoneType=LID)
-  email             String?
-  metadata          Json?
-  companyId         String?
-  mergedIntoId      String?   // aponta para o contato primário ao mesclar
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id           String    @id @default(cuid())
+  workspaceId  String
+  name         String?
+  phone        String? // PN (Phone Number) — telefone real, ex: 5511999999999
+  phoneType    PhoneType @default(PN) // PN = telefone real | LID = ID opaco WhatsApp
+  lid          String? // Linked ID opaco do WhatsApp (quando phoneType=LID)
+  email        String?
+  metadata     Json?
+  companyId    String?
+  mergedIntoId String? // aponta para o contato primário ao mesclar
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  workspace        Workspace      @relation(fields: [workspaceId], references: [id])
-  company          Company?       @relation(fields: [companyId], references: [id])
-  conversations    Conversation[]
-  cards            Card[]
-  sentMessages     Message[]      @relation("MessageSender")
-  tasks            Task[]
-  calendarEvents   CalendarEvent[]
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id])
+  company        Company?        @relation(fields: [companyId], references: [id])
+  conversations  Conversation[]
+  cards          Card[]
+  sentMessages   Message[]       @relation("MessageSender")
+  tasks          Task[]
+  calendarEvents CalendarEvent[]
 
   @@index([workspaceId, phone])
   @@index([workspaceId, lid])
@@ -150,13 +152,13 @@ model Contact {
 
 // ─── Companies ───────────────────────────────────────────────────────────────
 model Company {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
   name        String
-  color       String    @default("#6366f1")
-  domain      String?   // ex: empresa.com.br
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  color       String   @default("#6366f1")
+  domain      String? // ex: empresa.com.br
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id])
   contacts  Contact[]
@@ -166,38 +168,43 @@ model Company {
 
 // ─── Conversations ───────────────────────────────────────────────────────────
 model Conversation {
-  id               String             @id @default(cuid())
-  workspaceId      String
-  channelId        String
-  contactId        String?
-  assigneeId       String?            // usuário responsável (Fase 1: regras de canal)
-  externalId       String             // chatId WA / threadId Gmail
-  folder           String?            // pasta IMAP de origem (só pra emails)
-  subject          String?
-  isGroup          Boolean            @default(false)
-  favorite         Boolean            @default(false)
-  archived         Boolean            @default(false)
-  status           ConversationStatus @default(OPEN)
-  source           ConvSource         @default(LIVE)  // LIVE = real-time, IMPORTED = veio do sync histórico
-  importedAt       DateTime?          // marca quando foi importada via sync histórico
-  claimedAt        DateTime?          // quando alguém assumiu a conversa (Fase B)
-  releasedFrom     Json?              // [{ userId, at, reason }] — audit de devoluções (Fase B)
-  lastMessageAt    DateTime?
-  firstResponseAt  DateTime?          // quando demos a primeira resposta
-  resolvedAt       DateTime?          // quando foi finalizada
-  reopenCount      Int                @default(0) // vezes que reabriu
-  triageCount      Int                @default(0) // vezes que foi triada
-  unreadCount      Int                @default(0)
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  id              String             @id @default(cuid())
+  workspaceId     String
+  channelId       String
+  contactId       String?
+  assigneeId      String? // usuário responsável (Fase 1: regras de canal)
+  externalId      String // chatId WA / threadId Gmail
+  folder          String? // pasta IMAP de origem (só pra emails)
+  subject         String?
+  isGroup         Boolean            @default(false)
+  favorite        Boolean            @default(false)
+  archived        Boolean            @default(false)
+  status          ConversationStatus @default(OPEN)
+  source          ConvSource         @default(LIVE) // LIVE = real-time, IMPORTED = veio do sync histórico
+  importedAt      DateTime? // marca quando foi importada via sync histórico
+  claimedAt       DateTime? // quando alguém assumiu a conversa (Fase B)
+  releasedFrom    Json? // [{ userId, at, reason }] — audit de devoluções (Fase B)
+  lastMessageAt   DateTime?
+  firstResponseAt DateTime? // quando demos a primeira resposta
+  resolvedAt      DateTime? // quando foi finalizada
+  reopenCount     Int                @default(0) // vezes que reabriu
+  triageCount     Int                @default(0) // vezes que foi triada
+  unreadCount     Int                @default(0)
+  // Chat interno: discrimina tipo da conversa. EXTERNAL = canais legados (WA/Email).
+  type            ConversationType   @default(EXTERNAL)
+  // Nome do grupo (somente quando type=GROUP). DIRECT/EXTERNAL ficam null.
+  name            String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
-  channel   Channel   @relation(fields: [channelId], references: [id])
-  contact   Contact?  @relation(fields: [contactId], references: [id])
-  assignee  User?     @relation("ConversationAssignee", fields: [assigneeId], references: [id])
-  messages  Message[]
-  cards     Card[]
-  tasks     Task[]
+  workspace      Workspace                 @relation(fields: [workspaceId], references: [id])
+  channel        Channel                   @relation(fields: [channelId], references: [id])
+  contact        Contact?                  @relation(fields: [contactId], references: [id])
+  assignee       User?                     @relation("ConversationAssignee", fields: [assigneeId], references: [id])
+  messages       Message[]
+  participants   ConversationParticipant[]
+  cards          Card[]
+  tasks          Task[]
   calendarEvents CalendarEvent[]
 
   // Sem unique — múltiplos tickets por contato são permitidos (modelo ticket)
@@ -225,20 +232,53 @@ model Message {
   receivedAt       DateTime         @default(now())
   aiClassification Json?
   taskId           String?
-  deliveryStatus   String?          // PENDING | SENT | DELIVERED | READ | PLAYED (outbound WA)
-  metadata         Json?            // dados específicos do canal (ex: imapUid, imapFolder p/ email)
-  quotedMsgId      String?          // externalId da mensagem citada
+  deliveryStatus   String? // PENDING | SENT | DELIVERED | READ | PLAYED (outbound WA)
+  metadata         Json? // dados específicos do canal (ex: imapUid, imapFolder p/ email)
+  quotedMsgId      String? // externalId da mensagem citada
   quotedBody       String?          @db.Text
   quotedSender     String?
 
-  workspace    Workspace    @relation(fields: [workspaceId], references: [id])
-  conversation Conversation @relation(fields: [conversationId], references: [id])
-  fromContact  Contact?     @relation("MessageSender", fields: [fromContactId], references: [id])
-  fromUser     User?        @relation("MessageUserSender", fields: [fromUserId], references: [id])
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id])
+  conversation Conversation  @relation(fields: [conversationId], references: [id])
+  fromContact  Contact?      @relation("MessageSender", fields: [fromContactId], references: [id])
+  fromUser     User?         @relation("MessageUserSender", fields: [fromUserId], references: [id])
+  reads        MessageRead[]
 
   @@unique([conversationId, externalId])
   @@index([workspaceId, conversationId, sentAt])
   @@index([fromUserId])
+}
+
+// ─── Chat Interno ────────────────────────────────────────────────────────────
+// Participantes de conversas internas (DIRECT/GROUP). Não preenchido para EXTERNAL.
+model ConversationParticipant {
+  id             String    @id @default(cuid())
+  conversationId String
+  userId         String
+  role           ChatRole  @default(MEMBER)
+  joinedAt       DateTime  @default(now())
+  lastReadAt     DateTime?
+  mutedUntil     DateTime?
+  leftAt         DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@unique([conversationId, userId])
+  @@index([userId, leftAt])
+}
+
+// Read-receipts granulares por participante (1 linha por (msg, user)).
+model MessageRead {
+  messageId String
+  userId    String
+  readAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@id([messageId, userId])
+  @@index([userId, readAt])
 }
 
 // ─── Kanban ──────────────────────────────────────────────────────────────────
@@ -253,14 +293,14 @@ enum BoardVisibility {
 }
 
 model Board {
-  id          String           @id @default(cuid())
+  id          String          @id @default(cuid())
   workspaceId String
-  ownerId     String?          // null = legado (board global criado antes do enum)
-  visibility  BoardVisibility  @default(PRIVATE)
+  ownerId     String? // null = legado (board global criado antes do enum)
+  visibility  BoardVisibility @default(PRIVATE)
   name        String
   deletedAt   DateTime?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   workspace Workspace    @relation(fields: [workspaceId], references: [id])
   columns   Column[]
@@ -273,7 +313,7 @@ model Board {
 model BoardShare {
   id        String   @id @default(cuid())
   boardId   String
-  userId    String   // usuário com acesso (além do dono)
+  userId    String // usuário com acesso (além do dono)
   createdAt DateTime @default(now())
 
   board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
@@ -361,7 +401,7 @@ model Task {
   contactId      String?
   conversationId String?
   messageId      String?
-  assigneeId     String?   // quem deve cumprir (User)
+  assigneeId     String? // quem deve cumprir (User)
   title          String
   description    String?   @db.Text
   done           Boolean   @default(false)
@@ -392,14 +432,14 @@ model Agent {
   model        String
   provider     String
   temperature  Float    @default(0.4)
-  tools        Json?    // legacy / livre — não usado pelo runtime v2
-  trigger      Json?    // { type, filters, schedule? } — vê apps/api/src/modules/ai/triggers.ts
-  enabledTools Json?    // string[] dos tools habilitados (ver tools/registry.ts)
+  tools        Json? // legacy / livre — não usado pelo runtime v2
+  trigger      Json? // { type, filters, schedule? } — vê apps/api/src/modules/ai/triggers.ts
+  enabledTools Json? // string[] dos tools habilitados (ver tools/registry.ts)
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id])
+  workspace Workspace        @relation(fields: [workspaceId], references: [id])
   logs      AIExecutionLog[]
 
   @@index([workspaceId, isActive])
@@ -445,7 +485,7 @@ model AIExecutionLog {
 model MemoryChunk {
   id          String   @id @default(cuid())
   workspaceId String
-  sourceType  String   // conversation | card | document
+  sourceType  String // conversation | card | document
   sourceId    String
   content     String   @db.Text
   embedding   Bytes?
@@ -462,32 +502,32 @@ model CalendarAccount {
   workspaceId String
   userId      String
   provider    String   @default("google")
-  tokens      Json     // cifrado
+  tokens      Json // cifrado
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace Workspace     @relation(fields: [workspaceId], references: [id])
+  workspace Workspace       @relation(fields: [workspaceId], references: [id])
   events    CalendarEvent[]
 
   @@unique([workspaceId, userId, provider])
 }
 
 model CalendarEvent {
-  id              String   @id @default(cuid())
-  workspaceId     String
-  ownerId         String   // user dono do evento (sempre obrigatório; eventos são por usuário)
+  id                String   @id @default(cuid())
+  workspaceId       String
+  ownerId           String // user dono do evento (sempre obrigatório; eventos são por usuário)
   calendarAccountId String? // nullable: evento local (sem Google sync). Quando preenchido, está sincronizado.
-  externalId      String?  // nullable: ID no Google Calendar quando sincronizado
-  title           String
-  description     String?  @db.Text
-  startAt         DateTime
-  endAt           DateTime
-  cardId          String?
-  contactId       String?
-  conversationId  String?
-  messageId       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  externalId        String? // nullable: ID no Google Calendar quando sincronizado
+  title             String
+  description       String?  @db.Text
+  startAt           DateTime
+  endAt             DateTime
+  cardId            String?
+  contactId         String?
+  conversationId    String?
+  messageId         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   workspace       Workspace        @relation(fields: [workspaceId], references: [id])
   calendarAccount CalendarAccount? @relation(fields: [calendarAccountId], references: [id])
@@ -502,21 +542,21 @@ model CalendarEvent {
 
 // ─── Vault ───────────────────────────────────────────────────────────────────
 model VaultItem {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   workspaceId String
   ownerId     String
-  type        String   // password | ssh | ftp | db | api | note | file
+  type        String // password | ssh | ftp | db | api | note | file
   title       String
   folderId    String?
   tags        Json?
-  favorite    Boolean  @default(false)
+  favorite    Boolean   @default(false)
   ciphertext  Bytes
   iv          Bytes
   authTag     Bytes
   metadata    Json?
   deletedAt   DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   workspace Workspace    @relation(fields: [workspaceId], references: [id])
   owner     User         @relation(fields: [ownerId], references: [id])
@@ -542,24 +582,24 @@ model VaultFolder {
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
 enum StorageVisibility {
-  PRIVATE  // só o dono vê
-  SHARED   // dono + usuários listados em StorageFolderShare
-  PUBLIC   // todos do workspace veem
+  PRIVATE // só o dono vê
+  SHARED // dono + usuários listados em StorageFolderShare
+  PUBLIC // todos do workspace veem
 }
 
 model StorageFolder {
   id          String            @id @default(cuid())
   workspaceId String
-  ownerId     String            // criador da pasta
+  ownerId     String // criador da pasta
   name        String
   visibility  StorageVisibility @default(PRIVATE)
-  parentId    String?           // null = raiz
+  parentId    String? // null = raiz
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
-  workspace Workspace      @relation(fields: [workspaceId], references: [id])
-  parent    StorageFolder? @relation("FolderTree", fields: [parentId], references: [id])
-  children  StorageFolder[] @relation("FolderTree")
+  workspace Workspace            @relation(fields: [workspaceId], references: [id])
+  parent    StorageFolder?       @relation("FolderTree", fields: [parentId], references: [id])
+  children  StorageFolder[]      @relation("FolderTree")
   files     Attachment[]
   shares    StorageFolderShare[]
 
@@ -570,7 +610,7 @@ model StorageFolder {
 model StorageFolderShare {
   id        String   @id @default(cuid())
   folderId  String
-  userId    String   // usuário com acesso (além do dono)
+  userId    String // usuário com acesso (além do dono)
   createdAt DateTime @default(now())
 
   folder StorageFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
@@ -580,22 +620,22 @@ model StorageFolderShare {
 }
 
 model Attachment {
-  id          String   @id @default(cuid())
+  id          String            @id @default(cuid())
   workspaceId String
   uploadedBy  String
   filename    String
   mimeType    String
   sizeBytes   Int
-  storageKey  String   // path relativo em /storage/
+  storageKey  String // path relativo em /storage/
   cardId      String?
   vaultItemId String?
-  folderId    String?  // pasta da biblioteca de arquivos (null = "Meus arquivos" raiz)
+  folderId    String? // pasta da biblioteca de arquivos (null = "Meus arquivos" raiz)
   visibility  StorageVisibility @default(PRIVATE)
-  createdAt   DateTime @default(now())
+  createdAt   DateTime          @default(now())
 
-  workspace Workspace      @relation(fields: [workspaceId], references: [id])
-  card      Card?          @relation(fields: [cardId], references: [id])
-  folder    StorageFolder? @relation(fields: [folderId], references: [id])
+  workspace Workspace         @relation(fields: [workspaceId], references: [id])
+  card      Card?             @relation(fields: [cardId], references: [id])
+  folder    StorageFolder?    @relation(fields: [folderId], references: [id])
   shares    AttachmentShare[]
 
   @@index([workspaceId, cardId])
@@ -617,14 +657,14 @@ model AttachmentShare {
 
 // ─── Events ──────────────────────────────────────────────────────────────────
 model EventLog {
-  id           String   @id @default(cuid())
-  workspaceId  String
-  type         String   // message.received, card.created, ai.executed, ...
-  actorUserId  String?  // user que executou (null = sistema/worker)
-  targetType   String?  // 'conversation', 'card', 'user', 'channel', ...
-  targetId     String?  // id do alvo (pra filtrar timeline)
-  payload      Json
-  createdAt    DateTime @default(now())
+  id          String   @id @default(cuid())
+  workspaceId String
+  type        String // message.received, card.created, ai.executed, ...
+  actorUserId String? // user que executou (null = sistema/worker)
+  targetType  String? // 'conversation', 'card', 'user', 'channel', ...
+  targetId    String? // id do alvo (pra filtrar timeline)
+  payload     Json
+  createdAt   DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id])
   actor     User?     @relation("EventActor", fields: [actorUserId], references: [id])
@@ -641,15 +681,27 @@ enum Role {
 }
 
 enum PhoneType {
-  PN       // Phone Number — telefone real, contactável
-  LID      // Linked ID — identificador opaco do WhatsApp (privacidade)
-  UNKNOWN  // ainda não classificado
+  PN // Phone Number — telefone real, contactável
+  LID // Linked ID — identificador opaco do WhatsApp (privacidade)
+  UNKNOWN // ainda não classificado
 }
 
 enum ChannelType {
   WHATSAPP
   GMAIL
   IMAP_SMTP
+  INTERNAL // chat interno entre usuários do workspace (1:1 e grupos)
+}
+
+enum ConversationType {
+  EXTERNAL // conversa via canal externo (WhatsApp, e-mail) — comportamento legado
+  DIRECT // chat interno 1:1 entre 2 usuários
+  GROUP // chat interno em grupo (3+ usuários)
+}
+
+enum ChatRole {
+  OWNER
+  MEMBER
 }
 
 enum ChannelStatus {
@@ -676,12 +728,12 @@ enum CreatedBy {
 }
 
 enum ConversationStatus {
-  OPEN      // em atendimento
-  WAITING   // aguardando resposta do cliente
-  RESOLVED  // finalizada
+  OPEN // em atendimento
+  WAITING // aguardando resposta do cliente
+  RESOLVED // finalizada
 }
 
 enum ConvSource {
-  LIVE      // criada por mensagem real-time (Evolution socket)
-  IMPORTED  // veio do sync de histórico — nasce RESOLVED
+  LIVE // criada por mensagem real-time (Evolution socket)
+  IMPORTED // veio do sync de histórico — nasce RESOLVED
 }

@@ -1,5 +1,6 @@
 export * from './schemas/auth.js'
 export * from './schemas/kanban.js'
 export * from './schemas/vault.js'
+export * from './schemas/chat.js'
 export * from './types/index.js'
 export * from './constants/index.js'
