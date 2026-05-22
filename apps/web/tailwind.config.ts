@@ -42,6 +42,19 @@ const config: Config = {
         },
       },
       borderRadius: { lg: 'var(--radius)', md: 'calc(var(--radius) - 2px)', sm: 'calc(var(--radius) - 4px)' },
+      boxShadow: {
+        'soft': '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
+        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.05)',
+      },
+      keyframes: {
+        'float': {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-10px)' },
+        }
+      },
+      animation: {
+        'float': 'float 6s ease-in-out infinite',
+      }
     },
   },
   plugins: [],

@@ -135,25 +135,28 @@ function KpiCard({ label, value, icon: Icon, iconBg, iconColor, trend, href, loa
       tabIndex={interactive ? 0 : -1}
       onClick={() => href && router.push(href)}
       className={cn(
-        'rounded-xl border bg-card px-4 py-4 transition-all',
-        interactive && 'hover:border-primary/40 hover:shadow-sm cursor-pointer',
+        'relative overflow-hidden rounded-2xl border bg-card px-5 py-5 transition-all duration-300',
+        interactive && 'hover:border-primary/30 hover:shadow-glass hover:-translate-y-1 cursor-pointer group',
       )}>
-      <div className="flex items-start justify-between">
-        <div className={cn('h-9 w-9 rounded-xl flex items-center justify-center', iconBg)}>
-          <Icon className={cn('h-4 w-4', iconColor)} />
+      <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity duration-300">
+        <Icon className="h-24 w-24 -mt-6 -mr-6" />
+      </div>
+      <div className="relative flex items-start justify-between">
+        <div className={cn('h-10 w-10 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110', iconBg)}>
+          <Icon className={cn('h-5 w-5', iconColor)} />
         </div>
         {trend != null && (
-          <span className={cn('text-[11px] font-medium', trend.value >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+          <span className={cn('text-[11px] font-bold px-2 py-0.5 rounded-full', trend.value >= 0 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400')}>
             {trend.value >= 0 ? '↑' : '↓'} {Math.abs(trend.value)}%
           </span>
         )}
       </div>
       {loading
-        ? <Skeleton className="h-8 w-16 mt-3" />
+        ? <Skeleton className="h-8 w-16 mt-4" />
         : (
-          <div className="mt-3">
-            <p className="text-2xl font-bold">{value}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+          <div className="relative mt-4">
+            <p className="text-3xl font-bold tracking-tight text-foreground">{value}</p>
+            <p className="text-[13px] font-medium text-muted-foreground mt-1">{label}</p>
             {trend != null && (
               <p className="text-[11px] text-muted-foreground mt-0.5">{trend.label}</p>
             )}
@@ -167,9 +170,9 @@ function KpiCard({ label, value, icon: Icon, iconBg, iconColor, trend, href, loa
 function RecentConversationsList({ items, loading }: { items: ConvPreview[]; loading: boolean }) {
   const router = useRouter()
   return (
-    <div className="rounded-xl border bg-card overflow-hidden divide-y">
+    <div className="rounded-2xl border bg-card p-2 space-y-1 shadow-sm">
       {loading && Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3 px-4 py-3">
+        <div key={i} className="flex items-center gap-3 px-3 py-3">
           <Skeleton className="h-10 w-10 rounded-full shrink-0" />
           <div className="flex-1 space-y-1.5">
             <Skeleton className="h-3 w-32" />
@@ -200,14 +203,14 @@ function RecentConversationsList({ items, loading }: { items: ConvPreview[]; loa
           <div
             key={conv.id}
             onClick={() => router.push(`/inbox/${conv.id}`)}
-            className="flex items-center gap-3 px-4 py-3 hover:bg-accent/50 cursor-pointer transition-colors"
+            className="group flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-background/80 hover:shadow-sm cursor-pointer transition-all duration-200"
           >
-            <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary shrink-0">
+            <div className="h-10 w-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-sm font-bold text-primary shrink-0 ring-1 ring-primary/10">
               {name.slice(0, 2).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm font-medium truncate">{name}</span>
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-[13px] font-semibold text-foreground truncate">{name}</span>
                 <span className={cn('text-[10px] shrink-0', ch.color)}>{ch.icon}</span>
                 {conv.assignee && (
                   <span className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 leading-none">
@@ -216,16 +219,16 @@ function RecentConversationsList({ items, loading }: { items: ConvPreview[]; loa
                 )}
               </div>
               {lastMsg && (
-                <p className="text-xs text-muted-foreground truncate">
-                  {lastMsg.direction === 'OUTBOUND' && <span className="mr-0.5">Você:</span>}
+                <p className="text-xs text-muted-foreground truncate group-hover:text-foreground/80 transition-colors">
+                  {lastMsg.direction === 'OUTBOUND' && <span className="mr-1 font-medium text-primary/70">Você:</span>}
                   {lastMsg.body}
                 </p>
               )}
             </div>
             <div className="shrink-0 text-right space-y-1">
-              <p className="text-[11px] text-muted-foreground">{formatRelative(conv.lastMessageAt)}</p>
+              <p className="text-[11px] font-medium text-muted-foreground">{formatRelative(conv.lastMessageAt)}</p>
               {conv.unreadCount > 0 && (
-                <span className="inline-flex items-center justify-center text-[10px] font-bold bg-primary text-primary-foreground rounded-full min-w-[18px] h-[18px] px-1">
+                <span className="inline-flex items-center justify-center text-[10px] font-bold bg-primary text-primary-foreground rounded-full min-w-[18px] h-[18px] px-1 shadow-sm shadow-primary/30">
                   {conv.unreadCount > 99 ? '99+' : conv.unreadCount}
                 </span>
               )}
@@ -264,9 +267,9 @@ export default function DashboardPage() {
       <div className="max-w-6xl mx-auto p-6 space-y-8">
 
         {/* ── Cabeçalho ── */}
-        <div>
-          <h1 className="text-2xl font-bold">{greeting} 👋</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
+        <div className="animate-slide-up">
+          <h1 className="text-3xl font-extrabold tracking-tight text-foreground">{greeting} 👋</h1>
+          <p className="text-sm font-medium text-muted-foreground mt-1">
             {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
         </div>
@@ -274,23 +277,23 @@ export default function DashboardPage() {
         {/* ─────────────────── VISÃO ADMIN ─────────────────── */}
         {isAdminScope && adminData && (
           <>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-slide-up delay-100">
               <KpiCard label="Mensagens não lidas" value={adminData.kpis.unreadMessages} icon={MessageSquare}
-                iconBg="bg-blue-50 dark:bg-blue-950/40" iconColor="text-blue-600" href="/inbox" loading={isLoading} />
+                iconBg="bg-blue-100 dark:bg-blue-900/30" iconColor="text-blue-600 dark:text-blue-400" href="/inbox" loading={isLoading} />
               <KpiCard label="Demandas abertas" value={adminData.kpis.openCards} icon={Kanban}
-                iconBg="bg-purple-50 dark:bg-purple-950/40" iconColor="text-purple-600" href="/kanban" loading={isLoading} />
+                iconBg="bg-purple-100 dark:bg-purple-900/30" iconColor="text-purple-600 dark:text-purple-400" href="/kanban" loading={isLoading} />
               <KpiCard label="Mensagens hoje" value={adminData.kpis.messagesToday} icon={TrendingUp}
-                iconBg="bg-green-50 dark:bg-green-950/40" iconColor="text-green-600"
+                iconBg="bg-green-100 dark:bg-green-900/30" iconColor="text-green-600 dark:text-green-400"
                 trend={{ value: msgTrend, label: `${adminData.kpis.messagesYesterday} ontem` }} loading={isLoading} />
               <KpiCard label="Contatos" value={adminData.kpis.contactsTotal} icon={Users}
-                iconBg="bg-amber-50 dark:bg-amber-950/40" iconColor="text-amber-600" href="/contacts" loading={isLoading} />
+                iconBg="bg-amber-100 dark:bg-amber-900/30" iconColor="text-amber-600 dark:text-amber-400" href="/contacts" loading={isLoading} />
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-slide-up delay-200">
               <div className="lg:col-span-2 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-semibold">Conversas recentes</h2>
-                  <button onClick={() => router.push('/inbox')} className="text-xs text-primary hover:underline flex items-center gap-0.5">
+                <div className="flex items-center justify-between px-1">
+                  <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Conversas recentes</h2>
+                  <button onClick={() => router.push('/inbox')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
                     Ver todas <ArrowRight className="h-3 w-3" />
                   </button>
                 </div>
@@ -299,15 +302,15 @@ export default function DashboardPage() {
 
               <div className="space-y-6">
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-sm font-semibold">Cards recentes</h2>
-                    <button onClick={() => router.push('/kanban')} className="text-xs text-primary hover:underline flex items-center gap-0.5">
+                  <div className="flex items-center justify-between px-1">
+                    <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Cards recentes</h2>
+                    <button onClick={() => router.push('/kanban')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
                       Ver todos <ArrowRight className="h-3 w-3" />
                     </button>
                   </div>
-                  <div className="rounded-xl border bg-card overflow-hidden divide-y">
+                  <div className="rounded-2xl border bg-card p-2 space-y-1 shadow-sm">
                     {isLoading && Array.from({ length: 3 }).map((_, i) => (
-                      <div key={i} className="px-4 py-3 space-y-1.5">
+                      <div key={i} className="px-3 py-3 space-y-1.5">
                         <Skeleton className="h-3 w-full" />
                         <Skeleton className="h-3 w-20" />
                       </div>
@@ -319,17 +322,17 @@ export default function DashboardPage() {
                       </div>
                     )}
                     {adminData.recentCards.map(card => (
-                      <div key={card.id} className="px-4 py-3">
+                      <div key={card.id} className="group px-3 py-3 rounded-xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
                         <div className="flex items-start justify-between gap-2">
-                          <p className="text-sm font-medium truncate flex-1">{card.title}</p>
-                          <span className={cn('shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full', priorityBadge(card.priority))}>
+                          <p className="text-[13px] font-semibold text-foreground truncate flex-1">{card.title}</p>
+                          <span className={cn('shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full', priorityBadge(card.priority))}>
                             {priorityLabel(card.priority)}
                           </span>
                         </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-[11px] text-muted-foreground">{card.column.name}</span>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <span className="text-[11px] font-medium text-muted-foreground">{card.column.name}</span>
                           {card.createdBy === 'AI' && (
-                            <span className="text-[10px] bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5">
+                            <span className="text-[10px] bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
                               <Zap className="h-2.5 w-2.5" /> IA
                             </span>
                           )}
@@ -341,20 +344,20 @@ export default function DashboardPage() {
 
                 {adminData.channelBreakdown.length > 0 && (
                   <div className="space-y-3">
-                    <h2 className="text-sm font-semibold">Mensagens hoje por canal</h2>
-                    <div className="rounded-xl border bg-card p-4 space-y-3">
+                    <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase px-1">Mensagens hoje por canal</h2>
+                    <div className="rounded-2xl border bg-card p-5 space-y-4 shadow-sm">
                       {adminData.channelBreakdown.map(({ type, total }) => {
                         const ch = channelLabel(type)
                         const maxTotal = Math.max(...adminData.channelBreakdown.map(b => b.total))
                         const pct = maxTotal > 0 ? Math.round((total / maxTotal) * 100) : 0
                         return (
                           <div key={type}>
-                            <div className="flex items-center justify-between text-xs mb-1">
-                              <span className={cn('font-medium', ch.color)}>{ch.icon} {ch.label}</span>
-                              <span className="text-muted-foreground font-medium">{total}</span>
+                            <div className="flex items-center justify-between text-xs mb-1.5">
+                              <span className={cn('font-semibold flex items-center gap-1.5', ch.color)}>{ch.icon} {ch.label}</span>
+                              <span className="text-muted-foreground font-bold">{total}</span>
                             </div>
-                            <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                              <div className="h-full rounded-full bg-primary/60 transition-all" style={{ width: `${pct}%` }} />
+                            <div className="h-2 rounded-full bg-muted overflow-hidden">
+                              <div className="h-full rounded-full bg-primary transition-all duration-1000 ease-out" style={{ width: `${pct}%` }} />
                             </div>
                           </div>
                         )
@@ -363,15 +366,15 @@ export default function DashboardPage() {
                   </div>
                 )}
 
-                <div className="rounded-xl border bg-card p-4 flex items-center gap-3">
-                  <div className="h-9 w-9 rounded-xl bg-violet-50 dark:bg-violet-950/40 flex items-center justify-center shrink-0">
-                    <Bot className="h-4 w-4 text-violet-600" />
+                <div className="rounded-2xl border bg-gradient-to-br from-violet-500/10 to-transparent p-5 flex items-center gap-4 shadow-sm">
+                  <div className="h-12 w-12 rounded-2xl bg-violet-100 dark:bg-violet-900/40 flex items-center justify-center shrink-0 shadow-inner">
+                    <Bot className="h-6 w-6 text-violet-600 dark:text-violet-400" />
                   </div>
                   <div>
-                    {isLoading ? <Skeleton className="h-5 w-12 mb-1" /> : <p className="text-xl font-bold">{adminData.kpis.aiExecutionsLast24h}</p>}
-                    <p className="text-xs text-muted-foreground">Execuções de IA (24h)</p>
+                    {isLoading ? <Skeleton className="h-6 w-12 mb-1" /> : <p className="text-2xl font-bold tracking-tight text-foreground">{adminData.kpis.aiExecutionsLast24h}</p>}
+                    <p className="text-xs font-medium text-muted-foreground">Execuções de IA (24h)</p>
                   </div>
-                  <Clock className="h-4 w-4 text-muted-foreground ml-auto shrink-0 opacity-50" />
+                  <Clock className="h-5 w-5 text-violet-500/30 ml-auto shrink-0" />
                 </div>
               </div>
             </div>
@@ -381,23 +384,23 @@ export default function DashboardPage() {
         {/* ─────────────────── VISÃO MEMBER ─────────────────── */}
         {memberData && (
           <>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-slide-up delay-100">
               <KpiCard label="Minhas conversas abertas" value={memberData.kpis.myOpenConversations} icon={Inbox}
-                iconBg="bg-blue-50 dark:bg-blue-950/40" iconColor="text-blue-600" href="/inbox" loading={isLoading} />
+                iconBg="bg-blue-100 dark:bg-blue-900/30" iconColor="text-blue-600 dark:text-blue-400" href="/inbox" loading={isLoading} />
               <KpiCard label="Na fila pública" value={memberData.kpis.queueCount} icon={UsersRound}
-                iconBg="bg-amber-50 dark:bg-amber-950/40" iconColor="text-amber-600" href="/inbox" loading={isLoading} />
+                iconBg="bg-amber-100 dark:bg-amber-900/30" iconColor="text-amber-600 dark:text-amber-400" href="/inbox" loading={isLoading} />
               <KpiCard label="Mensagens não lidas" value={memberData.kpis.unreadMessages} icon={Bell}
-                iconBg="bg-rose-50 dark:bg-rose-950/40" iconColor="text-rose-600" href="/inbox" loading={isLoading} />
+                iconBg="bg-rose-100 dark:bg-rose-900/30" iconColor="text-rose-600 dark:text-rose-400" href="/inbox" loading={isLoading} />
               <KpiCard label="Tarefas pendentes" value={memberData.kpis.pendingTasks} icon={ListTodo}
-                iconBg="bg-emerald-50 dark:bg-emerald-950/40" iconColor="text-emerald-600" href="/tasks" loading={isLoading} />
+                iconBg="bg-emerald-100 dark:bg-emerald-900/30" iconColor="text-emerald-600 dark:text-emerald-400" href="/tasks" loading={isLoading} />
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-slide-up delay-200">
               {/* Conversas recentes */}
               <div className="lg:col-span-2 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-semibold">Conversas recentes</h2>
-                  <button onClick={() => router.push('/inbox')} className="text-xs text-primary hover:underline flex items-center gap-0.5">
+                <div className="flex items-center justify-between px-1">
+                  <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Conversas recentes</h2>
+                  <button onClick={() => router.push('/inbox')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
                     Ver inbox <ArrowRight className="h-3 w-3" />
                   </button>
                 </div>
@@ -407,15 +410,15 @@ export default function DashboardPage() {
               {/* Coluna direita: próximos eventos + minhas tarefas */}
               <div className="space-y-6">
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-sm font-semibold">Próximos eventos</h2>
-                    <button onClick={() => router.push('/calendar')} className="text-xs text-primary hover:underline flex items-center gap-0.5">
+                  <div className="flex items-center justify-between px-1">
+                    <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Próximos eventos</h2>
+                    <button onClick={() => router.push('/calendar')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
                       Ver agenda <ArrowRight className="h-3 w-3" />
                     </button>
                   </div>
-                  <div className="rounded-xl border bg-card overflow-hidden divide-y">
+                  <div className="rounded-2xl border bg-card p-2 space-y-1 shadow-sm">
                     {isLoading && Array.from({ length: 2 }).map((_, i) => (
-                      <div key={i} className="px-4 py-3 space-y-1.5">
+                      <div key={i} className="px-3 py-3 space-y-1.5">
                         <Skeleton className="h-3 w-full" />
                         <Skeleton className="h-3 w-20" />
                       </div>
@@ -427,12 +430,12 @@ export default function DashboardPage() {
                       </div>
                     )}
                     {memberData.upcomingEvents.map(ev => (
-                      <div key={ev.id} className="px-4 py-3">
-                        <p className="text-sm font-medium truncate">{ev.title}</p>
-                        <p className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1">
-                          <Clock className="h-3 w-3" /> {formatEventTime(ev.startAt)}
+                      <div key={ev.id} className="group px-3 py-3 rounded-xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+                        <p className="text-[13px] font-semibold text-foreground truncate">{ev.title}</p>
+                        <p className="text-[11px] font-medium text-muted-foreground mt-1 flex items-center gap-1.5">
+                          <Clock className="h-3.5 w-3.5" /> {formatEventTime(ev.startAt)}
                           {ev.contact && (
-                            <span className="ml-1">• {ev.contact.name ?? ev.contact.phone}</span>
+                            <span className="ml-1 px-1.5 py-0.5 rounded-full bg-accent/50 truncate">• {ev.contact.name ?? ev.contact.phone}</span>
                           )}
                         </p>
                       </div>
@@ -441,15 +444,15 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-sm font-semibold">Minhas tarefas</h2>
-                    <button onClick={() => router.push('/tasks')} className="text-xs text-primary hover:underline flex items-center gap-0.5">
+                  <div className="flex items-center justify-between px-1">
+                    <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Minhas tarefas</h2>
+                    <button onClick={() => router.push('/tasks')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
                       Ver todas <ArrowRight className="h-3 w-3" />
                     </button>
                   </div>
-                  <div className="rounded-xl border bg-card overflow-hidden divide-y">
+                  <div className="rounded-2xl border bg-card p-2 space-y-1 shadow-sm">
                     {isLoading && Array.from({ length: 2 }).map((_, i) => (
-                      <div key={i} className="px-4 py-3"><Skeleton className="h-3 w-full" /></div>
+                      <div key={i} className="px-3 py-3"><Skeleton className="h-3 w-full" /></div>
                     ))}
                     {!isLoading && memberData.recentTasks.length === 0 && (
                       <div className="py-8 text-center text-sm text-muted-foreground">
@@ -458,11 +461,11 @@ export default function DashboardPage() {
                       </div>
                     )}
                     {memberData.recentTasks.map(t => (
-                      <div key={t.id} className="px-4 py-3">
-                        <p className="text-sm font-medium truncate">{t.title}</p>
-                        <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
+                      <div key={t.id} className="group px-3 py-3 rounded-xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+                        <p className="text-[13px] font-semibold text-foreground truncate">{t.title}</p>
+                        <div className="flex items-center gap-3 mt-1.5 text-[11px] font-medium text-muted-foreground">
                           {t.remindAt && (
-                            <span className="flex items-center gap-1">
+                            <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30 px-1.5 py-0.5 rounded-md">
                               <Bell className="h-3 w-3" />
                               {formatRelative(t.remindAt)}
                             </span>
@@ -470,7 +473,7 @@ export default function DashboardPage() {
                           {t.conversationId && (
                             <Link
                               href={`/inbox/${t.conversationId}`}
-                              className="text-blue-600 hover:underline flex items-center gap-1"
+                              className="text-primary hover:underline flex items-center gap-1"
                             >
                               <MessageSquare className="h-3 w-3" />
                               {t.contact?.name ?? t.contact?.phone ?? 'Conversa'}

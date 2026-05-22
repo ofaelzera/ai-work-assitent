@@ -1,6 +1,5 @@
 'use client'
-
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, getAccessToken } from '@/lib/api'
 import { useSSE } from '@/lib/sse'
@@ -22,6 +21,7 @@ import LibraryPickerModal from '@/components/LibraryPickerModal'
 import SaveToLibraryModal from '@/components/SaveToLibraryModal'
 import { ConversationTimelineModal } from '@/components/ConversationTimelineModal'
 import { useAuthStore } from '@/store/auth'
+import { ChatInput } from '@/components/ChatInput'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
 
@@ -1392,7 +1392,9 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         >
           {isLoading && <div className="text-center text-sm text-muted-foreground py-8">Carregando...</div>}
 
-          {groups.map((group) => (
+          {useMemo(() => {
+            let lastSenderId = ''
+            return groups.map((group) => (
             <div key={group.date}>
               {/* Separador de data */}
               <div className="flex justify-center my-3">
@@ -1425,7 +1427,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                   <div
                     key={msg.id}
                     className={cn(
-                      'group flex items-end gap-1.5 mb-0.5',
+                      'group flex items-end gap-1.5 mb-0.5 animate-slide-up',
                       isOut ? 'justify-end' : 'justify-start',
                       isFirstOfSender && i > 0 && 'mt-2',
                     )}
@@ -1566,7 +1568,8 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                 )
               })}
             </div>
-          ))}
+          ))
+          }, [groups, isGroup, contactName])}
 
           {messages.length === 0 && !isLoading && (
             <div className="text-center text-sm text-muted-foreground py-8">Nenhuma mensagem ainda</div>
@@ -1650,16 +1653,15 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                 <FolderOpen className="h-4 w-4" />
               </button>
               {!pendingFile && (
-                <textarea
-                  ref={textareaRef}
-                  value={text}
-                  onChange={e => { setText(e.target.value); if (e.target.value) sendComposing() }}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Digite uma mensagem..."
-                  rows={1}
-                  className="flex-1 resize-none rounded-xl border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring max-h-32"
-                  style={{ minHeight: '40px' }}
-                />
+                <div className="flex-1">
+                  <ChatInput
+                    value={text}
+                    onChange={setText}
+                    onSend={handleSend}
+                    onTyping={sendComposing}
+                    disabled={sendMutation.isPending || sendMediaMutation.isPending}
+                  />
+                </div>
               )}
               {pendingFile && <div className="flex-1" />}
               <SuggestReplyButton conversationId={conversationId} onSelect={t => { setText(t ?? ''); setTimeout(() => textareaRef.current?.focus(), 50) }} />
