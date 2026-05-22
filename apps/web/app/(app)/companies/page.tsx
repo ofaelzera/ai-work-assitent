@@ -7,6 +7,7 @@ import { displayPhone, type PhoneType } from '@/lib/phone'
 import { toast } from 'sonner'
 import { Building2, Plus, Pencil, Trash2, Users, X, Phone, Mail, UserMinus, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { usePermission } from '@/lib/usePermission'
 
 interface Company {
   id: string
@@ -263,6 +264,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
 // ─── Página principal ─────────────────────────────────────────────────────────
 export default function CompaniesPage() {
   const queryClient = useQueryClient()
+  const canManage = usePermission('companies.manage')
   const [formModal, setFormModal] = useState<null | 'new' | Company>(null)
 
   const { data: companies = [], isLoading } = useQuery({
@@ -301,10 +303,12 @@ export default function CompaniesPage() {
               Agrupe contatos por empresa para organizar o atendimento
             </p>
           </div>
-          <button onClick={() => setFormModal('new')}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-            <Plus className="h-4 w-4" /> Nova empresa
-          </button>
+          {canManage && (
+            <button onClick={() => setFormModal('new')}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+              <Plus className="h-4 w-4" /> Nova empresa
+            </button>
+          )}
         </div>
 
         {/* Estado vazio */}
@@ -354,19 +358,21 @@ export default function CompaniesPage() {
                 </div>
 
                 {/* Ações */}
-                <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => setFormModal(company)}
-                    className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground transition-colors"
-                    title="Editar empresa e gerenciar contatos">
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => { if (confirm(`Remover "${company.name}"?`)) deleteMutation.mutate(company.id) }}
-                    className="p-1.5 rounded-lg hover:bg-red-50 text-muted-foreground hover:text-red-500 dark:hover:bg-red-950/20 transition-colors"
-                    title="Remover">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                {canManage && (
+                  <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => setFormModal(company)}
+                      className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground transition-colors"
+                      title="Editar empresa e gerenciar contatos">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => { if (confirm(`Remover "${company.name}"?`)) deleteMutation.mutate(company.id) }}
+                      className="p-1.5 rounded-lg hover:bg-red-50 text-muted-foreground hover:text-red-500 dark:hover:bg-red-950/20 transition-colors"
+                      title="Remover">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             )
           })}

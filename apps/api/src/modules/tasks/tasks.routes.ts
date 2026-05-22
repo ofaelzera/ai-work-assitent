@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
 import { eventBus } from '../../lib/eventBus.js'
+import { hasPermission } from '../../lib/acl.js'
 
 const recurrenceEnum = z.enum(['daily', 'weekly', 'monthly']).nullable().optional()
 
@@ -47,6 +48,16 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId } = req.user
       const { done, cardId, contactId, conversationId, assigneeId } = req.query
 
+      // Tarefas são pessoais por padrão. ADMIN/Supervisor (via `admin.users`)
+      // pode ver tarefas de outros usando ?assigneeId=<id>. Sem essa permissão,
+      // o filtro de assignee é forçado pra o próprio user.
+      const canViewOthers = await hasPermission(req.user, 'admin.users')
+      const effectiveAssigneeFilter = canViewOthers
+        ? (assigneeId !== undefined
+          ? { assigneeId: assigneeId === 'me' ? userId : assigneeId === 'all' ? undefined : assigneeId }
+          : { assigneeId: userId })   // default sem filtro = só minhas
+        : { assigneeId: userId }      // member: sempre só minhas, ignora query
+
       return prisma.task.findMany({
         where: {
           workspaceId,
@@ -54,9 +65,7 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(cardId !== undefined && { cardId }),
           ...(contactId !== undefined && { contactId }),
           ...(conversationId !== undefined && { conversationId }),
-          ...(assigneeId !== undefined && {
-            assigneeId: assigneeId === 'me' ? userId : assigneeId,
-          }),
+          ...effectiveAssigneeFilter,
         },
         orderBy: [{ done: 'asc' }, { remindAt: 'asc' }, { createdAt: 'desc' }],
         select: taskSelect,
@@ -84,8 +93,19 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId } = req.user
+      const { workspaceId, sub: userId } = req.user
       const { title, description, cardId, contactId, conversationId, messageId, assigneeId, remindAt, recurrence } = req.body
+
+      // Quem pode atribuir tarefa pra outro: tem `admin.users` (ADMIN/Supervisor).
+      // Caso contrário: força assignee = self.
+      const canAssignToOthers = await hasPermission(req.user, 'admin.users')
+      const finalAssigneeId = canAssignToOthers
+        ? (assigneeId ?? userId)   // se admin não escolheu, ele cria pra si
+        : userId                    // member: sempre pra si
+
+      if (!canAssignToOthers && assigneeId && assigneeId !== userId) {
+        return reply.forbidden('Sem permissão pra criar tarefa pra outro usuário')
+      }
 
       const task = await prisma.task.create({
         data: {
@@ -96,14 +116,18 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(contactId && { contactId }),
           ...(conversationId && { conversationId }),
           ...(messageId && { messageId }),
-          ...(assigneeId && { assigneeId }),
+          assigneeId: finalAssigneeId,
           ...(remindAt && { remindAt: new Date(remindAt) }),
           ...(recurrence && { recurrence }),
         },
         select: taskSelect,
       })
 
-      await eventBus.emitAndPersist(workspaceId, 'task.created', { taskId: task.id })
+      await eventBus.audit(workspaceId, 'task.created', {
+        actorUserId: req.user.sub,
+        targetType: 'task', targetId: task.id,
+        payload: { title: task.title, assigneeId: task.assigneeId },
+      })
 
       return reply.code(201).send(task)
     },
@@ -130,11 +154,22 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId } = req.user
+      const { workspaceId, sub: userId } = req.user
       const { title, description, done, remindAt, recurrence, cardId, contactId, conversationId, assigneeId } = req.body
 
-      const result = await prisma.task.updateMany({
+      // Guard: só o assignee atual ou quem tem admin.users pode editar
+      const task = await prisma.task.findFirst({
         where: { id: req.params.id, workspaceId },
+        select: { assigneeId: true },
+      })
+      if (!task) return reply.notFound()
+      const canManageAll = await hasPermission(req.user, 'admin.users')
+      if (!canManageAll && task.assigneeId !== userId) {
+        return reply.forbidden('Sem permissão pra editar tarefa de outro usuário')
+      }
+
+      await prisma.task.update({
+        where: { id: req.params.id },
         data: {
           ...(title !== undefined && { title }),
           ...(description !== undefined && { description: description ?? null }),
@@ -144,14 +179,15 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(cardId !== undefined && { cardId: cardId ?? null }),
           ...(contactId !== undefined && { contactId: contactId ?? null }),
           ...(conversationId !== undefined && { conversationId: conversationId ?? null }),
-          ...(assigneeId !== undefined && { assigneeId: assigneeId ?? null }),
+          ...(assigneeId !== undefined && canManageAll && { assigneeId: assigneeId ?? null }),
         },
       })
 
-      if (!result.count) return reply.notFound()
-
-      await eventBus.emitAndPersist(workspaceId, 'task.updated', { taskId: req.params.id })
-
+      await eventBus.audit(workspaceId, 'task.updated', {
+        actorUserId: req.user.sub,
+        targetType: 'task', targetId: req.params.id,
+        payload: { changes: Object.keys(req.body) },
+      })
       return { ok: true }
     },
   )
@@ -166,7 +202,17 @@ export const tasksRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId } = req.user
+      const { workspaceId, sub: userId } = req.user
+
+      const task = await prisma.task.findFirst({
+        where: { id: req.params.id, workspaceId },
+        select: { assigneeId: true },
+      })
+      if (!task) return reply.notFound()
+      const canManageAll = await hasPermission(req.user, 'admin.users')
+      if (!canManageAll && task.assigneeId !== userId) {
+        return reply.forbidden('Sem permissão pra deletar tarefa de outro usuário')
+      }
 
       const result = await prisma.task.deleteMany({
         where: { id: req.params.id, workspaceId },

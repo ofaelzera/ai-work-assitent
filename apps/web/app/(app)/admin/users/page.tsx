@@ -13,10 +13,25 @@ interface WorkspaceUser {
   name: string
   email: string
   role: 'ADMIN' | 'MEMBER'
+  customRoleId: string | null
+  customRole: { id: string; name: string; isSystem: boolean } | null
   createdAt: string
 }
 
-const DEFAULT_FORM = { name: '', email: '', password: '', role: 'MEMBER' as 'ADMIN' | 'MEMBER' }
+interface CustomRole {
+  id: string
+  name: string
+  description: string | null
+  isSystem: boolean
+}
+
+const DEFAULT_FORM = {
+  name: '',
+  email: '',
+  password: '',
+  role: 'MEMBER' as 'ADMIN' | 'MEMBER',
+  customRoleId: null as string | null,
+}
 
 function RoleBadge({ role }: { role: 'ADMIN' | 'MEMBER' }) {
   return (
@@ -44,9 +59,15 @@ interface UserModalProps {
 function UserModal({ onClose, onSave, isPending, editing }: UserModalProps) {
   const [form, setForm] = useState<typeof DEFAULT_FORM>(
     editing
-      ? { name: editing.name, email: editing.email, password: '', role: editing.role }
+      ? { name: editing.name, email: editing.email, password: '', role: editing.role, customRoleId: editing.customRoleId }
       : DEFAULT_FORM,
   )
+
+  const { data: roles = [] } = useQuery<CustomRole[]>({
+    queryKey: ['roles'],
+    queryFn: () => apiFetch('/roles'),
+    staleTime: 60_000,
+  })
 
   const canSubmit = form.name && form.email && (!editing || form.name)
 
@@ -97,15 +118,40 @@ function UserModal({ onClose, onSave, isPending, editing }: UserModalProps) {
           )}
 
           <div>
-            <label className="text-xs font-medium">Perfil</label>
+            <label className="text-xs font-medium">Perfil base</label>
             <select
               value={form.role}
               onChange={e => setForm(p => ({ ...p, role: e.target.value as 'ADMIN' | 'MEMBER' }))}
               className="mt-1 w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             >
               <option value="MEMBER">Membro</option>
-              <option value="ADMIN">Admin</option>
+              <option value="ADMIN">Admin (bypass total)</option>
             </select>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Admin ignora todas as permissões granulares.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium">Role customizado</label>
+            <select
+              value={form.customRoleId ?? ''}
+              onChange={e => setForm(p => ({ ...p, customRoleId: e.target.value || null }))}
+              disabled={form.role === 'ADMIN'}
+              className="mt-1 w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
+            >
+              <option value="">Padrão (sem role customizado)</option>
+              {roles.map(r => (
+                <option key={r.id} value={r.id}>
+                  {r.name}{r.isSystem ? ' (sistema)' : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {form.role === 'ADMIN'
+                ? 'Admin não usa role customizado — tem acesso total.'
+                : 'Define o conjunto de permissões granulares deste usuário.'}
+            </p>
           </div>
         </div>
 
@@ -174,7 +220,15 @@ export default function UsersPage() {
 
   const handleSave = (form: typeof DEFAULT_FORM) => {
     if (editing) {
-      updateMutation.mutate({ id: editing.id, data: { name: form.name, role: form.role } })
+      updateMutation.mutate({
+        id: editing.id,
+        data: {
+          name: form.name,
+          role: form.role,
+          // Se ADMIN, força customRoleId = null (não usa role customizado)
+          customRoleId: form.role === 'ADMIN' ? null : form.customRoleId,
+        },
+      })
     } else {
       createMutation.mutate(form)
     }
@@ -251,7 +305,14 @@ export default function UsersPage() {
                     <td className="px-4 py-3 font-medium">{u.name}</td>
                     <td className="px-4 py-3 text-muted-foreground">{u.email}</td>
                     <td className="px-4 py-3">
-                      <RoleBadge role={u.role} />
+                      <div className="flex flex-col gap-1 items-start">
+                        <RoleBadge role={u.role} />
+                        {u.customRole && u.role !== 'ADMIN' && (
+                          <span className="text-[10px] font-semibold bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 px-1.5 py-0.5 rounded-full">
+                            {u.customRole.name}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {new Date(u.createdAt).toLocaleDateString('pt-BR')}

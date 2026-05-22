@@ -5,6 +5,7 @@ interface User {
   sub: string
   workspaceId: string
   role: 'ADMIN' | 'MEMBER'
+  permissions?: string[]
 }
 
 interface AuthState {

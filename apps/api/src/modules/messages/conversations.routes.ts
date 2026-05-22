@@ -5,7 +5,10 @@ import { evolutionClient } from '../channels/evolution.client.js'
 import { getChannelConfig, getSmtpConfig } from '../channels/channels.service.js'
 import { sendEmail, moveImapMessage } from '../channels/email.client.js'
 import { dedupConversations } from './dedup.service.js'
+import { sendSystemMessage, getUserMessageTemplate } from '../../lib/systemMessages.js'
 import { eventBus } from '../../lib/eventBus.js'
+import { logger } from '../../lib/logger.js'
+import { hasPermission } from '../../lib/acl.js'
 import type { MediaAttachment } from '../channels/media.utils.js'
 import { env } from '../../config/env.js'
 import { promises as fs } from 'node:fs'
@@ -187,8 +190,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     '/conversations/:id/archive',
     { onRequest: [app.authenticate] },
     async (req, reply) => {
-      const { workspaceId, role } = req.user
-      if (role !== 'ADMIN') return reply.forbidden('Apenas administradores podem arquivar conversas')
+      const { workspaceId } = req.user
+      if (!(await hasPermission(req.user, 'conversations.archive'))) {
+        return reply.forbidden('Sem permissão pra arquivar conversas')
+      }
       const { id } = req.params as { id: string }
       const conv = await prisma.conversation.findFirstOrThrow({ where: { id, workspaceId } })
       return prisma.conversation.update({
@@ -852,11 +857,13 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         take: limit,
         include: {
           channel: { select: { id: true, type: true, label: true } },
+          assignee: { select: { id: true, name: true, email: true } },
           messages: {
             orderBy: { sentAt: 'desc' },
             take: 1,
             select: { body: true, sentAt: true, direction: true },
           },
+          _count: { select: { messages: true } },
         },
       })
 
@@ -885,7 +892,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       const { status } = req.body
 
       const current = await prisma.conversation.findFirstOrThrow({
-        where: { id, workspaceId }, select: { assigneeId: true },
+        where: { id, workspaceId }, select: { assigneeId: true, status: true },
       })
       if (role !== 'ADMIN' && current.assigneeId !== userId) {
         return reply.forbidden('Você precisa ser o atendente atual (ou admin) para mudar o status')
@@ -898,12 +905,48 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(status === 'RESOLVED' && { resolvedAt: new Date() }),
           ...(status === 'OPEN' && { resolvedAt: null }),
         },
+        include: {
+          channel: { select: { id: true, settings: true } },
+        },
       })
 
-      await eventBus.emitAndPersist(workspaceId, 'conversation.status_changed', {
-        conversationId: id,
-        status,
+      await eventBus.audit(workspaceId, 'conversation.status_changed', {
+        actorUserId: userId,
+        targetType: 'conversation', targetId: id,
+        payload: { status, previousStatus: current.status },
       })
+
+      // ── Closing message ao finalizar (user > canal fallback) ─────────────
+      // Regra padrão: só envia se quem está finalizando É o assignee atual.
+      // Quando admin finaliza conversa sem ter assumido (da fila ou supervisão),
+      // só envia se o canal tiver `sendClosingOnAdminFinalize=true` — evita
+      // mandar "obrigado pelo atendimento" sem ter havido atendimento real.
+      if (status === 'RESOLVED') {
+        const isFinalizerTheAssignee = current.assigneeId === userId
+        const channelSettings = (conversation.channel.settings as Record<string, unknown> | null) ?? {}
+        const adminCanForce = channelSettings.sendClosingOnAdminFinalize === true
+
+        if (isFinalizerTheAssignee || adminCanForce) {
+          const userTpl = await getUserMessageTemplate(userId, 'closingMessage')
+          const channelTpl = typeof channelSettings.closingMessage === 'string'
+            ? channelSettings.closingMessage
+            : ''
+          const template = userTpl || channelTpl
+          if (template) {
+            void sendSystemMessage({
+              conversationId: id,
+              template,
+              kind: 'closing',
+              userId,
+            })
+          }
+        } else {
+          logger.info(
+            { conversationId: id, actorUserId: userId, assigneeId: current.assigneeId },
+            'Closing não enviado: admin finalizou sem assumir e canal não permite',
+          )
+        }
+      }
 
       return conversation
     },
@@ -1027,8 +1070,8 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         if (current?.assigneeId === userId) {
           // segue pro return updated abaixo
         }
-        // ADMIN → takeover permitido (registra no releasedFrom como transferência forçada)
-        else if (role === 'ADMIN') {
+        // Quem tem `conversations.takeover` → permitido (registra no releasedFrom)
+        else if (await hasPermission(req.user, 'conversations.takeover')) {
           const full = await prisma.conversation.findUniqueOrThrow({
             where: { id }, select: { releasedFrom: true },
           })
@@ -1040,12 +1083,12 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
               claimedAt: now,
               releasedFrom: [
                 ...prevReleases,
-                { userId: current?.assigneeId, at: now.toISOString(), reason: `Takeover por admin (${userId})` },
+                { userId: current?.assigneeId, at: now.toISOString(), reason: `Takeover por ${userId}` },
               ] as any,
             },
           })
         }
-        // MEMBER → 409 sem permissão
+        // Sem permissão → 409
         else {
           return reply.status(409).send({
             error: 'Conversa já assumida',
@@ -1064,10 +1107,22 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
 
-      await eventBus.emitAndPersist(workspaceId, 'conversation.claimed', {
-        conversationId: id,
-        assigneeId: userId,
+      await eventBus.audit(workspaceId, 'conversation.claimed', {
+        actorUserId: userId,
+        targetType: 'conversation', targetId: id,
       })
+
+      // ── Welcome message do atendente (apresentação pessoal) ──────────────
+      // Dispara fire-and-forget no background, nunca bloqueia a resposta do claim.
+      const userWelcomeTpl = await getUserMessageTemplate(userId, 'welcomeMessage')
+      if (userWelcomeTpl) {
+        void sendSystemMessage({
+          conversationId: id,
+          template: userWelcomeTpl,
+          kind: 'agent-welcome',
+          userId,
+        })
+      }
 
       return reply.code(200).send(updated)
     },
@@ -1122,10 +1177,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
 
-      await eventBus.emitAndPersist(workspaceId, 'conversation.released', {
-        conversationId: id,
-        releasedBy: userId,
-        reason,
+      await eventBus.audit(workspaceId, 'conversation.released', {
+        actorUserId: userId,
+        targetType: 'conversation', targetId: id,
+        payload: { reason },
       })
 
       return updated
@@ -1190,8 +1245,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         data: { folder: toFolder },
       })
 
-      await eventBus.emitAndPersist(workspaceId, 'conversation.moved', {
-        conversationId: id, toFolder, moved, failed,
+      await eventBus.audit(workspaceId, 'conversation.moved', {
+        actorUserId: req.user.sub,
+        targetType: 'conversation', targetId: id,
+        payload: { toFolder, moved, failed },
       })
 
       return { ok: true, moved, failed, toFolder }
@@ -1251,7 +1308,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       await prisma.message.deleteMany({ where: { conversationId: id, workspaceId } })
       await prisma.conversation.delete({ where: { id } })
 
-      await eventBus.emitAndPersist(workspaceId, 'conversation.deleted', { conversationId: id })
+      await eventBus.audit(workspaceId, 'conversation.deleted', {
+        actorUserId: req.user.sub,
+        targetType: 'conversation', targetId: id,
+      })
 
       return reply.code(204).send()
     },

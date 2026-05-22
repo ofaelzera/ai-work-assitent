@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
 import { eventBus } from '../../lib/eventBus.js'
+import { hasPermission } from '../../lib/acl.js'
 import { env } from '../../config/env.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -15,22 +16,48 @@ const priorityEnum = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT'])
 export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   // ── Boards ────────────────────────────────────────────────────────────────
 
+  // GET: lista boards visíveis ao user.
+  //   visibility PRIVATE → só dono
+  //   visibility SHARED  → dono + users em BoardShare
+  //   visibility PUBLIC  → todos do workspace
+  //   `boards.manage`    → vê todos os boards do workspace
   app.get('/kanban/boards', { onRequest: [app.authenticate] }, async (req) => {
+    const canSeeAll = await hasPermission(req.user, 'boards.manage')
+    const userId = req.user.sub
+    const visibilityFilter = canSeeAll
+      ? {}
+      : {
+          OR: [
+            { visibility: 'PUBLIC' as const },
+            { ownerId: userId },
+            { visibility: 'SHARED' as const, shares: { some: { userId } } },
+          ],
+        }
+
     const boards = await prisma.board.findMany({
-      where: { workspaceId: req.user.workspaceId, deletedAt: null },
-      orderBy: { createdAt: 'asc' },
+      where: { workspaceId: req.user.workspaceId, deletedAt: null, ...visibilityFilter },
+      orderBy: [{ visibility: 'asc' }, { createdAt: 'asc' }],
       select: {
         id: true,
         name: true,
+        ownerId: true,
+        visibility: true,
         createdAt: true,
         columns: {
           select: { _count: { select: { cards: { where: { deletedAt: null } } } } },
         },
+        _count: { select: { shares: true } },
       },
     })
     return boards.map((b) => ({
       id: b.id,
       name: b.name,
+      ownerId: b.ownerId,
+      visibility: b.visibility,
+      isGlobal: b.visibility === 'PUBLIC',
+      isShared: b.visibility === 'SHARED',
+      isMine: b.ownerId === userId,
+      sharesCount: b._count.shares,
       createdAt: b.createdAt,
       cardCount: b.columns.reduce((sum, col) => sum + col._count.cards, 0),
     }))
@@ -40,12 +67,47 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
     '/kanban/boards',
     {
       onRequest: [app.authenticate],
-      schema: { body: z.object({ name: z.string().min(1) }) },
+      schema: {
+        body: z.object({
+          name: z.string().min(1),
+          visibility: z.enum(['PRIVATE', 'SHARED', 'PUBLIC']).default('PRIVATE'),
+          // IDs de users com quem compartilhar (auto-vira SHARED se array não-vazio)
+          shareWith: z.array(z.string()).optional(),
+        }),
+      },
     },
     async (req, reply) => {
+      // Qualquer um cria PRIVATE/SHARED próprio. Só quem tem boards.manage cria PUBLIC.
+      const wantsPublic = req.body.visibility === 'PUBLIC'
+      if (wantsPublic && !(await hasPermission(req.user, 'boards.manage'))) {
+        return reply.forbidden('Sem permissão pra criar board público')
+      }
+
+      // Se mandou shareWith não-vazio, força visibility SHARED
+      const finalVisibility = (req.body.shareWith?.length ?? 0) > 0 ? 'SHARED' : req.body.visibility
+
       const board = await prisma.board.create({
-        data: { workspaceId: req.user.workspaceId, name: req.body.name },
+        data: {
+          workspaceId: req.user.workspaceId,
+          name: req.body.name,
+          ownerId: req.user.sub,
+          visibility: finalVisibility,
+        },
       })
+
+      // Cria shares se aplicável
+      if (req.body.shareWith?.length) {
+        const validUsers = await prisma.user.findMany({
+          where: { id: { in: req.body.shareWith }, workspaceId: req.user.workspaceId, deletedAt: null },
+          select: { id: true },
+        })
+        for (const u of validUsers) {
+          if (u.id !== req.user.sub) {
+            await prisma.boardShare.create({ data: { boardId: board.id, userId: u.id } })
+          }
+        }
+      }
+
       // Colunas padrão
       const defaultCols = ['Entrada', 'Em andamento', 'Aguardando', 'Concluído', 'Cancelado']
       for (let i = 0; i < defaultCols.length; i++) {
@@ -65,6 +127,28 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
     async (req, reply) => {
       const board = await prisma.board.findFirst({
         where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { ownerId: true, visibility: true },
+      })
+      if (!board) return reply.notFound()
+
+      // Acesso: PUBLIC, ou dono, ou SHARED com share pro user, ou boards.manage
+      const userId = req.user.sub
+      const isOwner = board.ownerId === userId
+      const isPublic = board.visibility === 'PUBLIC'
+      let isShared = false
+      if (!isOwner && !isPublic && board.visibility === 'SHARED') {
+        const share = await prisma.boardShare.findUnique({
+          where: { boardId_userId: { boardId: req.params.id, userId } },
+        })
+        isShared = !!share
+      }
+      if (!isOwner && !isPublic && !isShared) {
+        const canSeeAll = await hasPermission(req.user, 'boards.manage')
+        if (!canSeeAll) return reply.notFound()
+      }
+
+      const fullBoard = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
         include: {
           columns: {
             orderBy: { position: 'asc' },
@@ -81,8 +165,8 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
           },
         },
       })
-      if (!board) return reply.notFound()
-      return board
+      if (!fullBoard) return reply.notFound()
+      return fullBoard
     },
   )
 
@@ -92,15 +176,38 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       onRequest: [app.authenticate],
       schema: {
         params: z.object({ id: z.string() }),
-        body: z.object({ name: z.string().min(1) }),
+        body: z.object({
+          name: z.string().min(1).optional(),
+          visibility: z.enum(['PRIVATE', 'SHARED', 'PUBLIC']).optional(),
+        }),
       },
     },
     async (req, reply) => {
-      const board = await prisma.board.updateMany({
+      const userId = req.user.sub
+      const existing = await prisma.board.findFirst({
         where: { id: req.params.id, workspaceId: req.user.workspaceId },
-        data: { name: req.body.name },
+        select: { ownerId: true },
       })
-      if (!board.count) return reply.notFound()
+      if (!existing) return reply.notFound()
+
+      // Só dono ou quem tem boards.manage pode editar metadados
+      const canManage = await hasPermission(req.user, 'boards.manage')
+      if (existing.ownerId !== userId && !canManage) {
+        return reply.forbidden('Só o dono ou admin pode editar este board')
+      }
+
+      // Pra mudar pra PUBLIC, precisa de boards.manage
+      if (req.body.visibility === 'PUBLIC' && !canManage) {
+        return reply.forbidden('Sem permissão pra tornar board público')
+      }
+
+      await prisma.board.update({
+        where: { id: req.params.id },
+        data: {
+          ...(req.body.name && { name: req.body.name }),
+          ...(req.body.visibility && { visibility: req.body.visibility }),
+        },
+      })
       return { ok: true }
     },
   )
@@ -148,6 +255,111 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       await prisma.board.updateMany({
         where: { id: req.params.id, workspaceId: req.user.workspaceId },
         data: { deletedAt: new Date() },
+      })
+      return reply.code(204).send()
+    },
+  )
+
+  // ── Board shares (compartilhar com users específicos) ─────────────────────
+  // GET: lista users com acesso ao board (só dono ou admin)
+  app.get(
+    '/kanban/boards/:id/shares',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { ownerId: true },
+      })
+      if (!board) return reply.notFound()
+      const canManage = await hasPermission(req.user, 'boards.manage')
+      if (board.ownerId !== req.user.sub && !canManage) return reply.forbidden('Só dono ou admin')
+
+      const shares = await prisma.boardShare.findMany({
+        where: { boardId: req.params.id },
+        orderBy: { createdAt: 'asc' },
+      })
+      const userIds = shares.map(s => s.userId)
+      const users = userIds.length
+        ? await prisma.user.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, name: true, email: true },
+          })
+        : []
+      const usersMap = new Map(users.map(u => [u.id, u]))
+      return shares.map(s => ({
+        id: s.id, userId: s.userId,
+        user: usersMap.get(s.userId) ?? null,
+        createdAt: s.createdAt,
+      }))
+    },
+  )
+
+  // POST: adiciona share
+  app.post(
+    '/kanban/boards/:id/shares',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ userId: z.string() }),
+      },
+    },
+    async (req, reply) => {
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { ownerId: true, visibility: true },
+      })
+      if (!board) return reply.notFound()
+      const canManage = await hasPermission(req.user, 'boards.manage')
+      if (board.ownerId !== req.user.sub && !canManage) return reply.forbidden('Só dono ou admin')
+
+      if (req.body.userId === board.ownerId) {
+        return reply.badRequest('Dono do board já tem acesso')
+      }
+      const target = await prisma.user.findFirst({
+        where: { id: req.body.userId, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!target) return reply.notFound('Usuário não encontrado neste workspace')
+
+      const share = await prisma.boardShare.upsert({
+        where: { boardId_userId: { boardId: req.params.id, userId: req.body.userId } },
+        create: { boardId: req.params.id, userId: req.body.userId },
+        update: {},
+      })
+
+      // Auto-promove PRIVATE → SHARED se o primeiro compartilhamento for adicionado
+      if (board.visibility === 'PRIVATE') {
+        await prisma.board.update({
+          where: { id: req.params.id },
+          data: { visibility: 'SHARED' },
+        })
+      }
+      return reply.code(201).send(share)
+    },
+  )
+
+  // DELETE: remove share
+  app.delete(
+    '/kanban/boards/:id/shares/:userId',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string(), userId: z.string() }) },
+    },
+    async (req, reply) => {
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { ownerId: true },
+      })
+      if (!board) return reply.notFound()
+      const canManage = await hasPermission(req.user, 'boards.manage')
+      if (board.ownerId !== req.user.sub && !canManage) return reply.forbidden('Só dono ou admin')
+
+      await prisma.boardShare.deleteMany({
+        where: { boardId: req.params.id, userId: req.params.userId },
       })
       return reply.code(204).send()
     },
@@ -332,7 +544,11 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         },
         include: { contact: { select: { id: true, name: true, phone: true } } },
       })
-      await eventBus.emitAndPersist(workspaceId, 'card.created', { cardId: card.id, origin: 'USER' })
+      await eventBus.audit(workspaceId, 'card.created', {
+        actorUserId: req.user.sub,
+        targetType: 'card', targetId: card.id,
+        payload: { origin: 'USER', columnId, title: card.title },
+      })
       return reply.code(201).send(card)
     },
   )
@@ -439,7 +655,11 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         select: { id: true, columnId: true, position: true },
       })
 
-      await eventBus.emitAndPersist(workspaceId, 'card.moved', { cardId, columnId, position })
+      await eventBus.audit(workspaceId, 'card.moved', {
+        actorUserId: req.user.sub,
+        targetType: 'card', targetId: cardId,
+        payload: { columnId, position },
+      })
       return { ok: true, card: updated }
     },
   )
@@ -595,17 +815,36 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId, role } = req.user
       const attachment = await prisma.attachment.findFirst({
         where: { id: req.params.id, workspaceId },
-        include: { shares: { where: { userId } } },
+        include: {
+          shares: { where: { userId } },
+          folder: { select: { ownerId: true, visibility: true } },
+        },
       })
       if (!attachment) return reply.notFound()
 
-      // Guard de acesso: anexo de Card herda permissão de quem vê o card (assumido OK aqui).
-      // Já anexo da biblioteca (sem cardId) tem visibility própria.
       if (!attachment.cardId) {
-        const hasAccess = role === 'ADMIN'
-          || attachment.uploadedBy === userId
-          || attachment.visibility === 'PUBLIC'
-          || (attachment.visibility === 'SHARED' && attachment.shares.length > 0)
+        // Anexo da biblioteca — checa visibilidade
+        let hasAccess = role === 'ADMIN' || attachment.uploadedBy === userId
+
+        // Dentro de pasta: herda acesso da pasta (PUBLIC/SHARED/dono)
+        if (!hasAccess && attachment.folder) {
+          const f = attachment.folder
+          if (f.visibility === 'PUBLIC') hasAccess = true
+          else if (f.ownerId === userId) hasAccess = true
+          else if (f.visibility === 'SHARED') {
+            const share = await prisma.storageFolderShare.findUnique({
+              where: { folderId_userId: { folderId: attachment.folderId!, userId } },
+            })
+            if (share) hasAccess = true
+          }
+        }
+
+        // Arquivo solto (sem pasta) — usa visibility individual
+        if (!hasAccess && !attachment.folder) {
+          if (attachment.visibility === 'PUBLIC') hasAccess = true
+          else if (attachment.visibility === 'SHARED' && attachment.shares.length > 0) hasAccess = true
+        }
+
         if (!hasAccess) return reply.forbidden('Sem acesso a este arquivo')
       }
 

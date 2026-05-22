@@ -35,6 +35,7 @@ model Workspace {
   storageFolders  StorageFolder[]
   eventLogs       EventLog[]
   companies       Company[]
+  customRoles     CustomRole[]
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -45,19 +46,43 @@ model User {
   passwordHash String
   name         String
   role         Role     @default(MEMBER)
+  customRoleId String?
   twoFactor    Boolean  @default(false)
+  settings     Json?    // { welcomeMessage?, closingMessage?, signature?, ... }
   deletedAt    DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   workspace    Workspace @relation(fields: [workspaceId], references: [id])
+  customRole   CustomRole? @relation(fields: [customRoleId], references: [id])
   refreshTokens RefreshToken[]
   vaultItems   VaultItem[]
   vaultFolders VaultFolder[]
   assignedConversations Conversation[] @relation("ConversationAssignee")
   assignedTasks         Task[]         @relation("TaskAssignee")
+  events                EventLog[]     @relation("EventActor")
 
   @@index([workspaceId])
+  @@index([customRoleId])
+}
+
+// Roles customizáveis por workspace (RBAC).
+// `permissions` é um array de strings (ex: ["conversations.viewAll", "cards.delete"]).
+// `isSystem=true` = role criado no seed; não pode ser deletado pela UI.
+model CustomRole {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  permissions Json     // string[] de permissions concedidas
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  users     User[]
+
+  @@unique([workspaceId, name])
 }
 
 model RefreshToken {
@@ -214,18 +239,44 @@ model Message {
 }
 
 // ─── Kanban ──────────────────────────────────────────────────────────────────
+// Visibilidade de board (RBAC fino, mesmo padrão de StorageFolder):
+//   PRIVATE = só o ownerId vê
+//   SHARED  = ownerId + users em BoardShare
+//   PUBLIC  = todos do workspace
+enum BoardVisibility {
+  PRIVATE
+  SHARED
+  PUBLIC
+}
+
 model Board {
-  id          String   @id @default(cuid())
+  id          String           @id @default(cuid())
   workspaceId String
+  ownerId     String?          // null = legado (board global criado antes do enum)
+  visibility  BoardVisibility  @default(PRIVATE)
   name        String
   deletedAt   DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  workspace Workspace    @relation(fields: [workspaceId], references: [id])
   columns   Column[]
+  shares    BoardShare[]
 
   @@index([workspaceId])
+  @@index([workspaceId, ownerId])
+}
+
+model BoardShare {
+  id        String   @id @default(cuid())
+  boardId   String
+  userId    String   // usuário com acesso (além do dono)
+  createdAt DateTime @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, userId])
+  @@index([userId])
 }
 
 model Column {
@@ -561,15 +612,21 @@ model AttachmentShare {
 
 // ─── Events ──────────────────────────────────────────────────────────────────
 model EventLog {
-  id          String   @id @default(cuid())
-  workspaceId String
-  type        String   // message.received, card.created, ai.executed, ...
-  payload     Json
-  createdAt   DateTime @default(now())
+  id           String   @id @default(cuid())
+  workspaceId  String
+  type         String   // message.received, card.created, ai.executed, ...
+  actorUserId  String?  // user que executou (null = sistema/worker)
+  targetType   String?  // 'conversation', 'card', 'user', 'channel', ...
+  targetId     String?  // id do alvo (pra filtrar timeline)
+  payload      Json
+  createdAt    DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id])
+  actor     User?     @relation("EventActor", fields: [actorUserId], references: [id])
 
   @@index([workspaceId, type, createdAt])
+  @@index([workspaceId, actorUserId, createdAt])
+  @@index([workspaceId, targetType, targetId, createdAt])
 }
 
 // ─── Enums ───────────────────────────────────────────────────────────────────

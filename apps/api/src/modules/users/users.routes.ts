@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
 import { hashPassword } from '../auth/auth.service.js'
+import { AVAILABLE_TEMPLATE_VARIABLES } from '../../lib/templates.js'
 
 const USER_SELECT = {
   id: true,
@@ -9,6 +10,8 @@ const USER_SELECT = {
   email: true,
   name: true,
   role: true,
+  customRoleId: true,
+  customRole: { select: { id: true, name: true, isSystem: true } },
   twoFactor: true,
   deletedAt: true,
   createdAt: true,
@@ -16,6 +19,61 @@ const USER_SELECT = {
 } as const
 
 export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
+
+  // ── Catálogo de variáveis disponíveis pra templates de mensagem ──────────
+  app.get(
+    '/templates/variables',
+    { onRequest: [app.authenticate] },
+    async () => AVAILABLE_TEMPLATE_VARIABLES,
+  )
+
+  // ── Settings pessoais do usuário logado ──────────────────────────────────
+  // (welcomeMessage, closingMessage, signature, etc — JSON livre)
+  app.get(
+    '/users/me/settings',
+    { onRequest: [app.authenticate] },
+    async (req) => {
+      const me = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: { settings: true },
+      })
+      return (me.settings as Record<string, unknown> | null) ?? {}
+    },
+  )
+
+  app.patch(
+    '/users/me/settings',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        body: z.object({
+          welcomeMessage: z.string().max(2000).nullable().optional(),
+          closingMessage: z.string().max(2000).nullable().optional(),
+          signature:      z.string().max(2000).nullable().optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const current = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: { settings: true },
+      })
+      const merged: Record<string, unknown> = {
+        ...(current.settings as Record<string, unknown> ?? {}),
+        ...req.body,
+      }
+      // Remove nulls (clear)
+      for (const k of Object.keys(merged)) {
+        if (merged[k] === null) delete merged[k]
+      }
+      const updated = await prisma.user.update({
+        where: { id: req.user.sub },
+        data: { settings: merged as any },
+        select: { settings: true },
+      })
+      return (updated.settings as Record<string, unknown>) ?? {}
+    },
+  )
 
   // ── Listar usuários do workspace ───────────────────────────────────────────
 
@@ -80,6 +138,7 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
           name: z.string().min(1).optional(),
           email: z.string().email().optional(),
           role: z.enum(['ADMIN', 'MEMBER']).optional(),
+          customRoleId: z.string().nullable().optional(),
         }),
       },
     },
@@ -91,6 +150,15 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
 
       if (!user || user.workspaceId !== req.user.workspaceId || user.deletedAt) {
         return reply.notFound('Usuário não encontrado')
+      }
+
+      // Valida que o customRoleId (se passado) pertence ao mesmo workspace
+      if (req.body.customRoleId) {
+        const role = await prisma.customRole.findFirst({
+          where: { id: req.body.customRoleId, workspaceId: req.user.workspaceId },
+          select: { id: true },
+        })
+        if (!role) return reply.badRequest('Role customizado não encontrado neste workspace')
       }
 
       return prisma.user.update({

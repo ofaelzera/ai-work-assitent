@@ -251,11 +251,26 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.forbidden('Só o dono ou admin pode editar')
       }
 
-      // Se mudar parent, valida acesso ao novo pai + previne ciclo
-      if (req.body.parentId !== undefined) {
-        if (req.body.parentId === folder.id) return reply.badRequest('Pasta não pode ser pai de si mesma')
-        if (req.body.parentId && !(await canAccessFolder(req.body.parentId, userId, workspaceId))) {
+      // Se mudar parent, valida acesso ao novo pai + previne ciclos
+      if (req.body.parentId !== undefined && req.body.parentId !== null) {
+        const newParent = req.body.parentId
+        if (newParent === folder.id) return reply.badRequest('Pasta não pode ser pai de si mesma')
+        if (!(await canAccessFolder(newParent, userId, workspaceId))) {
           return reply.forbidden('Sem acesso à pasta destino')
+        }
+        // Previne ciclo: subir a árvore do destino e ver se passa pela própria pasta
+        let cursor: string | null = newParent
+        const seen = new Set<string>()
+        while (cursor && !seen.has(cursor)) {
+          if (cursor === folder.id) {
+            return reply.badRequest('Não é possível mover uma pasta para dentro dela mesma ou de uma subpasta sua')
+          }
+          seen.add(cursor)
+          const p: { parentId: string | null } | null = await prisma.storageFolder.findUnique({
+            where: { id: cursor },
+            select: { parentId: true },
+          })
+          cursor = p?.parentId ?? null
         }
       }
 
@@ -267,6 +282,53 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(req.body.parentId !== undefined && { parentId: req.body.parentId ?? null }),
         },
       })
+    },
+  )
+
+  // ── GET /storage/folders/:id/deletion-impact ─────────────────────────────
+  // Conta recursivamente tudo que será apagado se a pasta for removida em cascata.
+  app.get(
+    '/storage/folders/:id/deletion-impact',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId, sub: userId, role } = req.user
+      const folder = await prisma.storageFolder.findFirst({
+        where: { id: req.params.id, workspaceId },
+        select: { id: true, name: true, ownerId: true },
+      })
+      if (!folder) return reply.notFound()
+      if (role !== 'ADMIN' && folder.ownerId !== userId) return reply.forbidden('Só o dono ou admin')
+
+      // Coleta IDs de todas as subpastas recursivamente (BFS)
+      const allFolderIds = [folder.id]
+      const queue = [folder.id]
+      while (queue.length > 0) {
+        const parentId = queue.shift()!
+        const children = await prisma.storageFolder.findMany({
+          where: { parentId, workspaceId },
+          select: { id: true },
+        })
+        for (const c of children) {
+          allFolderIds.push(c.id)
+          queue.push(c.id)
+        }
+      }
+
+      const filesAgg = await prisma.attachment.aggregate({
+        where: { folderId: { in: allFolderIds }, workspaceId },
+        _count: { _all: true },
+        _sum: { sizeBytes: true },
+      })
+
+      return {
+        folderName: folder.name,
+        subfolders: allFolderIds.length - 1,  // não conta a própria
+        files: filesAgg._count._all,
+        totalBytes: filesAgg._sum.sizeBytes ?? 0,
+      }
     },
   )
 
@@ -327,32 +389,35 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId } = req.user
       const { folderId, q } = req.query
 
-      // Pra arquivos dentro de uma pasta, valida acesso à pasta primeiro
-      if (folderId && !(await canAccessFolder(folderId, userId, workspaceId))) {
-        return []
-      }
-
-      // Visibilidade do ARQUIVO (independente da pasta):
-      //  • PUBLIC: todos do workspace veem
-      //  • PRIVATE: só uploadedBy
-      //  • SHARED: uploadedBy + AttachmentShare.userId
-      const fileAccessFilter = {
-        OR: [
-          { visibility: 'PUBLIC' as const },
-          { uploadedBy: userId },
-          { visibility: 'SHARED' as const, shares: { some: { userId } } },
-        ],
+      // Pra arquivos DENTRO de pasta: visibilidade herdada da pasta.
+      // Se o user pode ver a pasta (canAccessFolder), pode ver TODOS os arquivos
+      // dentro dela — independente da visibility do arquivo individual.
+      //
+      // Pra arquivos na raiz (folderId=null): aplica visibility individual.
+      let where: any
+      if (folderId) {
+        if (!(await canAccessFolder(folderId, userId, workspaceId))) {
+          return []
+        }
+        where = {
+          workspaceId, cardId: null, vaultItemId: null, folderId,
+          ...(q && { filename: { contains: q } }),
+        }
+      } else {
+        // Raiz: respeita visibilidade do próprio arquivo
+        where = {
+          workspaceId, cardId: null, vaultItemId: null, folderId: null,
+          OR: [
+            { visibility: 'PUBLIC' as const },
+            { uploadedBy: userId },
+            { visibility: 'SHARED' as const, shares: { some: { userId } } },
+          ],
+          ...(q && { filename: { contains: q } }),
+        }
       }
 
       const files = await prisma.attachment.findMany({
-        where: {
-          workspaceId,
-          cardId: null,
-          vaultItemId: null,
-          ...(folderId ? { folderId } : { folderId: null }),
-          ...fileAccessFilter,
-          ...(q && { filename: { contains: q } }),
-        },
+        where,
         orderBy: [{ createdAt: 'desc' }],
         select: {
           id: true, filename: true, mimeType: true, sizeBytes: true,

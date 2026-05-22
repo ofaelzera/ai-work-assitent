@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
+import { hasPermission } from '../../lib/acl.js'
 
 /**
  * Configurações globais do workspace.
@@ -38,8 +39,10 @@ export const workspaceRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId, role } = req.user
-      if (role !== 'ADMIN') return reply.forbidden('Apenas administradores podem alterar as configurações do workspace')
+      const { workspaceId } = req.user
+      if (!(await hasPermission(req.user, 'admin.settings'))) {
+        return reply.forbidden('Sem permissão pra alterar configurações do workspace')
+      }
 
       const ws = await prisma.workspace.findUniqueOrThrow({
         where: { id: workspaceId },
@@ -65,8 +68,10 @@ export const workspaceRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { workspaceId, role } = req.user
-      if (role !== 'ADMIN') return reply.forbidden('Apenas administradores podem renomear o workspace')
+      const { workspaceId } = req.user
+      if (!(await hasPermission(req.user, 'admin.settings'))) {
+        return reply.forbidden('Sem permissão pra renomear o workspace')
+      }
       const ws = await prisma.workspace.update({
         where: { id: workspaceId },
         data: { name: req.body.name },

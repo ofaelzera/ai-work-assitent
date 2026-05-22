@@ -193,6 +193,7 @@ function KanbanColumn({
   isAddingCard: boolean
 }) {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const cardIds = column.cards.map((c) => c.id)
   const [editing, setEditing] = useState(false)
   const [nameDraft, setNameDraft] = useState(column.name)
@@ -334,12 +335,18 @@ function KanbanColumn({
                   <Pencil className="h-3 w-3" /> Renomear
                 </button>
                 <button
-                  onMouseDown={() => {
+                  onMouseDown={async () => {
                     setMenuOpen(false)
                     if (column.cards.length === 0) {
-                      if (confirm(`Remover coluna "${column.name}"?`)) remove.mutate({})
+                      const ok = await confirm({
+                        type: 'danger',
+                        title: `Remover coluna "${column.name}"?`,
+                        message: 'A coluna está vazia. Esta ação não pode ser desfeita.',
+                        confirmLabel: 'Remover',
+                      })
+                      if (ok) remove.mutate({})
                     } else {
-                      // Já existe cards — passa direto pro fluxo de "moveCardsTo" via mutation error handler
+                      // Tem cards — fluxo de "mover pra onde?" é tratado pelo onError da mutation
                       remove.mutate({})
                     }
                   }}

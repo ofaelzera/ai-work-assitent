@@ -6,12 +6,14 @@ import { apiFetch, getAccessToken } from '@/lib/api'
 import { toast } from 'sonner'
 import {
   Upload, FolderOpen, X, FileText, Image as ImageIcon, Film, Music, Archive, File,
-  ChevronRight, Trash2, FolderPlus, Lock, Globe, Download, Users, Pencil,
+  ChevronRight, Trash2, FolderPlus, Lock, Globe, Download, Users, Pencil, Move,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
 import EditFolderModal from '@/components/EditFolderModal'
 import EditFileModal from '@/components/EditFileModal'
+import MoveToFolderModal from '@/components/MoveToFolderModal'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
 
@@ -132,11 +134,17 @@ function NewFolderModal({ parentId, onClose, onCreated }: {
 export default function StoragePage() {
   const queryClient = useQueryClient()
   const me = useAuthStore(s => s.user)
+  const confirm = useConfirm()
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [editingFolder, setEditingFolder] = useState<Folder | null>(null)
   const [editingFile, setEditingFile] = useState<StorageFile | null>(null)
+  const [movingItem, setMovingItem] = useState<
+    | { type: 'folder'; id: string; name: string; parentId: string | null }
+    | { type: 'file'; id: string; name: string; folderId: string | null }
+    | null
+  >(null)
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -326,20 +334,48 @@ export default function StoragePage() {
                                 <Pencil className="h-3 w-3" />
                               </button>
                               <button
-                                onClick={(e) => {
+                                onClick={(e) => { e.stopPropagation(); setMovingItem({ type: 'folder', id: f.id, name: f.name, parentId: f.parentId }) }}
+                                className="p-1 rounded hover:bg-accent text-muted-foreground"
+                                title="Mover pasta">
+                                <Move className="h-3 w-3" />
+                              </button>
+                              <button
+                                onClick={async (e) => {
                                   e.stopPropagation()
-                                  if (!confirm(`Remover pasta "${f.name}"?`)) return
-                                  deleteFolder.mutate({ id: f.id, cascade: false }, {
-                                    onError: (err: any) => {
-                                      if (err?.body?.error === 'folderNotEmpty') {
-                                        if (confirm('Pasta tem conteúdo. Deletar tudo dentro?')) {
-                                          deleteFolder.mutate({ id: f.id, cascade: true })
-                                        }
-                                      } else {
-                                        toast.error('Erro ao remover pasta')
-                                      }
-                                    },
+                                  // Busca preview de impacto recursivo
+                                  let impact: { subfolders: number; files: number; totalBytes: number } | null = null
+                                  try {
+                                    impact = await apiFetch(`/storage/folders/${f.id}/deletion-impact`)
+                                  } catch { /* ignora — vai com confirmação genérica */ }
+
+                                  const isEmpty = !impact || (impact.subfolders === 0 && impact.files === 0)
+                                  const details: string[] = []
+                                  if (impact && !isEmpty) {
+                                    if (impact.files > 0)      details.push(`${impact.files} arquivo${impact.files > 1 ? 's' : ''}`)
+                                    if (impact.subfolders > 0) details.push(`${impact.subfolders} subpasta${impact.subfolders > 1 ? 's' : ''}`)
+                                    if (impact.totalBytes > 0) {
+                                      const sizeStr = impact.totalBytes < 1024 * 1024
+                                        ? `${(impact.totalBytes / 1024).toFixed(1)} KB`
+                                        : `${(impact.totalBytes / 1024 / 1024).toFixed(1)} MB`
+                                      details.push(`${sizeStr} de espaço em disco`)
+                                    }
+                                  }
+
+                                  const ok = await confirm({
+                                    type: 'danger',
+                                    title: `Remover pasta "${f.name}"?`,
+                                    message: isEmpty
+                                      ? 'A pasta está vazia e será apagada permanentemente.'
+                                      : 'Tudo dentro da pasta será apagado em cascata, incluindo:',
+                                    details: details.length > 0 ? details : undefined,
+                                    warning: !isEmpty
+                                      ? 'Esta ação é permanente — os arquivos serão removidos do disco e não poderão ser recuperados.'
+                                      : undefined,
+                                    confirmLabel: isEmpty ? 'Remover' : 'Apagar tudo',
+                                    // Se >50 arquivos, pede digitar o nome
+                                    ...(impact && impact.files > 50 && { requireTypedConfirmation: f.name }),
                                   })
+                                  if (ok) deleteFolder.mutate({ id: f.id, cascade: !isEmpty })
                                 }}
                                 className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
                                 title="Remover">
@@ -389,12 +425,25 @@ export default function StoragePage() {
                         </button>
                         {isOwner && (
                           <>
+                            <button onClick={() => setMovingItem({ type: 'file', id: file.id, name: file.filename, folderId: file.folderId })}
+                              className="opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-accent text-muted-foreground"
+                              title="Mover">
+                              <Move className="h-3.5 w-3.5" />
+                            </button>
                             <button onClick={() => setEditingFile(file)}
                               className="opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-accent text-muted-foreground"
                               title="Editar / Compartilhar">
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
-                            <button onClick={() => confirm(`Remover ${file.filename}?`) && deleteFile.mutate(file.id)}
+                            <button onClick={async () => {
+                              const ok = await confirm({
+                                type: 'danger',
+                                title: `Remover "${file.filename}"?`,
+                                message: 'O arquivo será apagado permanentemente do disco.',
+                                confirmLabel: 'Remover',
+                              })
+                              if (ok) deleteFile.mutate(file.id)
+                            }}
                               className="opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
                               title="Remover">
                               <Trash2 className="h-3.5 w-3.5" />
@@ -423,6 +472,16 @@ export default function StoragePage() {
 
       {editingFile && (
         <EditFileModal file={editingFile} onClose={() => setEditingFile(null)} />
+      )}
+
+      {movingItem && (
+        <MoveToFolderModal
+          itemType={movingItem.type}
+          itemId={movingItem.id}
+          itemName={movingItem.name}
+          currentParentId={movingItem.type === 'folder' ? movingItem.parentId : movingItem.folderId}
+          onClose={() => setMovingItem(null)}
+        />
       )}
     </div>
   )

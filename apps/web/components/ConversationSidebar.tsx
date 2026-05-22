@@ -5,6 +5,7 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { useRouter, usePathname } from 'next/navigation'
 import { apiFetch } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
+import { usePermission } from '@/lib/usePermission'
 import { useSSE } from '@/lib/sse'
 import { presenceLabel, type PresenceState } from '@/lib/usePresence'
 import {
@@ -451,6 +452,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   const queryClient = useQueryClient()
   const currentUser = useAuthStore(s => s.user)
   const isAdmin = currentUser?.role === 'ADMIN'
+  const canArchivePerm = usePermission('conversations.archive')
   const [search, setSearch] = useState('')
   // Default: "Minhas" — atendente vê o próprio trabalho primeiro.
   // Auto-fallback pra "Fila" mais abaixo se "Minhas" vier vazio na primeira carga.
@@ -728,7 +730,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
               onClick={() => handleClick(conv)}
               onFavorite={(e) => { e.stopPropagation(); favMutation.mutate(conv.id) }}
               onArchive={(e) => { e.stopPropagation(); archiveMutation.mutate(conv.id) }}
-              canArchive={isAdmin}
+              canArchive={canArchivePerm}
             />
           ) : (
             <ConversationItem
@@ -738,7 +740,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
               onClick={() => handleClick(conv)}
               onFavorite={(e) => { e.stopPropagation(); favMutation.mutate(conv.id) }}
               onArchive={(e) => { e.stopPropagation(); archiveMutation.mutate(conv.id) }}
-              canArchive={isAdmin}
+              canArchive={canArchivePerm}
               presenceTxt={presenceLabel(presenceMap[conv.id] ?? null)}
               onClaim={!conv.assigneeId && (conv.status === 'OPEN' || conv.status === 'WAITING') ? (e) => { e.stopPropagation(); claimMutation.mutate(conv.id) } : undefined}
             />

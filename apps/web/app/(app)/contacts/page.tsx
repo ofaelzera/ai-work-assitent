@@ -10,6 +10,7 @@ import {
   Phone, Mail, MessageSquare, GitMerge, Shuffle, Camera, Link2Off, Lock, EyeOff, Eye,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { usePermission } from '@/lib/usePermission'
 
 interface Company { id: string; name: string; color: string }
 
@@ -357,6 +358,8 @@ function MergeModal({ contact, onClose, onMerge, isPending }: {
 // ─── Página principal ─────────────────────────────────────────────────────────
 export default function ContactsPage() {
   const queryClient = useQueryClient()
+  const canEditContact   = usePermission('contacts.edit')
+  const canDeleteContact = usePermission('contacts.delete')
   const [search, setSearch]     = useState('')
   const [showLid, setShowLid]   = useState(false)
   const [formModal, setFormModal]   = useState<null | 'new' | Contact>(null)
@@ -462,18 +465,22 @@ export default function ContactsPage() {
               {showLid ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
               {showLid ? 'Todos' : 'Sem número'}
             </button>
-            <button
-              onClick={handleDedup}
-              disabled={deduping}
-              title="Detectar e mesclar contatos duplicados automaticamente"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm text-muted-foreground hover:bg-accent disabled:opacity-50 transition-colors">
-              <Shuffle className="h-4 w-4" />
-              {deduping ? 'Deduplicando...' : 'Deduplicar'}
-            </button>
-            <button onClick={() => setFormModal('new')}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-              <Plus className="h-4 w-4" /> Novo contato
-            </button>
+            {canEditContact && (
+              <button
+                onClick={handleDedup}
+                disabled={deduping}
+                title="Detectar e mesclar contatos duplicados automaticamente"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm text-muted-foreground hover:bg-accent disabled:opacity-50 transition-colors">
+                <Shuffle className="h-4 w-4" />
+                {deduping ? 'Deduplicando...' : 'Deduplicar'}
+              </button>
+            )}
+            {canEditContact && (
+              <button onClick={() => setFormModal('new')}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+                <Plus className="h-4 w-4" /> Novo contato
+              </button>
+            )}
           </div>
         </div>
 
@@ -580,22 +587,28 @@ export default function ContactsPage() {
                       <MessageSquare className="h-3.5 w-3.5" />
                     </a>
                   )}
-                  <button onClick={() => setMergeModal(contact)}
-                    className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground transition-colors"
-                    title="Mesclar com outro contato">
-                    <GitMerge className="h-3.5 w-3.5" />
-                  </button>
-                  <button onClick={() => setFormModal(contact)}
-                    className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground transition-colors"
-                    title="Editar">
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
+                  {canEditContact && (
+                    <button onClick={() => setMergeModal(contact)}
+                      className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground transition-colors"
+                      title="Mesclar com outro contato">
+                      <GitMerge className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  {canEditContact && (
+                    <button onClick={() => setFormModal(contact)}
+                      className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground transition-colors"
+                      title="Editar">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  {canDeleteContact && (
                   <button
                     onClick={() => { if (confirm(`Remover "${label}"?`)) deleteMutation.mutate(contact.id) }}
                     className="p-1.5 rounded-lg hover:bg-red-50 text-muted-foreground hover:text-red-500 dark:hover:bg-red-950/20 transition-colors"
                     title="Remover">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
+                  )}
                 </div>
               </div>
             )

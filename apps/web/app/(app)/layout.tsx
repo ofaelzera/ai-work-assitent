@@ -16,6 +16,7 @@ import {
   Building2,
   Users,
   CheckSquare,
+  UserCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -40,7 +41,9 @@ const adminItems = [
   { href: '/admin/prompts', label: 'Prompts' },
   { href: '/admin/ai-logs', label: 'Logs IA' },
   { href: '/admin/events', label: 'Eventos' },
+  { href: '/admin/reports', label: 'Relatórios' },
   { href: '/admin/users', label: 'Usuários' },
+  { href: '/admin/roles', label: 'Roles e permissões' },
   { href: '/admin/settings', label: 'Configurações' },
 ]
 
@@ -134,7 +137,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           )}
         </nav>
 
-        <div className="p-3 border-t">
+        <div className="p-3 border-t space-y-0.5">
+          <Link
+            href="/profile"
+            className={cn(
+              'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
+              pathname.startsWith('/profile')
+                ? 'bg-primary/10 text-primary'
+                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+            )}
+          >
+            <UserCircle className="h-4 w-4" />
+            Meu perfil
+          </Link>
           <button
             onClick={handleLogout}
             className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"

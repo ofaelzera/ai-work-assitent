@@ -147,3 +147,136 @@ export async function dedupConversations(workspaceId: string): Promise<{
 
   return { merged, checked: openConvs.length }
 }
+
+/**
+ * Variante focada num único chat — barata pra rodar ao final de cada ingest.
+ * Detecta as duplicatas APENAS pro par (channelId, externalId) e/ou (channelId, contactId).
+ * Caso 0 ou 1 conv aberta → noop (1 query e sai).
+ *
+ * Retorna nº de duplicatas mescladas (geralmente 0).
+ */
+export async function dedupChatConversations(
+  workspaceId: string,
+  channelId: string,
+  externalId: string,
+): Promise<number> {
+  // Pega TODAS as convs ativas do chat (normalmente 0 ou 1; 2+ = duplicata)
+  let openConvs = await prisma.conversation.findMany({
+    where: {
+      workspaceId, channelId, externalId,
+      source: 'LIVE', status: { in: ['OPEN', 'WAITING'] },
+    },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true, channelId: true, externalId: true, contactId: true,
+      createdAt: true, assigneeId: true, favorite: true, unreadCount: true,
+    },
+  })
+
+  // Caminho rápido: 0 ou 1 conv = nada a fazer
+  if (openConvs.length <= 1) {
+    // Também tenta detectar duplicatas por contato canonical (LID + PN do mesmo dono)
+    const firstContactId = openConvs[0]?.contactId
+    if (!firstContactId) return 0
+    const canonicalId = await resolveContactCanonical(firstContactId)
+    if (!canonicalId) return 0
+    // Procura outras convs LIVE OPEN pro mesmo contato canonical neste canal,
+    // mas com externalId diferente (LID vs PN)
+    const others = await prisma.conversation.findMany({
+      where: {
+        workspaceId, channelId,
+        source: 'LIVE', status: { in: ['OPEN', 'WAITING'] },
+        contactId: canonicalId,
+        id: { not: openConvs[0]!.id },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true, channelId: true, externalId: true, contactId: true,
+        createdAt: true, assigneeId: true, favorite: true, unreadCount: true,
+      },
+    })
+    if (others.length === 0) return 0
+    openConvs = [...openConvs, ...others]
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+  }
+
+  // 2+ duplicatas → mescla todas na mais antiga
+  const primary = openConvs[0]
+  let merged = 0
+  for (const dup of openConvs.slice(1)) {
+    await mergeOneInto(primary.id, dup, workspaceId)
+    merged++
+  }
+  return merged
+}
+
+/** Resolve cadeia de mergedIntoId pra contato canônico (root). */
+async function resolveContactCanonical(contactId: string): Promise<string | null> {
+  let current: string | null = contactId
+  const seen = new Set<string>()
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    const c: { mergedIntoId: string | null } | null = await prisma.contact.findUnique({
+      where: { id: current }, select: { mergedIntoId: true },
+    })
+    if (!c) return null
+    if (!c.mergedIntoId) return current
+    current = c.mergedIntoId
+  }
+  return current
+}
+
+/** Move tudo de `dup` pra `primaryId` e deleta `dup`. Lida com idempotência de mensagens. */
+async function mergeOneInto(
+  primaryId: string,
+  dup: { id: string; assigneeId: string | null; favorite: boolean; unreadCount: number },
+  workspaceId: string,
+) {
+  // Idempotência de mensagens
+  const dupMsgs = await prisma.message.findMany({
+    where: { conversationId: dup.id },
+    select: { id: true, externalId: true },
+  })
+  if (dupMsgs.length > 0) {
+    const externalIds = dupMsgs.map(m => m.externalId).filter((v): v is string => !!v)
+    if (externalIds.length > 0) {
+      const alreadyInPrimary = await prisma.message.findMany({
+        where: { conversationId: primaryId, externalId: { in: externalIds } },
+        select: { externalId: true },
+      })
+      const conflictSet = new Set(alreadyInPrimary.map(m => m.externalId))
+      const conflictingDupIds = dupMsgs.filter(m => m.externalId && conflictSet.has(m.externalId)).map(m => m.id)
+      if (conflictingDupIds.length > 0) {
+        await prisma.message.deleteMany({ where: { id: { in: conflictingDupIds } } })
+      }
+    }
+    await prisma.message.updateMany({
+      where: { conversationId: dup.id },
+      data: { conversationId: primaryId },
+    })
+  }
+  await prisma.task.updateMany({
+    where: { conversationId: dup.id },
+    data: { conversationId: primaryId },
+  })
+  await prisma.calendarEvent.updateMany({
+    where: { conversationId: dup.id },
+    data: { conversationId: primaryId },
+  })
+
+  // Patch da primary com dados úteis do dup
+  const primaryData = await prisma.conversation.findUniqueOrThrow({
+    where: { id: primaryId },
+    select: { assigneeId: true, favorite: true },
+  })
+  const patchData: Record<string, unknown> = {}
+  if (!primaryData.assigneeId && dup.assigneeId) patchData.assigneeId = dup.assigneeId
+  if (!primaryData.favorite && dup.favorite) patchData.favorite = true
+  if (dup.unreadCount > 0) patchData.unreadCount = { increment: dup.unreadCount }
+  if (Object.keys(patchData).length) {
+    await prisma.conversation.update({ where: { id: primaryId }, data: patchData })
+  }
+
+  await prisma.conversation.delete({ where: { id: dup.id } })
+  logger.info({ primaryId, dupId: dup.id, workspaceId }, 'Conv duplicada auto-mesclada (chat-scoped)')
+}

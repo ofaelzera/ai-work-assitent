@@ -394,17 +394,21 @@ export async function syncWhatsAppChannel(
               orderBy: { lastMessageAt: 'desc' },
             })
             if (resolvedToReopen) {
+              // Volta pra fila pública — atendente que finalizou não fica novamente
+              // responsável automaticamente.
               liveConv = await prisma.conversation.update({
                 where: { id: resolvedToReopen.id },
                 data: {
                   status: 'OPEN',
                   resolvedAt: null,
+                  assigneeId: null,
+                  claimedAt: null,
                   reopenCount: { increment: 1 },
                   lastMessageAt: sentAt,
                   unreadCount: remoteUnread,
                 },
               })
-              logger.info({ conversationId: liveConv.id, remoteJid }, 'Conv RESOLVED reaberta no sync (msg nova após cursor)')
+              logger.info({ conversationId: liveConv.id, remoteJid }, 'Conv RESOLVED reaberta no sync — voltou pra fila')
             }
           }
 
@@ -490,6 +494,18 @@ export async function syncWhatsAppChannel(
         where: { id: liveConv.id },
         data: { lastMessageAt: liveLastSent },
       })
+    }
+
+    // Auto-dedup do chat ao final (defesa contra race com webhook em paralelo)
+    try {
+      const merged = await (await import('../messages/dedup.service.js')).dedupChatConversations(
+        channel.workspaceId, channelId, remoteJid,
+      )
+      if (merged > 0) {
+        logger.info({ remoteJid, merged }, 'Duplicatas mescladas durante sync')
+      }
+    } catch (err) {
+      logger.warn({ err, remoteJid }, 'Auto-dedup per-chat falhou no sync (ignorada)')
     }
   }
 

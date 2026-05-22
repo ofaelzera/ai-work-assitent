@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
 import { RefreshCw, Trash2, QrCode, X, Download, UserCircle, Plus, CheckCircle2, AlertCircle, Clock, Zap, PenLine, ChevronDown, ChevronUp, Bell, Settings2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import MessageTemplateField from '@/components/MessageTemplateField'
 import RichEditor from '@/components/RichEditor'
 
 interface Channel {
@@ -301,6 +302,9 @@ function ChannelRulesPanel({ channelId, channelType }: { channelId: string; chan
     distributionMode?: 'all' | 'fixed' | 'round_robin'
     defaultAssigneeId?: string | null
     roundRobinUserIds?: string[]
+    welcomeMessage?: string | null
+    closingMessage?: string | null
+    sendClosingOnAdminFinalize?: boolean
   }
 
   const { data: settings, isLoading } = useQuery<Settings>({
@@ -368,6 +372,37 @@ function ChannelRulesPanel({ channelId, channelType }: { channelId: string; chan
             onChange={(v) => patch({ prefixSenderName: v })}
             label="Identificar atendente nas mensagens"
             description='Adiciona "*Nome:*" antes da mensagem para o cliente saber quem está atendendo'
+          />
+        </div>
+      )}
+
+      {/* Mensagens automáticas — só WhatsApp */}
+      {isWa && (
+        <div className="space-y-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Mensagens automáticas</p>
+          <p className="text-[11px] text-muted-foreground">
+            Enviadas pelo bot do canal. Use as variáveis pra personalizar.
+            A mensagem pessoal do atendente (configurada no perfil dele) é enviada adicionalmente.
+          </p>
+          <MessageTemplateField
+            label="Boas-vindas (1ª mensagem do canal)"
+            helperText="Enviada quando o cliente abre uma nova conversa, antes de algum atendente assumir."
+            value={typeof s.welcomeMessage === 'string' ? s.welcomeMessage : ''}
+            onChange={(v) => patch({ welcomeMessage: v })}
+            placeholder="Olá {cliente}! Bem-vindo ao atendimento. Em breve um de nossos atendentes vai te responder."
+          />
+          <MessageTemplateField
+            label="Finalização (fallback)"
+            helperText="Usada ao finalizar a conversa SE o atendente não tiver mensagem personalizada de fechamento."
+            value={typeof s.closingMessage === 'string' ? s.closingMessage : ''}
+            onChange={(v) => patch({ closingMessage: v })}
+            placeholder="Atendimento finalizado às {hora}. Protocolo: {protocolo}. Obrigado pelo contato!"
+          />
+          <Toggle
+            value={s.sendClosingOnAdminFinalize ?? false}
+            onChange={(v) => patch({ sendClosingOnAdminFinalize: v })}
+            label="Enviar finalização mesmo quando admin finaliza sem assumir"
+            description="Padrão desligado: se admin finalizar conversa da fila (ninguém atendeu) NÃO envia mensagem de finalização — evita 'obrigado pelo atendimento' sem atendimento real."
           />
         </div>
       )}

@@ -13,6 +13,8 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { parseJid } from '../lib/phone.js'
 import { mergeContacts } from '../modules/contacts/merge.service.js'
+import { sendSystemMessage } from '../lib/systemMessages.js'
+import { dedupChatConversations } from '../modules/messages/dedup.service.js'
 
 /**
  * Tenta baixar a mídia de uma mensagem WhatsApp e salva localmente.
@@ -233,17 +235,35 @@ export function startIngestWhatsappWorker() {
               return
             }
 
+            // Ao reabrir: volta pra fila (assignee=null) — quem finalizou não fica
+            // automaticamente responsável de novo. Modelo Whaticket: nova interação
+            // é como novo atendimento, qualquer um pode pegar.
             conversation = await prisma.conversation.update({
               where: { id: resolved.id },
               data: {
                 status: 'OPEN',
                 resolvedAt: null,
+                assigneeId: null,           // ← volta pra fila pública
+                claimedAt: null,
                 reopenCount: { increment: 1 },
                 lastMessageAt: sentAt,
                 unreadCount: { increment: 1 },
               },
             })
-            logger.info({ conversationId: conversation.id, remoteJid }, 'Conv RESOLVED reaberta (cliente respondeu)')
+            logger.info({ conversationId: conversation.id, remoteJid }, 'Conv RESOLVED reaberta — voltou pra fila')
+
+            // Dispara welcome do canal pra avisar o cliente (mesma lógica de conv nova)
+            const welcomeTpl = typeof channelSettings.welcomeMessage === 'string'
+              ? channelSettings.welcomeMessage
+              : ''
+            if (welcomeTpl && !isGroup) {
+              void sendSystemMessage({
+                conversationId: conversation.id,
+                template: welcomeTpl,
+                kind: 'channel-welcome',
+                userId: null,
+              })
+            }
           }
         }
       }
@@ -320,6 +340,21 @@ export function startIngestWhatsappWorker() {
           return existing
         })
         logger.info({ conversationId: conversation.id, contactId: contact.id, assigneeId }, 'Novo ticket criado')
+
+        // ── Welcome message do canal ──────────────────────────────────────
+        // Dispara só em ticket NOVO. Não em grupos, arquivadas ou se a 1ª msg foi nossa.
+        const welcomeTpl = typeof channelSettings.welcomeMessage === 'string'
+          ? channelSettings.welcomeMessage
+          : ''
+        const fromMe: boolean = message.key?.fromMe ?? false
+        if (welcomeTpl && !isGroup && !shouldArchive && !fromMe) {
+          void sendSystemMessage({
+            conversationId: conversation.id,
+            template: welcomeTpl,
+            kind: 'channel-welcome',
+            userId: null,
+          })
+        }
       } else {
         // Se a conversa está arquivada, a mensagem é salva silenciosamente:
         // NÃO bumpa unreadCount (badge fica em zero) e NÃO atualiza lastMessageAt
@@ -401,6 +436,14 @@ export function startIngestWhatsappWorker() {
           { jobId: `classify-${msg.id}`, removeOnComplete: 50, removeOnFail: 20 },
         )
       }
+
+      // ── Auto-dedup do chat ───────────────────────────────────────────────
+      // Roda fire-and-forget no fim de cada ingest. Caminho rápido (0 ou 1 conv aberta)
+      // custa só uma query indexada. Se detectar 2+ duplicatas (race entre webhooks),
+      // mescla automaticamente — usuário nunca precisa apertar "Deduplicar".
+      dedupChatConversations(workspaceId, channelId, remoteJid).catch(err =>
+        logger.warn({ err, remoteJid }, 'Auto-dedup pós-ingest falhou (ignorada)'),
+      )
     },
     { connection: redis, concurrency: 5 },
   )

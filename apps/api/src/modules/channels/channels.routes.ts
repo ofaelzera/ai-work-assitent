@@ -73,6 +73,12 @@ export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
           distributionMode: z.enum(['all', 'fixed', 'round_robin']).optional(),
           defaultAssigneeId: z.string().nullable().optional(),
           roundRobinUserIds: z.array(z.string()).optional(),
+          welcomeMessage: z.string().max(2000).nullable().optional(),
+          closingMessage: z.string().max(2000).nullable().optional(),
+          // Se true: também envia mensagem de finalização quando admin finaliza
+          // sem ter assumido (atende direto da fila ou supervisiona). Default false:
+          // evita mandar "obrigado pelo atendimento" quando ninguém atendeu de fato.
+          sendClosingOnAdminFinalize: z.boolean().optional(),
         }),
       },
     },

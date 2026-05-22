@@ -9,7 +9,7 @@ import {
   Send, Paperclip, FileText, Music, Video, Image as ImageIcon, X,
   ZoomIn, Download, Kanban, Phone, Mail, Reply,
   Check, CheckCheck, Sparkles, CheckCircle2, RotateCcw, Clock3, UserRound, ChevronDown,
-  LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save,
+  LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
@@ -20,6 +20,7 @@ import CreateTaskModal from '@/components/CreateTaskModal'
 import CreateEventModal from '@/components/CreateEventModal'
 import LibraryPickerModal from '@/components/LibraryPickerModal'
 import SaveToLibraryModal from '@/components/SaveToLibraryModal'
+import { ConversationTimelineModal } from '@/components/ConversationTimelineModal'
 import { useAuthStore } from '@/store/auth'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
@@ -389,6 +390,90 @@ function AttachToCardModal({ messageId, onClose }: { messageId: string; onClose:
   )
 }
 
+// ─── Card de ticket no histórico do contato ──────────────────────────────────
+function HistoryTicket({ conv, isCurrent }: { conv: any; isCurrent: boolean }) {
+  const [open, setOpen] = useState(false)
+  const lastMsg = conv.messages?.[0]
+  const assigneeLabel = conv.assignee?.name ?? conv.assignee?.email ?? null
+
+  const { data: detail } = useQuery({
+    queryKey: ['conversation-history-detail', conv.id],
+    queryFn: () => apiFetch<{ messages: any[] }>(`/conversations/${conv.id}/messages?limit=200`),
+    enabled: open,
+    staleTime: 30_000,
+  })
+
+  return (
+    <div className={cn('rounded-xl border text-xs overflow-hidden',
+      isCurrent ? 'border-primary/40 bg-primary/5' : 'bg-card')}>
+      <button
+        onClick={() => !isCurrent && setOpen(o => !o)}
+        disabled={isCurrent}
+        className={cn('w-full p-3 space-y-1 text-left',
+          !isCurrent && 'hover:bg-accent/40 transition-colors cursor-pointer')}>
+        <div className="flex items-center gap-2">
+          <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium',
+            conv.status === 'RESOLVED'
+              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+              : conv.status === 'WAITING'
+              ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+              : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400')}>
+            {conv.status === 'RESOLVED' ? 'Finalizado' : conv.status === 'WAITING' ? 'Aguardando' : 'Em aberto'}
+          </span>
+          {isCurrent && <span className="text-[10px] text-primary font-medium">atual</span>}
+          <span className="text-muted-foreground ml-auto">
+            {new Date(conv.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+          </span>
+          {!isCurrent && (
+            <ChevronDown className={cn('h-3 w-3 text-muted-foreground transition-transform', open && 'rotate-180')} />
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1 truncate">
+            <UserRound className="h-3 w-3 shrink-0" />
+            {assigneeLabel ?? <span className="italic">não atribuída</span>}
+          </span>
+          <span>{conv._count?.messages ?? 0} msg</span>
+        </div>
+        {lastMsg && !open && (
+          <p className="text-muted-foreground truncate">
+            {lastMsg.direction === 'OUTBOUND' ? 'Você: ' : ''}{lastMsg.body}
+          </p>
+        )}
+        {conv.resolvedAt && (
+          <p className="text-muted-foreground/60 text-[10px]">
+            Finalizado em {new Date(conv.resolvedAt).toLocaleDateString('pt-BR')}
+          </p>
+        )}
+      </button>
+
+      {open && !isCurrent && (
+        <div className="border-t bg-muted/20 max-h-64 overflow-y-auto px-3 py-2 space-y-1.5">
+          {!detail && <p className="text-[11px] text-muted-foreground text-center py-3">Carregando mensagens...</p>}
+          {detail && detail.messages.length === 0 && (
+            <p className="text-[11px] text-muted-foreground text-center py-3">Sem mensagens</p>
+          )}
+          {detail?.messages.map((m: any) => {
+            const isOutbound = m.direction === 'OUTBOUND'
+            const senderLabel = isOutbound ? 'Você' : (m.fromContact?.name ?? 'Cliente')
+            return (
+              <div key={m.id} className={cn('flex flex-col gap-0.5', isOutbound ? 'items-end' : 'items-start')}>
+                <div className={cn('max-w-[85%] rounded-lg px-2.5 py-1.5 text-[11px] break-words',
+                  isOutbound ? 'bg-primary/15 text-foreground' : 'bg-card border')}>
+                  {m.body || <span className="italic text-muted-foreground">(sem texto)</span>}
+                </div>
+                <span className="text-[9px] text-muted-foreground px-1">
+                  {senderLabel} · {new Date(m.sentAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Drawer de edição de contato ──────────────────────────────────────────────
 function ContactDrawer({ contact, onClose, onSave, currentConvId }: {
   contact: Contact; onClose: () => void; onSave: (data: Partial<Contact>) => void; currentConvId?: string
@@ -562,41 +647,9 @@ function ContactDrawer({ contact, onClose, onSave, currentConvId }: {
                 <p className="text-xs text-muted-foreground">Nenhum histórico encontrado</p>
               ) : (
                 <div className="space-y-2">
-                  {historyData.conversations.map((c: any) => {
-                    const isCurrent = c.id === currentConvId
-                    const lastMsg = c.messages?.[0]
-                    return (
-                      <div key={c.id}
-                        className={cn('rounded-xl border p-3 text-xs space-y-1',
-                          isCurrent ? 'border-primary/40 bg-primary/5' : 'bg-card',
-                          c.status === 'RESOLVED' ? 'opacity-75' : '')}>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium',
-                            c.status === 'RESOLVED'
-                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                              : c.status === 'WAITING'
-                              ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                              : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400')}>
-                            {c.status === 'RESOLVED' ? 'Finalizado' : c.status === 'WAITING' ? 'Aguardando' : 'Em aberto'}
-                          </span>
-                          {isCurrent && <span className="text-[10px] text-primary font-medium">atual</span>}
-                          <span className="text-muted-foreground ml-auto">
-                            {new Date(c.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
-                          </span>
-                        </div>
-                        {lastMsg && (
-                          <p className="text-muted-foreground truncate">
-                            {lastMsg.direction === 'OUTBOUND' ? 'Você: ' : ''}{lastMsg.body}
-                          </p>
-                        )}
-                        {c.resolvedAt && (
-                          <p className="text-muted-foreground/60">
-                            Finalizado em {new Date(c.resolvedAt).toLocaleDateString('pt-BR')}
-                          </p>
-                        )}
-                      </div>
-                    )
-                  })}
+                  {historyData.conversations.map((c: any) => (
+                    <HistoryTicket key={c.id} conv={c} isCurrent={c.id === currentConvId} />
+                  ))}
                 </div>
               )}
             </div>
@@ -899,6 +952,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const [showContact, setShowContact] = useState(false)
   const [showRelease, setShowRelease] = useState(false)
   const [showForward, setShowForward] = useState(false)
+  const [showTimeline, setShowTimeline] = useState(false)
   const [attachMessageId, setAttachMessageId] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<ReplyState | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -967,27 +1021,52 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const statusMutation = useMutation({
     mutationFn: (status: 'OPEN' | 'WAITING' | 'RESOLVED') =>
       apiFetch(`/conversations/${conversationId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
-    onSuccess: () => {
+    onSuccess: (_data, status) => {
+      // Optimistic local — UI atualiza na hora
+      queryClient.setQueryData<any>(['conversation', conversationId], (old: any) => {
+        if (!old?.conversation) return old
+        return {
+          ...old,
+          conversation: {
+            ...old.conversation,
+            status,
+            resolvedAt: status === 'RESOLVED' ? new Date().toISOString() : null,
+          },
+        }
+      })
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
-      toast.success(statusMutation.variables === 'RESOLVED' ? 'Conversa finalizada!' : 'Status atualizado!')
+      toast.success(status === 'RESOLVED' ? 'Conversa finalizada!' : 'Status atualizado!')
     },
     onError: () => toast.error('Erro ao atualizar status'),
   })
 
   const claimMutation = useMutation({
     mutationFn: () =>
-      apiFetch<{ id: string; assigneeId: string; assignee: { id: string; name: string; email: string } }>(
+      apiFetch<{ id: string; assigneeId: string; claimedAt: string; assignee: { id: string; name: string; email: string } }>(
         `/conversations/${conversationId}/claim`,
         { method: 'POST' },
       ),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // Atualiza cache imediato — não espera o refetch pra re-renderizar
+      queryClient.setQueryData<any>(['conversation', conversationId], (old: any) => {
+        if (!old?.conversation) return old
+        return {
+          ...old,
+          conversation: {
+            ...old.conversation,
+            assigneeId: data.assigneeId,
+            claimedAt: data.claimedAt,
+            assignee: data.assignee,
+          },
+        }
+      })
+      // Invalida em background pra trazer dados completos (releasedFrom, etc)
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
       toast.success('Você assumiu esta conversa!')
     },
     onError: (err: any) => {
-      // 409 — já foi assumida; body carregado pelo ApiError
       const assigneeName = (err?.body as any)?.assignee?.name ?? 'outro atendente'
       toast.error(`Conversa assumida por ${assigneeName}`)
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
@@ -1179,6 +1258,12 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
             ) : null}
 
             <AssigneeChip conversationId={conversationId} assignee={conv.assignee} />
+            <button
+              onClick={() => setShowTimeline(true)}
+              className="flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent transition-colors"
+              title="Histórico de auditoria">
+              <History className="h-3.5 w-3.5" /> Histórico
+            </button>
             {/* Encaminhar + Devolver — só quem tem a conversa (ou admin) */}
             {(isMyConv || isAdmin) && conv.assigneeId && (
               <>
@@ -1424,18 +1509,34 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                         </button>
                       </div>
 
-                      <div className={cn(
-                        'rounded-2xl px-3 py-1.5',
-                        isOut
-                          ? 'bg-primary text-primary-foreground rounded-br-sm'
-                          : 'bg-card border rounded-bl-sm shadow-sm',
-                      )}>
-                        {/* Nome do remetente (grupos) */}
-                        {senderName && (
-                          <p className="text-[11px] font-semibold mb-0.5" style={{ color: bubbleColor }}>
-                            {senderName}
-                          </p>
-                        )}
+                      {/* Detecta mensagem de sistema (welcome/closing automáticos) */}
+                      {(() => {
+                        const sysKind = (msg.attachments?.[0] as any)?.kind as string | undefined
+                        const isSystemMsg = sysKind === 'channel-welcome' || sysKind === 'agent-welcome' || sysKind === 'closing'
+                        const sysLabel =
+                          sysKind === 'channel-welcome' ? '🤖 Boas-vindas (auto)'
+                          : sysKind === 'agent-welcome' ? '✨ Apresentação (auto)'
+                          : sysKind === 'closing' ? '✅ Finalização (auto)'
+                          : null
+                        return (
+                          <>
+                            <div className={cn(
+                              'rounded-2xl px-3 py-1.5',
+                              isOut
+                                ? isSystemMsg
+                                  ? 'bg-primary/60 text-primary-foreground rounded-br-sm border border-primary-foreground/20'
+                                  : 'bg-primary text-primary-foreground rounded-br-sm'
+                                : 'bg-card border rounded-bl-sm shadow-sm',
+                            )}>
+                              {sysLabel && (
+                                <p className="text-[10px] font-medium opacity-80 mb-1 italic">{sysLabel}</p>
+                              )}
+                              {/* Nome do remetente (grupos) */}
+                              {senderName && (
+                                <p className="text-[11px] font-semibold mb-0.5" style={{ color: bubbleColor }}>
+                                  {senderName}
+                                </p>
+                              )}
 
                         {/* Mensagem citada */}
                         {msg.quotedBody && (
@@ -1446,17 +1547,20 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                           />
                         )}
 
-                        <MediaBubble msg={msg} />
+                              <MediaBubble msg={msg} />
 
-                        {/* Hora + status */}
-                        <div className={cn(
-                          'flex items-center justify-end gap-0.5 mt-0.5',
-                          isOut ? 'text-primary-foreground/70' : 'text-muted-foreground',
-                        )}>
-                          <span className="text-[10px] leading-none">{formatTime(msg.sentAt)}</span>
-                          {isOut && <DeliveryStatus status={msg.deliveryStatus} />}
-                        </div>
-                      </div>
+                              {/* Hora + status */}
+                              <div className={cn(
+                                'flex items-center justify-end gap-0.5 mt-0.5',
+                                isOut ? 'text-primary-foreground/70' : 'text-muted-foreground',
+                              )}>
+                                <span className="text-[10px] leading-none">{formatTime(msg.sentAt)}</span>
+                                {isOut && <DeliveryStatus status={msg.deliveryStatus} />}
+                              </div>
+                            </div>
+                          </>
+                        )
+                      })()}
                     </div>
                   </div>
                 )
@@ -1642,6 +1746,14 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           onClose={() => setShowRelease(false)}
           onDone={() => {
             setShowRelease(false)
+            // Optimistic: limpa assignee local pra UI alternar pra banner "Em fila"
+            queryClient.setQueryData<any>(['conversation', conversationId], (old: any) => {
+              if (!old?.conversation) return old
+              return {
+                ...old,
+                conversation: { ...old.conversation, assigneeId: null, assignee: null, claimedAt: null },
+              }
+            })
             queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
             queryClient.invalidateQueries({ queryKey: ['conversations'] })
           }}
@@ -1658,6 +1770,13 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
             queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
             queryClient.invalidateQueries({ queryKey: ['conversations'] })
           }}
+        />
+      )}
+
+      {showTimeline && (
+        <ConversationTimelineModal
+          conversationId={conversationId}
+          onClose={() => setShowTimeline(false)}
         />
       )}
     </>

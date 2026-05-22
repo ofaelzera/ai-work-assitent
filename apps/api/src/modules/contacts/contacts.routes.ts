@@ -6,6 +6,7 @@ import { logger } from '../../lib/logger.js'
 import { mergeContacts } from './merge.service.js'
 import { autoDedupContacts } from '../channels/sync.service.js'
 import { evolutionClient } from '../channels/evolution.client.js'
+import { hasPermission } from '../../lib/acl.js'
 
 export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
   // ── Listar / buscar contatos ───────────────────────────────────────────────
@@ -24,7 +25,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req) => {
-      const { workspaceId } = req.user
+      const { workspaceId, sub: userId } = req.user
       const { q, companyId, excludeLid, limit, offset } = req.query
 
       // excludeLid=true esconde LIDs SEM nome (LIDs com nome continuam visíveis)
@@ -32,10 +33,19 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         ? { NOT: { AND: [{ phoneType: 'LID' as const }, { name: null }] } }
         : {}
 
+      // Filtro de visibilidade por role:
+      //  • Quem tem `contacts.viewAll` (ADMIN/Supervisor) → vê todos
+      //  • Sem essa permissão → vê apenas contatos com quem tem conversa atribuída a ele
+      const canViewAll = await hasPermission(req.user, 'contacts.viewAll')
+      const visibilityFilter = canViewAll ? {} : {
+        conversations: { some: { assigneeId: userId } },
+      }
+
       const baseWhere = {
         workspaceId,
         mergedIntoId: null,
         ...hiddenLidFilter,
+        ...visibilityFilter,
         ...(companyId && { companyId }),
         ...(q && {
           OR: [
@@ -94,6 +104,9 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req, reply) => {
       const { workspaceId } = req.user
+      if (!(await hasPermission(req.user, 'contacts.edit'))) {
+        return reply.forbidden('Sem permissão pra criar contatos')
+      }
       const { name, phone, email, companyId } = req.body
 
       // Phone manualmente digitado é sempre PN — se o usuário digitar lixo, parseJid vai retornar 'unknown'
@@ -131,8 +144,11 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const { workspaceId } = req.user
+      if (!(await hasPermission(req.user, 'contacts.edit'))) {
+        return reply.forbidden('Sem permissão pra editar contatos')
+      }
       const current = await prisma.contact.findFirstOrThrow({ where: { id: req.params.id, workspaceId } })
 
       const { phone, companyId, ...rest } = req.body
@@ -195,6 +211,9 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req, reply) => {
       const { workspaceId } = req.user
+      if (!(await hasPermission(req.user, 'contacts.delete'))) {
+        return reply.forbidden('Sem permissão pra deletar contatos')
+      }
       await prisma.contact.findFirstOrThrow({ where: { id: req.params.id, workspaceId } })
       await prisma.contact.delete({ where: { id: req.params.id } })
       return reply.code(204).send()

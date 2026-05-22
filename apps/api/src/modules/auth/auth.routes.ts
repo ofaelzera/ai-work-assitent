@@ -54,7 +54,9 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     '/auth/me',
     { onRequest: [app.authenticate] },
     async (req) => {
-      return req.user
+      const { listPermissions } = await import('../../lib/acl.js')
+      const permissions = await listPermissions(req.user)
+      return { ...req.user, permissions }
     },
   )
 }
