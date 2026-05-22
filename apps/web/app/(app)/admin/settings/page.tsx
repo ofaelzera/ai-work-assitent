@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
+import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
+import { AdminSection } from '@/components/admin/AdminSection'
 
 interface Channel {
   id: string
@@ -21,25 +23,7 @@ interface Me {
   role: 'ADMIN' | 'MEMBER'
 }
 
-function Section({ title, description, icon: Icon, children }: {
-  title: string
-  description?: string
-  icon: React.ElementType
-  children: React.ReactNode
-}) {
-  return (
-    <div className="rounded-xl border bg-card overflow-hidden">
-      <div className="px-5 py-4 border-b bg-muted/20 flex items-center gap-2.5">
-        <Icon className="h-4 w-4 text-muted-foreground" />
-        <div>
-          <p className="font-semibold text-sm">{title}</p>
-          {description && <p className="text-xs text-muted-foreground">{description}</p>}
-        </div>
-      </div>
-      <div className="p-5">{children}</div>
-    </div>
-  )
-}
+
 
 function StatusDot({ status }: { status: Channel['status'] }) {
   return (
@@ -343,14 +327,12 @@ export default function SettingsPage() {
   const disconnected = channels.filter(c => c.status !== 'CONNECTED')
 
   return (
-    <div className="p-6 max-w-2xl space-y-6 h-full overflow-y-auto">
-      <div>
-        <h1 className="text-xl font-bold">Configurações</h1>
-        <p className="text-sm text-muted-foreground">Gerencie as configurações do workspace</p>
-      </div>
-
+    <AdminPageLayout
+      title="Configurações"
+      description="Gerencie as configurações do workspace"
+    >
       {/* Workspace */}
-      <Section title="Workspace" icon={Shield} description="Configurações gerais do espaço de trabalho">
+      <AdminSection title="Workspace" icon={Shield} description="Configurações gerais do espaço de trabalho">
         <div className="space-y-4">
           <div>
             <label className="text-xs font-medium">Nome do workspace</label>
@@ -379,17 +361,17 @@ export default function SettingsPage() {
             <p className="text-muted-foreground">Seu perfil: <span className="font-semibold text-foreground">{user?.role ?? '—'}</span></p>
           </div>
         </div>
-      </Section>
+      </AdminSection>
 
       {/* Regras globais de distribuição */}
       {isAdmin && (
-        <Section title="Regras globais de atendimento" icon={Users} description="Fallback para canais sem distribuição configurada">
+        <AdminSection title="Regras globais de atendimento" icon={Users} description="Fallback para canais sem distribuição configurada">
           <GlobalRulesPanel isAdmin={isAdmin} />
-        </Section>
+        </AdminSection>
       )}
 
       {/* Segurança */}
-      <Section title="Segurança" icon={Shield} description="Altere sua senha de acesso">
+      <AdminSection title="Segurança" icon={Shield} description="Altere sua senha de acesso">
         <div className="space-y-3">
           <div>
             <label className="text-xs font-medium">Senha atual</label>
@@ -438,10 +420,10 @@ export default function SettingsPage() {
             </button>
           </div>
         </div>
-      </Section>
+      </AdminSection>
 
       {/* Integrações */}
-      <Section title="Integrações" icon={Plug} description="Resumo dos canais conectados">
+      <AdminSection title="Integrações" icon={Plug} description="Resumo dos canais conectados">
         {chLoading && <p className="text-sm text-muted-foreground">Carregando...</p>}
 
         {!chLoading && channels.length === 0 && (
@@ -472,17 +454,17 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
-      </Section>
+      </AdminSection>
 
       {/* Manutenção (admin) */}
       {isAdmin && (
-        <Section title="Manutenção" icon={RefreshCw} description="Ferramentas de limpeza de dados">
+        <AdminSection title="Manutenção" icon={RefreshCw} description="Ferramentas de limpeza de dados">
           <MaintenancePanel />
-        </Section>
+        </AdminSection>
       )}
 
       {/* Vault Master Key */}
-      <Section title="Vault Master Key" icon={Key} description="Chave mestra de criptografia">
+      <AdminSection title="Vault Master Key" icon={Key} description="Chave mestra de criptografia">
         <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 p-4 text-sm text-amber-800 dark:text-amber-300 space-y-2">
           <p className="font-semibold flex items-center gap-2">
             <Key className="h-4 w-4" /> Configuração via variável de ambiente
@@ -494,7 +476,7 @@ export default function SettingsPage() {
             Para rotacionar a chave, atualize a variável de ambiente e reinicie o servidor. Todos os segredos precisarão ser re-criptografados.
           </p>
         </div>
-      </Section>
-    </div>
+      </AdminSection>
+    </AdminPageLayout>
   )
 }

@@ -5,8 +5,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
 import { RefreshCw, Trash2, QrCode, X, Download, UserCircle, Plus, CheckCircle2, AlertCircle, Clock, Zap, PenLine, ChevronDown, ChevronUp, Bell, Settings2 } from 'lucide-react'
+import { useAuthStore } from '@/store/auth'
 import { cn } from '@/lib/utils'
 import MessageTemplateField from '@/components/MessageTemplateField'
+import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 import RichEditor from '@/components/RichEditor'
 
 interface Channel {
@@ -813,11 +815,14 @@ export default function ChannelsPage() {
 
   return (
     <>
-    <div className={cn("p-6 max-w-4xl space-y-8 h-full", anyModalOpen ? "overflow-hidden" : "overflow-y-auto")}>
+    <AdminPageLayout
+      title="Canais"
+      description="Gerencie suas integrações de mensagens"
+      className={anyModalOpen ? "overflow-hidden" : ""}
+      maxWidth="4xl"
+    >
       {/* ── Canais conectados ── */}
       <div>
-        <h1 className="text-xl font-bold mb-1">Canais</h1>
-        <p className="text-sm text-muted-foreground mb-4">Gerencie suas integrações de mensagens</p>
 
         {isLoading && <p className="text-sm text-muted-foreground">Carregando...</p>}
 
@@ -887,7 +892,7 @@ export default function ChannelsPage() {
           ))}
         </div>
       </div>
-    </div>
+    </AdminPageLayout>
 
     {/* ── Modais — fora do container scrollável para overlay limpo ── */}
     {modal === 'whatsapp' && (

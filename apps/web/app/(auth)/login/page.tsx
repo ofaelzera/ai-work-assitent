@@ -39,7 +39,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative min-h-screen flex items-center justify-center bg-background p-4 overflow-hidden">
+    <div className="relative min-h-screen flex items-center justify-center bg-background p-4 overflow-hidden" suppressHydrationWarning>
       
       {/* Decorative Background Elements (Mesh Gradient feel) */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/20 blur-[120px] animate-pulse pointer-events-none" />
@@ -57,7 +57,7 @@ export default function LoginPage() {
             <p className="text-sm text-muted-foreground">Entre na sua conta para continuar</p>
           </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5" suppressHydrationWarning>
             <div className="space-y-1.5">
               <label htmlFor="email" className="text-sm font-medium text-foreground">
                 Email

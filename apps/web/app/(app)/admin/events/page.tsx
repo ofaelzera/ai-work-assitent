@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { Activity, ChevronDown, RefreshCw, Filter, User as UserIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 
 interface ActorRef { id: string; name: string | null; email: string }
 interface EventLog {
@@ -165,17 +166,17 @@ export default function EventsPage() {
   const hasFilters = typeFilter || actorFilter || targetIdFilter || from || to
 
   return (
-    <div className="p-6 max-w-5xl space-y-6 h-full overflow-y-auto">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold">Eventos & Auditoria</h1>
-          <p className="text-sm text-muted-foreground">Quem fez o quê, quando — atualiza a cada 30s</p>
-        </div>
+    <AdminPageLayout
+      title="Eventos & Auditoria"
+      description="Quem fez o quê, quando — atualiza a cada 30s"
+      maxWidth="5xl"
+      action={
         <button onClick={() => refetch()} disabled={isFetching}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm hover:bg-accent disabled:opacity-50">
           <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} /> Atualizar
         </button>
-      </div>
+      }
+    >
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-end">
@@ -238,6 +239,6 @@ export default function EventsPage() {
           {events.map(e => <EventRow key={e.id} event={e} />)}
         </div>
       )}
-    </div>
+    </AdminPageLayout>
   )
 }

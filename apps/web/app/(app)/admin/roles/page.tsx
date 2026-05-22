@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Shield, Plus, Pencil, Trash2, X, Check, Lock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm-dialog'
+import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 
 interface CustomRole {
   id: string
@@ -226,20 +227,19 @@ export default function RolesPage() {
   })
 
   return (
-    <div className="h-full overflow-y-auto p-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-bold">Roles e permissões</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Crie roles customizados pra controlar o que cada atendente pode fazer.
-          </p>
-        </div>
-        <button
-          onClick={() => setEditing('new')}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium">
-          <Plus className="h-3.5 w-3.5" /> Novo role
-        </button>
-      </div>
+    <>
+      <AdminPageLayout
+        title="Roles e permissões"
+        description="Crie roles customizados pra controlar o que cada atendente pode fazer."
+        action={
+          <button
+            onClick={() => setEditing('new')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium"
+          >
+            <Plus className="h-3.5 w-3.5" /> Novo role
+          </button>
+        }
+      >
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Carregando...</p>
@@ -300,6 +300,7 @@ export default function RolesPage() {
           ))}
         </div>
       )}
+      </AdminPageLayout>
 
       {editing && (
         <RoleFormModal
@@ -308,6 +309,6 @@ export default function RolesPage() {
           onClose={() => setEditing(null)}
         />
       )}
-    </div>
+    </>
   )
 }

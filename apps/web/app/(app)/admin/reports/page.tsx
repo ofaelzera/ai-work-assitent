@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { BarChart3, Users as UsersIcon, MessageSquare, Bot, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 
 type TabKey = 'agents' | 'channels' | 'queue' | 'ai'
 
@@ -333,13 +334,12 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="p-6 max-w-6xl space-y-6 h-full overflow-y-auto">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold flex items-center gap-2"><BarChart3 className="h-5 w-5" /> Relatórios</h1>
-          <p className="text-sm text-muted-foreground">Métricas operacionais por atendente, canal, fila e IA</p>
-        </div>
-      </div>
+    <AdminPageLayout
+      title="Relatórios"
+      description="Métricas operacionais por atendente, canal, fila e IA"
+      icon={BarChart3}
+      maxWidth="6xl"
+    >
 
       {/* Date range */}
       <div className="flex flex-wrap items-end gap-3">
@@ -385,6 +385,6 @@ export default function ReportsPage() {
         {tab === 'queue' && <QueueTab from={from} to={to} />}
         {tab === 'ai' && <AiTab from={from} to={to} />}
       </div>
-    </div>
+    </AdminPageLayout>
   )
 }

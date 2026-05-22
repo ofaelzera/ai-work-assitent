@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { ChevronDown, ChevronUp, AlertCircle, Clock, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 
 interface AgentRef { id: string; name: string }
 
@@ -174,11 +175,11 @@ export default function AILogsPage() {
   }
 
   return (
-    <div className="p-6 max-w-4xl space-y-6 h-full overflow-y-auto">
-      <div>
-        <h1 className="text-xl font-bold">Logs de IA</h1>
-        <p className="text-sm text-muted-foreground">Histórico de execuções dos agentes</p>
-      </div>
+    <AdminPageLayout
+      title="Logs de IA"
+      description="Histórico de execuções dos agentes"
+      maxWidth="4xl"
+    >
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-end">
@@ -243,6 +244,6 @@ export default function AILogsPage() {
           </button>
         </div>
       )}
-    </div>
+    </AdminPageLayout>
   )
 }
