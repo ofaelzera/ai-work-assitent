@@ -2,7 +2,22 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
 import { runAgent } from './agents/runAgent.js'
+import { runAgentWithTools } from './agents/runAgentWithTools.js'
 import { REPLY_SUGGESTER_SYSTEM_PROMPT } from './agents/prompts.js'
+import { listAvailableTools } from './tools/registry.js'
+import { invalidateAgentCache } from '../../workers/agentDispatcher.worker.js'
+
+const triggerSchema = z.object({
+  type: z.enum(['message.received', 'conversation.created', 'cron', 'manual']),
+  filters: z.object({
+    channelId: z.string().optional(),
+    channelType: z.string().optional(),
+    conversationExternalId: z.string().optional(),
+    bodyContains: z.string().optional(),
+    direction: z.enum(['INBOUND', 'OUTBOUND']).optional(),
+  }).optional(),
+  schedule: z.string().optional(),
+}).nullable()
 
 export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
 
@@ -27,13 +42,22 @@ export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
           model: z.string().default('gemini-2.5-flash'),
           provider: z.string().default('gemini'),
           temperature: z.number().min(0).max(2).default(0.4),
+          trigger: triggerSchema.optional(),
+          enabledTools: z.array(z.string()).optional(),
         }),
       },
     },
     async (req, reply) => {
+      const { trigger, enabledTools, ...rest } = req.body
       const agent = await prisma.agent.create({
-        data: { workspaceId: req.user.workspaceId, ...req.body },
+        data: {
+          workspaceId: req.user.workspaceId,
+          ...rest,
+          ...(trigger !== undefined && { trigger: trigger as any }),
+          ...(enabledTools && { enabledTools: enabledTools as any }),
+        },
       })
+      invalidateAgentCache(req.user.workspaceId)
       return reply.code(201).send(agent)
     },
   )
@@ -52,20 +76,35 @@ export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
           provider: z.string().optional(),
           temperature: z.number().min(0).max(2).optional(),
           isActive: z.boolean().optional(),
+          trigger: triggerSchema.optional(),
+          enabledTools: z.array(z.string()).optional(),
         }),
       },
     },
     async (req) => {
-      return prisma.agent.update({
+      const { trigger, enabledTools, ...rest } = req.body
+      const updated = await prisma.agent.update({
         where: { id: req.params.id, workspaceId: req.user.workspaceId },
-        data: req.body,
+        data: {
+          ...rest,
+          ...(trigger !== undefined && { trigger: trigger as any }),
+          ...(enabledTools !== undefined && { enabledTools: enabledTools as any }),
+        },
       })
+      invalidateAgentCache(req.user.workspaceId)
+      return updated
     },
   )
 
   app.delete('/ai/agents/:id', { onRequest: [app.authenticate] }, async (req: any, reply) => {
     await prisma.agent.delete({ where: { id: req.params.id, workspaceId: req.user.workspaceId } })
+    invalidateAgentCache(req.user.workspaceId)
     return reply.code(204).send()
+  })
+
+  // ── Listagem de tools disponíveis (pra UI montar o multi-select) ──────────
+  app.get('/ai/tools', { onRequest: [app.authenticate] }, async () => {
+    return listAvailableTools()
   })
 
   // ── Prompts ────────────────────────────────────────────────────────────────
@@ -137,16 +176,34 @@ export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
       onRequest: [app.authenticate],
       schema: {
         params: z.object({ id: z.string() }),
-        body: z.object({ input: z.string().min(1) }),
+        body: z.object({
+          input: z.string().min(1),
+          dryRun: z.boolean().optional(),
+        }),
       },
     },
     async (req) => {
-      const result = await runAgent({
+      // Se o agente tem tools habilitados, usa o runtime v2 — senão, fallback simples
+      const agent = await prisma.agent.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId },
+        select: { enabledTools: true },
+      })
+      const hasTools = Array.isArray(agent?.enabledTools) && (agent!.enabledTools as string[]).length > 0
+
+      if (hasTools) {
+        return runAgentWithTools({
+          agentId: req.params.id,
+          workspaceId: req.user.workspaceId,
+          userMessage: req.body.input,
+          dryRun: req.body.dryRun ?? false,
+        })
+      }
+
+      return runAgent({
         agentId: req.params.id,
         workspaceId: req.user.workspaceId,
         messages: [{ role: 'user', content: req.body.input }],
       })
-      return result
     },
   )
 

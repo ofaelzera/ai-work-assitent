@@ -423,8 +423,12 @@ export function startIngestWhatsappWorker() {
       await eventBus.emitAndPersist(workspaceId, 'message.received', {
         messageId: msg.id,
         conversationId: conversation.id,
+        contactId: contact?.id ?? null,
         channelId,
-        type: 'WHATSAPP',
+        channelType: 'WHATSAPP',
+        conversationExternalId: conversation.externalId,
+        body: msg.body ?? '',
+        direction: 'INBOUND',
       })
 
       // Enfileira triage de IA para mensagens inbound — pula em conversas arquivadas

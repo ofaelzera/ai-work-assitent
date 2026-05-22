@@ -4,8 +4,24 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Bot, Plus, Pencil, Trash2, Play, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Bot, Plus, Pencil, Trash2, Play, X, ChevronDown, ChevronUp, Zap, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+type TriggerType = 'message.received' | 'conversation.created' | 'cron' | 'manual'
+
+interface TriggerConfig {
+  type: TriggerType
+  filters?: {
+    channelId?: string
+    channelType?: string
+    conversationExternalId?: string
+    bodyContains?: string
+    direction?: 'INBOUND' | 'OUTBOUND'
+  }
+  schedule?: string
+}
+
+interface ToolMeta { name: string; description: string }
 
 interface Agent {
   id: string
@@ -17,6 +33,8 @@ interface Agent {
   temperature: number
   isActive: boolean
   createdAt: string
+  trigger?: TriggerConfig | null
+  enabledTools?: string[] | null
 }
 
 const MODELS: { group: string; items: { value: string; provider: string; label: string }[] }[] = [
@@ -55,7 +73,11 @@ const ALL_MODEL_OPTIONS = MODELS.flatMap(g => g.items)
 const DEFAULT_FORM = {
   name: '', description: '', systemPrompt: '', model: 'gemini-2.5-flash',
   provider: 'gemini', temperature: 0.4,
+  trigger: null as TriggerConfig | null,
+  enabledTools: [] as string[],
 }
+
+const CHANNEL_TYPES = ['WHATSAPP', 'IMAP_SMTP', 'GMAIL', 'TELEGRAM', 'INSTAGRAM']
 
 export default function AgentsPage() {
   const queryClient = useQueryClient()
@@ -70,6 +92,18 @@ export default function AgentsPage() {
   const { data: agents = [], isLoading } = useQuery({
     queryKey: ['agents'],
     queryFn: () => apiFetch<Agent[]>('/ai/agents'),
+  })
+
+  const { data: availableTools = [] } = useQuery({
+    queryKey: ['ai-tools'],
+    queryFn: () => apiFetch<ToolMeta[]>('/ai/tools'),
+    staleTime: 5 * 60_000,
+  })
+
+  const { data: channels = [] } = useQuery<{ id: string; label: string; type: string }[]>({
+    queryKey: ['channels'],
+    queryFn: () => apiFetch('/channels'),
+    staleTime: 60_000,
   })
 
   const saveMutation = useMutation({
@@ -102,20 +136,45 @@ export default function AgentsPage() {
       name: agent.name, description: agent.description ?? '',
       systemPrompt: agent.systemPrompt, model: agent.model,
       provider: agent.provider, temperature: agent.temperature,
+      trigger: agent.trigger ?? null,
+      enabledTools: agent.enabledTools ?? [],
     })
     setShowForm(true)
   }
 
-  const handleTest = async (agent: Agent) => {
+  const handleTest = async (agent: Agent, dryRun = false) => {
     if (!testInput.trim()) { toast.error('Digite um input para testar'); return }
     setTestingId(agent.id); setTestResult(null)
     try {
-      const res = await apiFetch<{ text: string }>(`/ai/agents/${agent.id}/run`, {
-        method: 'POST', body: JSON.stringify({ input: testInput }),
+      const res = await apiFetch<any>(`/ai/agents/${agent.id}/run`, {
+        method: 'POST', body: JSON.stringify({ input: testInput, dryRun }),
       })
-      setTestResult(res.text)
-    } catch { toast.error('Erro ao testar agente') }
+      // Resposta v2 traz toolInvocations; v1 traz só text
+      if (res.toolInvocations) {
+        const summary = [
+          res.text && `Reply: ${res.text}`,
+          res.toolInvocations.length > 0 &&
+            `Tool calls:\n${res.toolInvocations.map((i: any) =>
+              `• ${i.call.name}(${JSON.stringify(i.call.params)}) → ${i.result.ok ? '✅' : '❌ ' + (i.result.error ?? '')}`
+            ).join('\n')}`,
+          dryRun && '(dry-run — tools não executados)',
+        ].filter(Boolean).join('\n\n')
+        setTestResult(summary)
+      } else {
+        setTestResult(res.text)
+      }
+    } catch (e: any) { toast.error(e?.message ?? 'Erro ao testar agente') }
     finally { setTestingId(null) }
+  }
+
+  const updateTriggerField = (patch: Partial<TriggerConfig> | { filters: Partial<NonNullable<TriggerConfig['filters']>> }) => {
+    setForm(p => {
+      const cur = p.trigger ?? { type: 'manual' as TriggerType }
+      if ('filters' in patch) {
+        return { ...p, trigger: { ...cur, filters: { ...(cur.filters ?? {}), ...patch.filters } } }
+      }
+      return { ...p, trigger: { ...cur, ...patch } }
+    })
   }
 
   return (
@@ -190,6 +249,124 @@ export default function AgentsPage() {
             </div>
           </div>
 
+          {/* ── Trigger ─────────────────────────────────────────────────── */}
+          <div className="space-y-2 border rounded-lg p-3 bg-muted/10">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold flex items-center gap-1.5">
+                <Zap className="h-3.5 w-3.5 text-amber-500" /> Trigger — quando este agente roda
+              </label>
+              {form.trigger && (
+                <button type="button" onClick={() => setForm(p => ({ ...p, trigger: null }))}
+                  className="text-[11px] text-muted-foreground hover:text-foreground">
+                  Limpar
+                </button>
+              )}
+            </div>
+            <select
+              value={form.trigger?.type ?? 'manual'}
+              onChange={e => updateTriggerField({ type: e.target.value as TriggerType, filters: {} })}
+              className="w-full rounded-lg border bg-background px-3 py-1.5 text-sm">
+              <option value="manual">Manual (só executa via botão "Testar")</option>
+              <option value="message.received">Mensagem recebida</option>
+              <option value="conversation.created">Conversa criada</option>
+              <option value="cron">Recorrente (cron)</option>
+            </select>
+
+            {form.trigger?.type === 'message.received' && (
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <label className="text-[11px] text-muted-foreground">Canal específico</label>
+                  <select
+                    value={form.trigger.filters?.channelId ?? ''}
+                    onChange={e => updateTriggerField({ filters: { channelId: e.target.value || undefined } })}
+                    className="mt-0.5 w-full rounded-lg border bg-background px-2 py-1 text-xs">
+                    <option value="">Qualquer canal</option>
+                    {channels.map(c => <option key={c.id} value={c.id}>{c.label} ({c.type})</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground">Tipo de canal</label>
+                  <select
+                    value={form.trigger.filters?.channelType ?? ''}
+                    onChange={e => updateTriggerField({ filters: { channelType: e.target.value || undefined } })}
+                    className="mt-0.5 w-full rounded-lg border bg-background px-2 py-1 text-xs">
+                    <option value="">Qualquer</option>
+                    {CHANNEL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[11px] text-muted-foreground">Texto contém (case-insensitive)</label>
+                  <input
+                    value={form.trigger.filters?.bodyContains ?? ''}
+                    onChange={e => updateTriggerField({ filters: { bodyContains: e.target.value || undefined } })}
+                    placeholder="ex: urgente, rafael, agendamento..."
+                    className="mt-0.5 w-full rounded-lg border bg-transparent px-2 py-1 text-xs" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[11px] text-muted-foreground">ID externo da conversa (ex: grupo WhatsApp)</label>
+                  <input
+                    value={form.trigger.filters?.conversationExternalId ?? ''}
+                    onChange={e => updateTriggerField({ filters: { conversationExternalId: e.target.value || undefined } })}
+                    placeholder="ex: 5511999...@g.us"
+                    className="mt-0.5 w-full rounded-lg border bg-transparent px-2 py-1 text-xs font-mono" />
+                </div>
+              </div>
+            )}
+
+            {form.trigger?.type === 'cron' && (
+              <div className="mt-2">
+                <label className="text-[11px] text-muted-foreground">Schedule cron (5 campos)</label>
+                <input
+                  value={form.trigger.schedule ?? ''}
+                  onChange={e => updateTriggerField({ schedule: e.target.value })}
+                  placeholder="0 8 * * *  (todos os dias às 8h)"
+                  className="mt-0.5 w-full rounded-lg border bg-transparent px-2 py-1 text-xs font-mono" />
+                <p className="text-[10px] text-muted-foreground/70 mt-1">Cron não está executando ainda (fase 8b).</p>
+              </div>
+            )}
+
+            <details className="mt-2">
+              <summary className="text-[10px] text-muted-foreground cursor-pointer">Ver JSON do trigger</summary>
+              <pre className="mt-1 text-[10px] bg-muted/40 rounded p-2 font-mono overflow-x-auto">
+                {JSON.stringify(form.trigger, null, 2)}
+              </pre>
+            </details>
+          </div>
+
+          {/* ── Tools ───────────────────────────────────────────────────── */}
+          <div className="space-y-2 border rounded-lg p-3 bg-muted/10">
+            <label className="text-xs font-semibold flex items-center gap-1.5">
+              <Wrench className="h-3.5 w-3.5 text-violet-500" /> Tools — ações que o agente pode executar
+            </label>
+            {availableTools.length === 0 && (
+              <p className="text-[11px] text-muted-foreground">Nenhuma tool disponível</p>
+            )}
+            <div className="space-y-1.5">
+              {availableTools.map(t => {
+                const selected = form.enabledTools.includes(t.name)
+                return (
+                  <label key={t.name}
+                    className={cn('flex items-start gap-2 rounded-lg border p-2 text-xs cursor-pointer hover:bg-accent/40',
+                      selected && 'border-primary bg-primary/5')}>
+                    <input
+                      type="checkbox" checked={selected}
+                      onChange={() => setForm(p => ({
+                        ...p,
+                        enabledTools: selected
+                          ? p.enabledTools.filter(n => n !== t.name)
+                          : [...p.enabledTools, t.name],
+                      }))}
+                      className="mt-0.5 accent-primary" />
+                    <div className="min-w-0">
+                      <p className="font-medium font-mono">{t.name}</p>
+                      <p className="text-[11px] text-muted-foreground">{t.description}</p>
+                    </div>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2">
             <button onClick={() => { setShowForm(false); setEditing(null) }}
               className="px-4 py-2 rounded-lg text-sm hover:bg-accent">Cancelar</button>
@@ -227,6 +404,18 @@ export default function AgentsPage() {
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground truncate">{agent.description ?? agent.model}</p>
+                <div className="flex flex-wrap items-center gap-1 mt-1">
+                  {agent.trigger && agent.trigger.type !== 'manual' && (
+                    <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                      <Zap className="h-2.5 w-2.5" /> {agent.trigger.type}
+                    </span>
+                  )}
+                  {(agent.enabledTools ?? []).map(t => (
+                    <span key={t} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 font-mono">
+                      <Wrench className="h-2.5 w-2.5" /> {t}
+                    </span>
+                  ))}
+                </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <button onClick={() => toggleMutation.mutate({ id: agent.id, isActive: !agent.isActive })}
@@ -257,7 +446,14 @@ export default function AgentsPage() {
                   <input value={testInput} onChange={e => setTestInput(e.target.value)}
                     placeholder="Input para testar o agente..."
                     className="flex-1 rounded-lg border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
-                  <button onClick={() => handleTest(agent)} disabled={testingId === agent.id}
+                  {(agent.enabledTools?.length ?? 0) > 0 && (
+                    <button onClick={() => handleTest(agent, true)} disabled={testingId === agent.id}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm hover:bg-accent disabled:opacity-50"
+                      title="Simula sem executar tools de verdade">
+                      Dry-run
+                    </button>
+                  )}
+                  <button onClick={() => handleTest(agent, false)} disabled={testingId === agent.id}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm disabled:opacity-50">
                     <Play className="h-3.5 w-3.5" />
                     {testingId === agent.id ? 'Executando...' : 'Testar'}

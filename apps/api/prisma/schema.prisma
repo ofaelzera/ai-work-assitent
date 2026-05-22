@@ -389,7 +389,9 @@ model Agent {
   model        String
   provider     String
   temperature  Float    @default(0.4)
-  tools        Json?
+  tools        Json?    // legacy / livre — não usado pelo runtime v2
+  trigger      Json?    // { type, filters, schedule? } — vê apps/api/src/modules/ai/triggers.ts
+  enabledTools Json?    // string[] dos tools habilitados (ver tools/registry.ts)
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
