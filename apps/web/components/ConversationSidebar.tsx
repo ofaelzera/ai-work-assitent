@@ -642,27 +642,28 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Pesquisar"
             className="w-full rounded-full border bg-accent/50 pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
         </div>
-        {/* Tabs — flex-wrap em vez de scroll horizontal pra nada cortar */}
-        <div className="flex flex-wrap gap-1 pt-0.5">
+        {/* Tabs — scroll horizontal elegante */}
+        <div className="flex overflow-x-auto no-scrollbar gap-1.5 pt-2 pb-2 px-1 -mx-1 mask-edges">
           {visibleTabs.map((tab) => {
             const isQueueTab = tab.value === 'queue'
             const showBadge = isQueueTab && queueCount > 0
+            const isActive = filter === tab.value
             return (
               <button
                 key={tab.value}
                 onClick={() => setFilter(tab.value)}
                 title={TAB_TITLES[tab.value]}
                 className={cn(
-                  'shrink-0 text-[11px] py-1 px-2 rounded-full font-medium transition-colors flex items-center gap-1',
-                  filter === tab.value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent',
+                  'shrink-0 text-[11px] py-1.5 px-3 rounded-full font-medium transition-all duration-200 flex items-center gap-1.5 border',
+                  isActive
+                    ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                    : 'bg-accent/30 text-muted-foreground border-transparent hover:bg-accent hover:text-foreground',
                 )}>
                 {tab.label}
                 {showBadge && (
                   <span className={cn(
                     'inline-flex items-center justify-center text-[10px] font-bold rounded-full min-w-[16px] h-[16px] px-1 leading-none',
-                    filter === tab.value
+                    isActive
                       ? 'bg-primary-foreground text-primary'
                       : 'bg-amber-500 text-white',
                   )}>

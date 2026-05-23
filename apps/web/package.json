@@ -21,6 +21,7 @@
     "@tiptap/starter-kit": "^3.23.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "emoji-picker-react": "^4.19.1",
     "lucide-react": "^0.402.0",
     "next": "14.2.5",
     "next-themes": "^0.4.6",

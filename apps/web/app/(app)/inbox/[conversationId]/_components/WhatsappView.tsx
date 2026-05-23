@@ -9,7 +9,7 @@ import {
   Send, Paperclip, FileText, Music, Video, Image as ImageIcon, X,
   ZoomIn, Download, Kanban, Phone, Mail, Reply,
   Check, CheckCheck, Sparkles, CheckCircle2, RotateCcw, Clock3, UserRound, ChevronDown,
-  LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History,
+  LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History, MoreVertical
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
@@ -983,6 +983,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const [showLibraryPicker, setShowLibraryPicker] = useState(false)
   const [saveToLibraryMsg, setSaveToLibraryMsg] = useState<{ id: string; filename?: string } | null>(null)
   const [showCreateMenu, setShowCreateMenu] = useState(false)
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showContact, setShowContact] = useState(false)
   const [showRelease, setShowRelease] = useState(false)
   const [showForward, setShowForward] = useState(false)
@@ -1035,7 +1036,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
-      setText(''); setReplyTo(null)
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
     },
   })
 
@@ -1159,7 +1160,10 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const presenceTxt = presenceLabel(presence)
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const timer = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }, 100)
+    return () => clearTimeout(timer)
   }, [messages.length])
 
   // Foca o input ao iniciar reply
@@ -1194,7 +1198,16 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
     if (pendingFile) { sendMediaMutation.mutate({ file: pendingFile, caption }); return }
     const trimmed = text.trim()
     if (!trimmed || sendMutation.isPending) return
+    
+    // Optimistic UI updates
     stopComposing()
+    setText('')
+    setReplyTo(null)
+    setTimeout(() => {
+      textareaRef.current?.focus()
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }, 100)
+    
     sendMutation.mutate({
       text: trimmed,
       ...(replyTo && {
@@ -1208,6 +1221,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
     if (e.key === 'Escape' && replyTo) setReplyTo(null)
+
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1292,87 +1306,107 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
             ) : null}
 
             <AssigneeChip conversationId={conversationId} assignee={conv.assignee} />
-            <button
-              onClick={() => setShowTimeline(true)}
-              className="flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent transition-colors"
-              title="Histórico de auditoria">
-              <History className="h-3.5 w-3.5" /> Histórico
-            </button>
-            {/* Encaminhar + Devolver — só quem tem a conversa (ou admin) */}
-            {(isMyConv || isAdmin) && conv.assigneeId && (
-              <>
+
+            {/* Ações principais sempre visíveis */}
+            <div className="flex items-center gap-1.5 ml-1 border-l pl-3 border-border/50">
+              <div className="relative">
                 <button
-                  onClick={() => setShowForward(true)}
-                  className="flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-medium text-blue-600 border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
-                  title="Encaminhar para outro atendente">
-                  <LogIn className="h-3.5 w-3.5 rotate-180" /> Encaminhar
+                  onClick={() => setShowCreateMenu(v => !v)}
+                  onBlur={() => setTimeout(() => setShowCreateMenu(false), 200)}
+                  className="flex items-center justify-center h-8 w-8 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                  title="Criar tarefa, evento ou card">
+                  <Plus className="h-4 w-4" />
                 </button>
+                {showCreateMenu && (
+                  <div className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-48">
+                    <button
+                      onMouseDown={() => { setShowCardModal(true); setShowCreateMenu(false) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
+                      <Kanban className="h-3.5 w-3.5 text-violet-500" />
+                      <div>
+                        <p className="font-medium">Card no Kanban</p>
+                        <p className="text-[10px] text-muted-foreground">Adicionar a um board</p>
+                      </div>
+                    </button>
+                    <button
+                      onMouseDown={() => { setShowTaskModal({}); setShowCreateMenu(false) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left border-t">
+                      <ListTodo className="h-3.5 w-3.5 text-blue-500" />
+                      <div>
+                        <p className="font-medium">Tarefa / Lembrete</p>
+                        <p className="text-[10px] text-muted-foreground">Com data e responsável</p>
+                      </div>
+                    </button>
+                    <button
+                      onMouseDown={() => { setShowEventModal({}); setShowCreateMenu(false) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left border-t">
+                      <CalendarPlus className="h-3.5 w-3.5 text-emerald-500" />
+                      <div>
+                        <p className="font-medium">Evento no Calendário</p>
+                        <p className="text-[10px] text-muted-foreground">Sincroniza com Google</p>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Botão Finalizar em destaque solid */}
+              {conv.status === 'RESOLVED' ? (
                 <button
-                  onClick={() => setShowRelease(true)}
-                  className="flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-medium text-amber-600 border-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
-                  title="Devolver à fila">
-                  <LogOut className="h-3.5 w-3.5" /> Devolver
+                  onClick={() => statusMutation.mutate('OPEN')}
+                  disabled={statusMutation.isPending}
+                  className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+                  title="Reabrir conversa">
+                  <RotateCcw className="h-3.5 w-3.5" /> Reabrir
                 </button>
-              </>
-            )}
-            {/* Dropdown "+ Criar..." (Card / Tarefa / Evento) */}
-            <div className="relative">
-              <button
-                onClick={() => setShowCreateMenu(v => !v)}
-                onBlur={() => setTimeout(() => setShowCreateMenu(false), 200)}
-                className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
-                <Plus className="h-3.5 w-3.5" /> Criar
-                <ChevronDown className="h-3 w-3 opacity-60" />
-              </button>
-              {showCreateMenu && (
-                <div className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-48">
-                  <button
-                    onMouseDown={() => { setShowCardModal(true); setShowCreateMenu(false) }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
-                    <Kanban className="h-3.5 w-3.5 text-violet-500" />
-                    <div>
-                      <p className="font-medium">Card no Kanban</p>
-                      <p className="text-[10px] text-muted-foreground">Adicionar a um board</p>
-                    </div>
-                  </button>
-                  <button
-                    onMouseDown={() => { setShowTaskModal({}); setShowCreateMenu(false) }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left border-t">
-                    <ListTodo className="h-3.5 w-3.5 text-blue-500" />
-                    <div>
-                      <p className="font-medium">Tarefa / Lembrete</p>
-                      <p className="text-[10px] text-muted-foreground">Com data e responsável</p>
-                    </div>
-                  </button>
-                  <button
-                    onMouseDown={() => { setShowEventModal({}); setShowCreateMenu(false) }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left border-t">
-                    <CalendarPlus className="h-3.5 w-3.5 text-emerald-500" />
-                    <div>
-                      <p className="font-medium">Evento no Calendário</p>
-                      <p className="text-[10px] text-muted-foreground">Sincroniza com Google</p>
-                    </div>
-                  </button>
-                </div>
+              ) : (
+                <button
+                  onClick={() => statusMutation.mutate('RESOLVED')}
+                  disabled={statusMutation.isPending}
+                  className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50 shadow-sm"
+                  title="Finalizar atendimento">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Finalizar
+                </button>
               )}
+
+              {/* Mais opções (Histórico, Encaminhar, Devolver) */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowMoreMenu(v => !v)}
+                  onBlur={() => setTimeout(() => setShowMoreMenu(false), 200)}
+                  className="flex items-center justify-center h-8 w-8 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                  title="Mais opções">
+                  <MoreVertical className="h-4 w-4" />
+                </button>
+                {showMoreMenu && (
+                  <div className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-48 py-1">
+                    <button
+                      onMouseDown={() => { setShowTimeline(true); setShowMoreMenu(false) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left text-muted-foreground hover:text-foreground">
+                      <History className="h-3.5 w-3.5" />
+                      <span className="font-medium">Histórico da conversa</span>
+                    </button>
+                    {(isMyConv || isAdmin) && conv.assigneeId && (
+                      <>
+                        <div className="h-px bg-border my-1" />
+                        <button
+                          onMouseDown={() => { setShowForward(true); setShowMoreMenu(false) }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 text-left">
+                          <LogIn className="h-3.5 w-3.5 rotate-180" />
+                          <span className="font-medium">Encaminhar</span>
+                        </button>
+                        <button
+                          onMouseDown={() => { setShowRelease(true); setShowMoreMenu(false) }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-amber-50 dark:hover:bg-amber-900/20 text-amber-600 dark:text-amber-400 text-left">
+                          <LogOut className="h-3.5 w-3.5" />
+                          <span className="font-medium">Devolver à fila</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-            {conv.status === 'RESOLVED' ? (
-              <button
-                onClick={() => statusMutation.mutate('OPEN')}
-                disabled={statusMutation.isPending}
-                className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-                title="Reabrir conversa">
-                <RotateCcw className="h-3.5 w-3.5" /> Reabrir
-              </button>
-            ) : (
-              <button
-                onClick={() => statusMutation.mutate('RESOLVED')}
-                disabled={statusMutation.isPending}
-                className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:border-emerald-800 dark:text-emerald-400 transition-colors disabled:opacity-50"
-                title="Finalizar atendimento">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Finalizar
-              </button>
-            )}
           </div>
         </div>
 
@@ -1704,41 +1738,61 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           </div>
         ) : (
           /* Caso 3: minha conversa — input normal */
-          <div className="px-4 py-3 border-t bg-card shrink-0">
+          <div className="px-4 py-3 bg-card shrink-0">
             <input ref={fileInputRef} type="file"
               accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt"
               className="hidden" onChange={handleFileSelect} />
-            <div className="flex items-end gap-2">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="p-2.5 rounded-xl border hover:bg-accent text-muted-foreground shrink-0"
-                title="Anexar arquivo da máquina">
-                <Paperclip className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => setShowLibraryPicker(true)}
-                className="p-2.5 rounded-xl border hover:bg-accent text-muted-foreground shrink-0"
-                title="Anexar dos meus arquivos">
-                <FolderOpen className="h-4 w-4" />
-              </button>
+            <div className="max-w-5xl mx-auto w-full">
               {!pendingFile && (
-                <div className="flex-1">
-                  <ChatInput
-                    value={text}
-                    onChange={setText}
-                    onSend={handleSend}
-                    onTyping={sendComposing}
-                    disabled={sendMutation.isPending || sendMediaMutation.isPending}
-                  />
+                <ChatInput
+                  value={text}
+                  onChange={setText}
+                  onSend={handleSend}
+                  onTyping={sendComposing}
+                  disabled={sendMediaMutation.isPending}
+                  inputRef={textareaRef}
+                  leftToolbarActions={
+                    <>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                        title="Anexar arquivo da máquina">
+                        <Paperclip className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => setShowLibraryPicker(true)}
+                        className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                        title="Anexar dos meus arquivos">
+                        <FolderOpen className="h-4 w-4" />
+                      </button>
+                    </>
+                  }
+                  bottomRightActions={
+                    <>
+                      <SuggestReplyButton 
+                        conversationId={conversationId} 
+                        onSelect={t => { setText(t ?? ''); setTimeout(() => textareaRef.current?.focus(), 50) }} 
+                      />
+                      <button 
+                        onClick={handleSend}
+                        disabled={!(text ?? '').trim() || sendMutation.isPending}
+                        className="rounded-full bg-primary text-primary-foreground p-2 hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-transform active:scale-95 flex items-center justify-center">
+                        <Send className="h-4 w-4" />
+                      </button>
+                    </>
+                  }
+                />
+              )}
+              {pendingFile && (
+                <div className="flex items-end gap-2">
+                  <div className="flex-1" />
+                  <button onClick={handleSend}
+                    disabled={sendMediaMutation.isPending}
+                    className="rounded-full bg-primary text-primary-foreground p-3 hover:bg-primary/90 shadow-sm transition-transform active:scale-95 flex items-center justify-center">
+                    <Send className="h-5 w-5" />
+                  </button>
                 </div>
               )}
-              {pendingFile && <div className="flex-1" />}
-              <SuggestReplyButton conversationId={conversationId} onSelect={t => { setText(t ?? ''); setTimeout(() => textareaRef.current?.focus(), 50) }} />
-              <button onClick={handleSend}
-                disabled={pendingFile ? sendMediaMutation.isPending : !(text ?? '').trim() || sendMutation.isPending}
-                className="rounded-xl bg-primary text-primary-foreground p-2.5 hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shrink-0">
-                <Send className="h-4 w-4" />
-              </button>
             </div>
           </div>
         )}
