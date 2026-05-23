@@ -34,6 +34,8 @@ interface Attachment { type?: string; mimetype?: string }
 interface Conversation {
   id: string
   externalId: string
+  type?: 'EXTERNAL' | 'DIRECT' | 'GROUP'
+  name?: string | null
   isGroup: boolean
   favorite: boolean
   archived: boolean
@@ -49,7 +51,8 @@ interface Conversation {
     company?: { id: string; name: string; color: string } | null
   } | null
   channel: { id: string; type: string; label: string }
-  messages: Array<{ body: string; sentAt: string; direction: string; attachments?: Attachment[] | null }>
+  participants?: Array<{ userId: string; user: { id: string; name: string; email: string } }>
+  messages: Array<{ body: string; sentAt: string; direction: string; attachments?: Attachment[] | null; fromUserId?: string | null }>
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,6 +75,9 @@ function ChannelBadge({ type }: { type: string }) {
   )
   if (type === 'GMAIL') return (
     <span className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full flex items-center justify-center text-white text-[8px] font-bold shadow-sm" style={{ background: '#EA4335' }}>G</span>
+  )
+  if (type === 'INTERNAL') return (
+    <span className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full flex items-center justify-center text-white text-[8px] font-bold shadow-sm bg-emerald-500" title="Chat interno">I</span>
   )
   return (
     <span className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full flex items-center justify-center text-white text-[8px] font-bold shadow-sm bg-blue-500">@</span>
@@ -132,15 +138,24 @@ function ConversationItem({ conv, active, onClick, onFavorite, onArchive, presen
   // Se o "phone" é um ID interno do WhatsApp (15+ dígitos), não usa como displayName
   const phoneDisplay = phone && !isInternalId(phone) ? formatPhone(phone) : null
 
+  // Chat interno: nome do grupo ou nome do outro participante (DM)
+  const isInternal = conv.channel.type === 'INTERNAL'
+  const internalName = isInternal
+    ? conv.type === 'GROUP'
+      ? (conv.name ?? 'Grupo')
+      : (conv.participants?.find((p) => !!p.user)?.user.name ?? 'Conversa')
+    : null
+
   // Para grupos: prioriza subject (nome real do grupo), depois JID limpo, nunca nome do remetente
   // Para DMs: prioriza nome do contato, depois telefone, depois subject (email), depois externalId
-  const displayName = conv.isGroup
-    ? (conv.subject ?? `Grupo ${conv.externalId.replace('@g.us', '').slice(-6)}`)
-    : (conv.contact?.name && conv.contact.name !== phone
-        ? conv.contact.name
-        : phoneDisplay
-          ?? conv.subject
-          ?? conv.externalId.replace('@s.whatsapp.net', '').replace('@g.us', ''))
+  const displayName = internalName
+    ?? (conv.isGroup
+      ? (conv.subject ?? `Grupo ${conv.externalId.replace('@g.us', '').slice(-6)}`)
+      : (conv.contact?.name && conv.contact.name !== phone
+          ? conv.contact.name
+          : phoneDisplay
+            ?? conv.subject
+            ?? conv.externalId.replace('@s.whatsapp.net', '').replace('@g.us', '')))
 
   const lastMsg = conv.messages[0]
   const hasUnread = conv.unreadCount > 0
