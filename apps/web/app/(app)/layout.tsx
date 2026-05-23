@@ -35,6 +35,7 @@ import { useQuery } from '@tanstack/react-query'
 const navItems: Array<{ href: string; label: string; icon: any; perm?: string }> = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/inbox',     label: 'Inbox',     icon: MessageSquare },
+  { href: '/chat',      label: 'Chat',      icon: MessageSquare },
   { href: '/kanban',    label: 'Kanban',    icon: Kanban },
   { href: '/calendar',  label: 'Agenda',    icon: Calendar },
   { href: '/tasks',     label: 'Tarefas',   icon: CheckSquare },
@@ -65,6 +66,22 @@ function userHasPerm(user: { role: string; permissions?: string[] } | null, perm
   if (!perm) return true
   if (user.role === 'ADMIN') return true
   return (user.permissions ?? []).includes(perm)
+}
+
+function ChatUnreadBadge() {
+  const { data } = useQuery({
+    queryKey: ['chat', 'unread-total'],
+    queryFn: () => apiFetch<{ total: number }>('/chat/unread-count'),
+    refetchInterval: 30_000,
+    staleTime: 5_000,
+  })
+  const total = data?.total ?? 0
+  if (total === 0) return null
+  return (
+    <span className="h-5 min-w-[20px] px-1.5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center shrink-0">
+      {total > 99 ? '99+' : total}
+    </span>
+  )
 }
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -165,7 +182,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   <div className="absolute left-0 w-1 h-8 bg-primary rounded-r-full shadow-[0_0_8px_rgba(var(--primary),0.5)]" />
                 )}
                 <item.icon className={cn("h-[18px] w-[18px] transition-transform duration-200", isActive ? "scale-110" : "group-hover:scale-110")} />
-                {item.label}
+                <span className="flex-1">{item.label}</span>
+                {item.href === '/chat' && <ChatUnreadBadge />}
               </Link>
             )
           })}
