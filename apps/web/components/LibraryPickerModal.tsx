@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
@@ -47,28 +47,82 @@ interface Props {
   conversationId: string
   onClose: () => void
   onSent?: () => void
+  /**
+   * Variante do destino:
+   *  - 'external' (default): envia para canal externo via /conversations/:id/messages/from-library
+   *  - 'chat': envia para sala de chat interno via /chat/rooms/:id/messages/from-library
+   */
+  variant?: 'external' | 'chat'
 }
 
-export default function LibraryPickerModal({ conversationId, onClose, onSent }: Props) {
+export default function LibraryPickerModal({ conversationId, onClose, onSent, variant = 'external' }: Props) {
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [selectedFile, setSelectedFile] = useState<StorageFile | null>(null)
   const [caption, setCaption] = useState('')
 
-  const { data: folders = [] } = useQuery<Folder[]>({
-    queryKey: ['storage-folders', currentFolderId],
-    queryFn: () => apiFetch(`/storage/folders${currentFolderId ? `?parentId=${currentFolderId}` : ''}`),
-  })
+  // Fetch direto (sem React Query) para evitar qualquer interferência de cache.
+  // Carrega pastas e arquivos sempre que a pasta atual ou a busca mudarem.
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [files, setFiles] = useState<StorageFile[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [errMsg, setErrMsg] = useState<string | null>(null)
 
-  const { data: files = [] } = useQuery<StorageFile[]>({
-    queryKey: ['storage-files', currentFolderId, search],
-    queryFn: () => {
+  const loadData = useCallback(async () => {
+    setIsLoading(true)
+    setErrMsg(null)
+    try {
+      const foldersUrl = currentFolderId ? `/storage/folders?parentId=${currentFolderId}` : '/storage/folders'
       const params = new URLSearchParams()
       if (currentFolderId) params.set('folderId', currentFolderId)
       if (search) params.set('q', search)
-      return apiFetch(`/storage/files?${params}`)
-    },
-  })
+      const qs = params.toString()
+      const filesUrl = qs ? `/storage/files?${qs}` : '/storage/files'
+
+      const [fldRes, filRes] = await Promise.all([
+        apiFetch<Folder[]>(foldersUrl),
+        apiFetch<StorageFile[]>(filesUrl),
+      ])
+      setFolders(fldRes ?? [])
+      setFiles(filRes ?? [])
+    } catch (err: any) {
+      setErrMsg(err?.message ?? 'Erro ao carregar arquivos')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [currentFolderId, search])
+
+  useEffect(() => {
+    let cancelled = false
+    setIsLoading(true)
+    setErrMsg(null)
+    ;(async () => {
+      try {
+        const foldersUrl = currentFolderId ? `/storage/folders?parentId=${currentFolderId}` : '/storage/folders'
+        const params = new URLSearchParams()
+        if (currentFolderId) params.set('folderId', currentFolderId)
+        if (search) params.set('q', search)
+        const qs = params.toString()
+        const filesUrl = qs ? `/storage/files?${qs}` : '/storage/files'
+
+        const [fldRes, filRes] = await Promise.all([
+          apiFetch<Folder[]>(foldersUrl),
+          apiFetch<StorageFile[]>(filesUrl),
+        ])
+        if (cancelled) return
+        setFolders(fldRes ?? [])
+        setFiles(filRes ?? [])
+      } catch (err: any) {
+        if (cancelled) return
+        setErrMsg(err?.message ?? 'Erro ao carregar arquivos')
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [currentFolderId, search])
+
+  const hasError = !!errMsg
 
   const { data: breadcrumbs = [] } = useQuery<Breadcrumb[]>({
     queryKey: ['storage-breadcrumb', currentFolderId],
@@ -78,8 +132,12 @@ export default function LibraryPickerModal({ conversationId, onClose, onSent }: 
     enabled: !!currentFolderId,
   })
 
+  const endpoint = variant === 'chat'
+    ? `/chat/rooms/${conversationId}/messages/from-library`
+    : `/conversations/${conversationId}/messages/from-library`
+
   const sendMutation = useMutation({
-    mutationFn: () => apiFetch(`/conversations/${conversationId}/messages/from-library`, {
+    mutationFn: () => apiFetch(endpoint, {
       method: 'POST',
       body: JSON.stringify({
         attachmentId: selectedFile!.id,
@@ -135,7 +193,23 @@ export default function LibraryPickerModal({ conversationId, onClose, onSent }: 
 
         {/* Conteúdo */}
         <div className="flex-1 overflow-y-auto p-3">
-          {folders.length === 0 && files.length === 0 ? (
+          {isLoading ? (
+            <div className="space-y-2 animate-pulse">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="h-12 rounded-lg bg-muted/40" />
+              ))}
+            </div>
+          ) : hasError ? (
+            <div className="text-center py-12 space-y-3">
+              <p className="text-sm text-destructive">{errMsg}</p>
+              <button
+                onClick={loadData}
+                className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent"
+              >
+                Tentar novamente
+              </button>
+            </div>
+          ) : folders.length === 0 && files.length === 0 ? (
             <div className="text-center py-12 text-sm text-muted-foreground">
               Nada aqui ainda. Faça upload em <strong>Arquivos</strong> primeiro.
             </div>

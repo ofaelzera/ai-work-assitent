@@ -131,7 +131,7 @@ export async function listRoomsForUser(workspaceId: string, userId: string) {
       channel: { select: { id: true, type: true, label: true } },
       participants: {
         where: { leftAt: null },
-        include: { user: { select: { id: true, name: true, email: true } } },
+        include: { user: { select: { id: true, name: true, email: true, settings: true } } },
       },
       messages: {
         orderBy: { sentAt: 'desc' },

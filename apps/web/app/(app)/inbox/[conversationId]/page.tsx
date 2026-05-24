@@ -1,7 +1,8 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
+import { useEffect } from 'react'
 import { apiFetch } from '@/lib/api'
 import WhatsappView from './_components/WhatsappView'
 import EmailView from './_components/EmailView'
@@ -15,12 +16,22 @@ interface ConversationDetail {
 
 export default function ConversationPage() {
   const { conversationId } = useParams<{ conversationId: string }>()
+  const qc = useQueryClient()
 
   const { data, isLoading } = useQuery({
     queryKey: ['conversation', conversationId],
     queryFn: () => apiFetch<ConversationDetail>(`/conversations/${conversationId}/messages`),
     enabled: !!conversationId,
   })
+
+  // Após buscar mensagens (que zera unreadCount no banco), atualiza os badges
+  // da sidebar — o ponto laranja/roxo soma imediatamente após visualizar.
+  useEffect(() => {
+    if (data) {
+      qc.invalidateQueries({ queryKey: ['inbox', 'badges'] })
+      qc.invalidateQueries({ queryKey: ['conversations'] })
+    }
+  }, [data, qc])
 
   const conv = data?.conversation
   const messages = data?.messages ?? []

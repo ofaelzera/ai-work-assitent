@@ -7,11 +7,14 @@ import { apiFetch } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 import { createRoom } from '@/lib/chat'
 import { X, Users } from 'lucide-react'
+import { UserAvatar } from './UserAvatar'
+import { usePresenceMap } from './usePresenceMap'
 
 interface WorkspaceUser {
   id: string
   name: string
   email: string
+  settings?: { avatarUrl?: string | null } | null
 }
 
 export function NewRoomModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -21,6 +24,7 @@ export function NewRoomModal({ open, onClose }: { open: boolean; onClose: () => 
   const [selected, setSelected] = useState<string[]>([])
   const [name, setName] = useState('')
   const [search, setSearch] = useState('')
+  const onlineSet = usePresenceMap()
 
   const { data: users } = useQuery({
     queryKey: ['workspace-users'],
@@ -108,9 +112,12 @@ export function NewRoomModal({ open, onClose }: { open: boolean; onClose: () => 
                     )
                   }
                 />
-                <div className="h-8 w-8 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center text-white text-[10px] font-semibold">
-                  {u.name.slice(0, 2).toUpperCase()}
-                </div>
+                <UserAvatar
+                  name={u.name}
+                  avatarUrl={u.settings?.avatarUrl}
+                  online={onlineSet.has(u.id)}
+                  size="sm"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium truncate">{u.name}</p>
                   <p className="text-xs text-muted-foreground truncate">{u.email}</p>

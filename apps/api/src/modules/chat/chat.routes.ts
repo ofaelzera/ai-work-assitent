@@ -1,5 +1,8 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import {
   CreateChatRoomSchema,
   SendChatMessageSchema,
@@ -9,6 +12,7 @@ import {
 } from '@aiwa/shared'
 import { prisma } from '../../lib/prisma.js'
 import { eventBus } from '../../lib/eventBus.js'
+import { env } from '../../config/env.js'
 import {
   isParticipant,
   findOrCreateDirectRoom,
@@ -18,6 +22,7 @@ import {
   countUnreadForUser,
   broadcastNewMessage,
 } from './chat.service.js'
+import { listOnline, isOnline } from '../../lib/presence.js'
 
 export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
   // ── GET /chat/rooms ────────────────────────────────────────────────────────
@@ -32,6 +37,19 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
     const { workspaceId, sub: userId } = req.user
     const total = await countUnreadForUser(workspaceId, userId)
     return { total }
+  })
+
+  // ── GET /chat/presence ─────────────────────────────────────────────────────
+  // Lista usuários do workspace que estão com SSE ativa.
+  app.get('/chat/presence', { onRequest: [app.authenticate] }, async (req) => {
+    const { workspaceId } = req.user
+    const online = listOnline()
+    if (!online.length) return { onlineUserIds: [] }
+    const users = await prisma.user.findMany({
+      where: { id: { in: online }, workspaceId, deletedAt: null },
+      select: { id: true },
+    })
+    return { onlineUserIds: users.map((u) => u.id) }
   })
 
   // ── POST /chat/rooms ───────────────────────────────────────────────────────
@@ -63,7 +81,7 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
             channel: { select: { id: true, type: true, label: true } },
             participants: {
               where: { leftAt: null },
-              include: { user: { select: { id: true, name: true, email: true } } },
+              include: { user: { select: { id: true, name: true, email: true, settings: true } } },
             },
           },
         })
@@ -90,7 +108,7 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
           channel: { select: { id: true, type: true, label: true } },
           participants: {
             where: { leftAt: null },
-            include: { user: { select: { id: true, name: true, email: true } } },
+            include: { user: { select: { id: true, name: true, email: true, settings: true } } },
           },
         },
       })
@@ -128,7 +146,7 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
         orderBy: { sentAt: 'desc' },
         take: limit,
         include: {
-          fromUser: { select: { id: true, name: true, email: true } },
+          fromUser: { select: { id: true, name: true, email: true, settings: true } },
           reads: { select: { userId: true, readAt: true } },
         },
       })
@@ -170,7 +188,7 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
           sentAt: new Date(),
         },
         include: {
-          fromUser: { select: { id: true, name: true, email: true } },
+          fromUser: { select: { id: true, name: true, email: true, settings: true } },
         },
       })
 
@@ -189,6 +207,237 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
       await eventBus.emitAndPersist(workspaceId, 'chat.room.updated', { conversationId: id })
 
       return reply.code(201).send(message)
+    },
+  )
+
+  // ── POST /chat/rooms/:id/messages/media ────────────────────────────────────
+  // Upload multipart de anexo (imagem, vídeo, áudio, documento) numa sala.
+  // Cria 1 Message com o anexo gravado em disco e devolve a Message já com fromUser populado.
+  app.post(
+    '/chat/rooms/:id/messages/media',
+    { onRequest: [app.authenticate] },
+    async (req: any, reply) => {
+      const { workspaceId, sub: userId } = req.user
+      const { id } = req.params as { id: string }
+
+      if (!(await isParticipant(id, userId))) return reply.forbidden()
+
+      const data = await req.file()
+      if (!data) return reply.badRequest('Arquivo obrigatório')
+
+      const chunks: Buffer[] = []
+      for await (const chunk of data.file) chunks.push(chunk)
+      const buffer = Buffer.concat(chunks)
+
+      if (buffer.length > 64 * 1024 * 1024) {
+        return reply.badRequest('Arquivo muito grande (máx 64 MB)')
+      }
+
+      const mime: string = data.mimetype
+      const originalName: string = data.filename ?? 'arquivo'
+      const caption: string = (data.fields?.caption?.value as string | undefined) ?? ''
+
+      let kind: 'image' | 'video' | 'audio' | 'document'
+      if (mime.startsWith('image/')) kind = 'image'
+      else if (mime.startsWith('video/')) kind = 'video'
+      else if (mime.startsWith('audio/')) kind = 'audio'
+      else kind = 'document'
+
+      const safeName = originalName.replace(/[^\w.\-]/g, '_')
+      const storageKey = path.join(workspaceId, 'chat', id, `${randomUUID()}-${safeName}`)
+      const fullPath = path.join(env.STORAGE_PATH, storageKey)
+      await fs.mkdir(path.dirname(fullPath), { recursive: true })
+      await fs.writeFile(fullPath, buffer)
+
+      const attachment = {
+        type: kind,
+        mimetype: mime,
+        filename: originalName,
+        storageKey,
+        sizeBytes: buffer.length,
+      }
+
+      const message = await prisma.message.create({
+        data: {
+          workspaceId,
+          conversationId: id,
+          direction: 'OUTBOUND',
+          fromUserId: userId,
+          body: caption || `[${kind}]`,
+          attachments: [attachment] as any,
+          sentAt: new Date(),
+        },
+        include: {
+          fromUser: { select: { id: true, name: true, email: true, settings: true } },
+        },
+      })
+
+      await prisma.conversation.update({
+        where: { id },
+        data: { lastMessageAt: message.sentAt },
+      })
+      await prisma.conversationParticipant.update({
+        where: { conversationId_userId: { conversationId: id, userId } },
+        data: { lastReadAt: message.sentAt },
+      })
+
+      await broadcastNewMessage(workspaceId, message)
+      await eventBus.emitAndPersist(workspaceId, 'chat.room.updated', { conversationId: id })
+
+      return reply.code(201).send(message)
+    },
+  )
+
+  // ── POST /chat/rooms/:id/messages/from-library ─────────────────────────────
+  // Envia um arquivo da biblioteca pessoal/workspace (Attachment) pra sala interna.
+  // Estratégia: copia o binário do storage da biblioteca para a área de chat
+  // (${workspaceId}/chat/${roomId}/), assim a privacidade da sala é mantida pelo
+  // próprio endpoint /chat/messages/:id/media (só participantes acessam).
+  app.post(
+    '/chat/rooms/:id/messages/from-library',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          attachmentId: z.string(),
+          caption: z.string().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId, sub: userId, role } = req.user
+      const { id } = req.params
+      const { attachmentId, caption } = req.body
+
+      if (!(await isParticipant(id, userId))) return reply.forbidden()
+
+      // Carrega o arquivo da biblioteca e verifica acesso do usuário
+      const file = await prisma.attachment.findFirst({
+        where: { id: attachmentId, workspaceId },
+        include: {
+          shares: { where: { userId } },
+          folder: { select: { ownerId: true, visibility: true, id: true } },
+        },
+      })
+      if (!file) return reply.notFound('Arquivo não encontrado')
+
+      let hasAccess = role === 'ADMIN' || file.uploadedBy === userId
+      if (!hasAccess && file.folder) {
+        const f = file.folder
+        if (f.visibility === 'PUBLIC') hasAccess = true
+        else if (f.ownerId === userId) hasAccess = true
+        else if (f.visibility === 'SHARED' as any) {
+          const share = await prisma.storageFolderShare.findUnique({
+            where: { folderId_userId: { folderId: f.id, userId } },
+          })
+          if (share) hasAccess = true
+        }
+      }
+      if (!hasAccess && !file.folder) {
+        if (file.visibility === 'PUBLIC') hasAccess = true
+        else if (file.visibility === 'SHARED' && file.shares.length > 0) hasAccess = true
+      }
+      if (!hasAccess) return reply.forbidden('Sem acesso a este arquivo')
+
+      // Lê do disco e copia para a área de chat
+      const srcPath = path.join(env.STORAGE_PATH, file.storageKey)
+      let buffer: Buffer
+      try {
+        buffer = await fs.readFile(srcPath)
+      } catch {
+        return reply.notFound('Arquivo não encontrado no disco')
+      }
+
+      const safeName = file.filename.replace(/[^\w.\-]/g, '_')
+      const newKey = path.join(workspaceId, 'chat', id, `${randomUUID()}-${safeName}`)
+      const newPath = path.join(env.STORAGE_PATH, newKey)
+      await fs.mkdir(path.dirname(newPath), { recursive: true })
+      await fs.writeFile(newPath, buffer)
+
+      let kind: 'image' | 'video' | 'audio' | 'document'
+      if (file.mimeType.startsWith('image/')) kind = 'image'
+      else if (file.mimeType.startsWith('video/')) kind = 'video'
+      else if (file.mimeType.startsWith('audio/')) kind = 'audio'
+      else kind = 'document'
+
+      const attachment = {
+        type: kind,
+        mimetype: file.mimeType,
+        filename: file.filename,
+        storageKey: newKey,
+        sizeBytes: file.sizeBytes,
+        libraryAttachmentId: file.id,  // referência opcional pra rastreio
+      }
+
+      const message = await prisma.message.create({
+        data: {
+          workspaceId,
+          conversationId: id,
+          direction: 'OUTBOUND',
+          fromUserId: userId,
+          body: caption?.trim() || `[${kind}]`,
+          attachments: [attachment] as any,
+          sentAt: new Date(),
+        },
+        include: {
+          fromUser: { select: { id: true, name: true, email: true, settings: true } },
+        },
+      })
+
+      await prisma.conversation.update({
+        where: { id },
+        data: { lastMessageAt: message.sentAt },
+      })
+      await prisma.conversationParticipant.update({
+        where: { conversationId_userId: { conversationId: id, userId } },
+        data: { lastReadAt: message.sentAt },
+      })
+
+      await broadcastNewMessage(workspaceId, message)
+      await eventBus.emitAndPersist(workspaceId, 'chat.room.updated', { conversationId: id })
+
+      return reply.code(201).send(message)
+    },
+  )
+
+  // ── GET /chat/messages/:id/media ───────────────────────────────────────────
+  // Serve o binário de um anexo de mensagem de chat interno. Verifica participação.
+  app.get(
+    '/chat/messages/:id/media',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId, sub: userId } = req.user
+      const { id } = req.params
+
+      const message = await prisma.message.findFirst({
+        where: { id, workspaceId },
+        select: { conversationId: true, attachments: true, conversation: { select: { type: true } } },
+      })
+      if (!message) return reply.notFound()
+      if (message.conversation.type === 'EXTERNAL') {
+        return reply.badRequest('Endpoint apenas para mensagens internas')
+      }
+      if (!(await isParticipant(message.conversationId, userId))) {
+        return reply.forbidden()
+      }
+
+      const att = (message.attachments as any[] | null)?.[0]
+      if (!att?.storageKey) return reply.notFound('Anexo não encontrado')
+
+      const fullPath = path.join(env.STORAGE_PATH, att.storageKey as string)
+      try {
+        const buffer = await fs.readFile(fullPath)
+        reply.header('Content-Type', att.mimetype ?? 'application/octet-stream')
+        reply.header('Content-Disposition', `inline; filename="${att.filename ?? 'arquivo'}"`)
+        reply.header('Cache-Control', 'private, max-age=86400')
+        return reply.send(buffer)
+      } catch {
+        return reply.notFound('Arquivo não encontrado no disco')
+      }
     },
   )
 

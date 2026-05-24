@@ -81,6 +81,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
       const memberScope = null  // já incluso em assigneeFilter
 
+      // Chat interno (DIRECT/GROUP) tem UI dedicada em /chat e NÃO deve aparecer
+      // no Inbox — exceto quando o caller pede explicitamente channelType=INTERNAL.
+      const askedForInternal = channelType === 'INTERNAL'
+
       const conversations = await prisma.conversation.findMany({
         where: {
           workspaceId,
@@ -91,22 +95,19 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(channelId && { channelId }),
           ...(Object.keys(channelTypeFilter).length && { channel: channelTypeFilter as any }),
           ...(folder && { folder }),
-          // Chat interno (DIRECT/GROUP) ignora as regras de assignee — o usuário
-          // só vê salas em que é participante ativo. Conversas externas (EXTERNAL)
-          // seguem a lógica clássica de assigneeFilter / memberScope.
-          OR: [
-            {
-              type: 'EXTERNAL',
-              AND: [
-                ...(memberScope ? [memberScope] : []),
-                ...(assigneeFilter ? [assigneeFilter] : []),
-              ],
-            },
-            {
-              type: { in: ['DIRECT', 'GROUP'] },
-              participants: { some: { userId, leftAt: null } },
-            },
-          ],
+          ...(askedForInternal
+            ? {
+                type: { in: ['DIRECT', 'GROUP'] },
+                participants: { some: { userId, leftAt: null } },
+              }
+            : {
+                // Só EXTERNAL no Inbox padrão
+                type: 'EXTERNAL',
+                AND: [
+                  ...(memberScope ? [memberScope] : []),
+                  ...(assigneeFilter ? [assigneeFilter] : []),
+                ],
+              }),
           // Arquivadas ficam separadas; demais filtros excluem arquivadas
           archived: filter === 'archived' ? true : false,
           // Por padrão mostra apenas tickets ativos; 'resolved' mostra apenas finalizados
@@ -162,12 +163,48 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           assigneeId: null,
           source: 'LIVE',
           status: { in: ['OPEN', 'WAITING'] },
+          // Chat interno (DIRECT/GROUP) nasce com assigneeId=null mas NÃO é fila
+          type: 'EXTERNAL',
+          // Só conta o que ainda não foi visualizado — badge some após abrir
+          unreadCount: { gt: 0 },
           NOT: { externalId: 'status@broadcast' },
           ...(Object.keys(channelTypeFilter).length && { channel: channelTypeFilter as any }),
         },
       })
 
       return { conversations, nextCursor, queueCount }
+    },
+  )
+
+  // ── Badges do Inbox: Fila + Minhas não lidas ────────────────────────────
+  // Usado pelo item "Inbox" da sidebar; barato (dois COUNT com índice).
+  app.get(
+    '/inbox/badges',
+    { onRequest: [app.authenticate] },
+    async (req) => {
+      const { workspaceId, sub: userId } = req.user
+
+      const baseExternal = {
+        workspaceId,
+        archived: false,
+        source: 'LIVE' as const,
+        status: { in: ['OPEN' as const, 'WAITING' as const] },
+        type: 'EXTERNAL' as const,
+        NOT: { externalId: 'status@broadcast' },
+      }
+
+      const [queueCount, myUnreadCount] = await Promise.all([
+        // Fila: só conta o que ainda NÃO foi visualizado (unreadCount > 0).
+        // Assim que alguém abre a conv, o badge some — mesmo sem assumir.
+        prisma.conversation.count({
+          where: { ...baseExternal, assigneeId: null, unreadCount: { gt: 0 } },
+        }),
+        prisma.conversation.count({
+          where: { ...baseExternal, assigneeId: userId, unreadCount: { gt: 0 } },
+        }),
+      ])
+
+      return { queueCount, myUnreadCount }
     },
   )
 

@@ -2,7 +2,8 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   LayoutDashboard,
   MessageSquare,
@@ -23,7 +24,8 @@ import { useAuthStore } from '@/store/auth'
 import { logout, refreshToken } from '@/lib/auth'
 import { apiFetch, getAccessToken } from '@/lib/api'
 import { ThemeToggle } from '@/components/ThemeToggle'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSSE } from '@/lib/sse'
 
 /**
  * Itens do menu principal.
@@ -68,18 +70,146 @@ function userHasPerm(user: { role: string; permissions?: string[] } | null, perm
   return (user.permissions ?? []).includes(perm)
 }
 
+/**
+ * Badge com tooltip via portal — escapa qualquer `overflow:hidden/auto`
+ * dos containers pais (a sidebar tem `overflow-y-auto`, que cortava o tooltip).
+ */
+function BadgeDot({
+  count,
+  tooltip,
+  color,
+}: {
+  count: number
+  tooltip: string
+  color: 'primary' | 'amber'
+}) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+
+  const colorClass =
+    color === 'amber'
+      ? 'bg-amber-500 text-white'
+      : 'bg-primary text-primary-foreground'
+
+  function show() {
+    const el = ref.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setPos({ x: r.left + r.width / 2, y: r.top })
+  }
+  function hide() { setPos(null) }
+
+  return (
+    <>
+      <span
+        ref={ref}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        className={cn(
+          'h-5 min-w-[20px] px-1.5 rounded-full text-[10px] font-bold flex items-center justify-center cursor-default',
+          colorClass,
+        )}
+      >
+        {count > 99 ? '99+' : count}
+      </span>
+      {pos && typeof document !== 'undefined' && createPortal(
+        <div
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            left: pos.x,
+            top: pos.y - 6,
+            transform: 'translate(-50%, -100%)',
+            zIndex: 9999,
+            pointerEvents: 'none',
+          }}
+          className="whitespace-nowrap rounded-md bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 border border-border px-2 py-1 text-[11px] font-medium shadow-lg animate-in fade-in zoom-in-95 duration-150"
+        >
+          {tooltip}
+          <span className="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-border" />
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 function ChatUnreadBadge() {
+  const qc = useQueryClient()
   const { data } = useQuery({
     queryKey: ['chat', 'unread-total'],
     queryFn: () => apiFetch<{ total: number }>('/chat/unread-count'),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
     staleTime: 5_000,
   })
+
+  // Atualização instantânea via SSE — sem esperar polling
+  useSSE((ev) => {
+    if (
+      ev.type === 'chat.message.new' ||
+      ev.type === 'chat.room.read' ||
+      ev.type === 'chat.room.updated'
+    ) {
+      qc.invalidateQueries({ queryKey: ['chat', 'unread-total'] })
+    }
+  })
+
   const total = data?.total ?? 0
   if (total === 0) return null
   return (
-    <span className="h-5 min-w-[20px] px-1.5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center shrink-0">
-      {total > 99 ? '99+' : total}
+    <BadgeDot
+      count={total}
+      tooltip={`${total} mensagem${total === 1 ? '' : 's'} de chat não lida${total === 1 ? '' : 's'}`}
+      color="primary"
+    />
+  )
+}
+
+function InboxBadges() {
+  const qc = useQueryClient()
+  const { data } = useQuery({
+    queryKey: ['inbox', 'badges'],
+    queryFn: () => apiFetch<{ queueCount: number; myUnreadCount: number }>('/inbox/badges'),
+    refetchInterval: 60_000,
+    staleTime: 5_000,
+  })
+
+  // Atualização instantânea via SSE
+  useSSE((ev) => {
+    if (
+      ev.type === 'message.received' ||
+      ev.type === 'message.sent' ||
+      ev.type === 'conversation.claimed' ||
+      ev.type === 'conversation.released' ||
+      ev.type === 'conversation.status_changed' ||
+      ev.type === 'conversation.moved'
+    ) {
+      qc.invalidateQueries({ queryKey: ['inbox', 'badges'] })
+    }
+  })
+
+  const queue = data?.queueCount ?? 0
+  const mine = data?.myUnreadCount ?? 0
+  if (queue === 0 && mine === 0) return null
+
+  return (
+    <span className="flex items-center gap-1 shrink-0">
+      {mine > 0 && (
+        <BadgeDot
+          count={mine}
+          tooltip={`${mine} conversa${mine === 1 ? '' : 's'} sua${mine === 1 ? '' : 's'} não lida${mine === 1 ? '' : 's'}`}
+          color="primary"
+        />
+      )}
+      {queue > 0 && (
+        <BadgeDot
+          count={queue}
+          tooltip={`${queue} na fila — sem atendente`}
+          color="amber"
+        />
+      )}
     </span>
   )
 }
@@ -184,6 +314,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <item.icon className={cn("h-[18px] w-[18px] transition-transform duration-200", isActive ? "scale-110" : "group-hover:scale-110")} />
                 <span className="flex-1">{item.label}</span>
                 {item.href === '/chat' && <ChatUnreadBadge />}
+                {item.href === '/inbox' && <InboxBadges />}
               </Link>
             )
           })}

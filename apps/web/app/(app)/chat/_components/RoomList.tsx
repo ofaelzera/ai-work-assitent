@@ -6,8 +6,11 @@ import { useParams } from 'next/navigation'
 import { fetchRooms, roomDisplayName, type ChatRoom } from '@/lib/chat'
 import { useAuthStore } from '@/store/auth'
 import { useSSE } from '@/lib/sse'
+import { stripWhatsappMarks } from '@/lib/whatsappText'
 import { cn } from '@/lib/utils'
-import { Users, MessageSquare, Plus } from 'lucide-react'
+import { MessageSquare, Plus } from 'lucide-react'
+import { UserAvatar } from './UserAvatar'
+import { usePresenceMap } from './usePresenceMap'
 
 function formatTime(iso: string | null): string {
   if (!iso) return ''
@@ -15,12 +18,9 @@ function formatTime(iso: string | null): string {
   const now = new Date()
   if (d.toDateString() === now.toDateString())
     return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1)
+  if (d.toDateString() === yesterday.toDateString()) return 'ontem'
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
-}
-
-function initials(name: string) {
-  const p = name.trim().split(/\s+/)
-  return p.length === 1 ? p[0].slice(0, 2).toUpperCase() : (p[0][0] + p[p.length - 1][0]).toUpperCase()
 }
 
 export function RoomList({ onNew }: { onNew: () => void }) {
@@ -28,6 +28,7 @@ export function RoomList({ onNew }: { onNew: () => void }) {
   const activeId = params.roomId
   const { user } = useAuthStore()
   const qc = useQueryClient()
+  const onlineSet = usePresenceMap()
 
   const { data } = useQuery({
     queryKey: ['chat', 'rooms'],
@@ -47,7 +48,7 @@ export function RoomList({ onNew }: { onNew: () => void }) {
 
   return (
     <aside className="w-80 flex-shrink-0 border-r border-border bg-card flex flex-col">
-      <div className="p-4 flex items-center justify-between">
+      <div className="p-4 flex items-center justify-between border-b border-border">
         <h2 className="font-semibold text-sm flex items-center gap-2">
           <MessageSquare className="h-4 w-4" /> Chat interno
         </h2>
@@ -62,21 +63,50 @@ export function RoomList({ onNew }: { onNew: () => void }) {
       <div className="flex-1 overflow-y-auto">
         {rooms.length === 0 && (
           <p className="p-6 text-xs text-muted-foreground text-center">
-            Nenhuma conversa ainda. Clique em <Plus className="inline h-3 w-3" /> para iniciar.
+            Nenhuma conversa ainda. Clique no <Plus className="inline h-3 w-3" /> para iniciar.
           </p>
         )}
         {rooms.map((room) => (
-          <RoomRow key={room.id} room={room} active={room.id === activeId} currentUserId={user?.sub ?? ''} />
+          <RoomRow
+            key={room.id}
+            room={room}
+            active={room.id === activeId}
+            currentUserId={user?.sub ?? ''}
+            onlineSet={onlineSet}
+          />
         ))}
       </div>
     </aside>
   )
 }
 
-function RoomRow({ room, active, currentUserId }: { room: ChatRoom; active: boolean; currentUserId: string }) {
+function RoomRow({
+  room,
+  active,
+  currentUserId,
+  onlineSet,
+}: {
+  room: ChatRoom
+  active: boolean
+  currentUserId: string
+  onlineSet: Set<string>
+}) {
   const name = roomDisplayName(room, currentUserId)
+  const other = room.participants.find((p) => p.userId !== currentUserId)
+  const avatarUrl = other?.user.settings?.avatarUrl ?? null
+  const isGroup = room.type === 'GROUP'
+  const online = !isGroup && other ? onlineSet.has(other.userId) : undefined
+
   const last = room.messages[0]
-  const preview = last ? (last.fromUserId === currentUserId ? 'Você: ' : '') + last.body : 'Sem mensagens'
+  const att = (last?.attachments as any[] | null)?.[0]
+  const attLabel = att?.type === 'image' ? '📷 Foto'
+    : att?.type === 'video' ? '🎬 Vídeo'
+    : att?.type === 'audio' ? '🎙️ Áudio'
+    : att?.type === 'document' ? '📎 Documento'
+    : null
+  const preview = last
+    ? (last.fromUserId === currentUserId ? 'Você: ' : '') + (attLabel ?? (stripWhatsappMarks(last.body) || ''))
+    : 'Sem mensagens'
 
   return (
     <Link
@@ -86,9 +116,7 @@ function RoomRow({ room, active, currentUserId }: { room: ChatRoom; active: bool
         active && 'bg-primary/10',
       )}
     >
-      <div className="h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center text-white text-xs font-semibold shrink-0">
-        {room.type === 'GROUP' ? <Users className="h-5 w-5" /> : initials(name)}
-      </div>
+      <UserAvatar name={name} avatarUrl={avatarUrl} isGroup={isGroup} online={online} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="font-medium text-sm truncate">{name}</span>

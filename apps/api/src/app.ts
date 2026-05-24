@@ -91,8 +91,9 @@ export async function buildApp() {
     const token = (req.query as any).token as string | undefined
     if (!token) return reply.unauthorized('Token obrigatório')
 
+    let decoded: { sub: string; workspaceId: string } | null = null
     try {
-      app.jwt.verify(token)
+      decoded = app.jwt.verify(token) as any
     } catch {
       return reply.unauthorized('Token inválido')
     }
@@ -110,12 +111,46 @@ export async function buildApp() {
     reply.raw.flushHeaders()
 
     const { eventBus } = await import('./lib/eventBus.js')
+    const { trackOnline, trackOffline, isOnline } = await import('./lib/presence.js')
     const handler = (event: { type: string; payload: unknown }) => {
       reply.raw.write(`data: ${JSON.stringify(event)}\n\n`)
     }
 
     eventBus.on('*', handler)
-    req.raw.on('close', () => eventBus.off('*', handler))
+
+    // Marca usuário como online enquanto a conexão SSE estiver ativa
+    const userId = decoded?.sub ?? null
+    const workspaceId = decoded?.workspaceId ?? null
+    if (userId) {
+      trackOnline(userId)
+      if (workspaceId) {
+        eventBus.emit('*', {
+          workspaceId,
+          type: 'chat.presence',
+          payload: { userId, status: 'online' },
+        })
+      }
+    }
+
+    req.raw.on('close', () => {
+      eventBus.off('*', handler)
+      if (userId) {
+        trackOffline(userId)
+        if (workspaceId) {
+          // Pequeno atraso permite que reconexões rápidas (refresh de página)
+          // não disparem "offline" — só emite se realmente saiu.
+          setTimeout(() => {
+            if (!isOnline(userId)) {
+              eventBus.emit('*', {
+                workspaceId,
+                type: 'chat.presence',
+                payload: { userId, status: 'offline' },
+              })
+            }
+          }, 2_000)
+        }
+      }
+    })
 
     await new Promise<void>((resolve) => req.raw.on('close', resolve))
   })

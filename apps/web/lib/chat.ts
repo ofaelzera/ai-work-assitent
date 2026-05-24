@@ -1,5 +1,12 @@
 import { apiFetch } from './api'
 
+export interface ChatUser {
+  id: string
+  name: string
+  email: string
+  settings?: { avatarUrl?: string | null } | null
+}
+
 export interface ChatParticipant {
   id: string
   userId: string
@@ -7,7 +14,7 @@ export interface ChatParticipant {
   joinedAt: string
   lastReadAt: string | null
   leftAt: string | null
-  user: { id: string; name: string; email: string }
+  user: ChatUser
 }
 
 export interface ChatLastMessage {
@@ -36,7 +43,7 @@ export interface ChatMessage {
   sentAt: string
   fromUserId: string | null
   attachments: any
-  fromUser: { id: string; name: string; email: string } | null
+  fromUser: ChatUser | null
   reads: Array<{ userId: string; readAt: string }>
   quotedMsgId?: string | null
 }
@@ -67,6 +74,21 @@ export function sendMessage(
   })
 }
 
+export function sendMedia(roomId: string, file: File, caption: string) {
+  const form = new FormData()
+  form.append('file', file)
+  if (caption) form.append('caption', caption)
+  return apiFetch<ChatMessage>(`/chat/rooms/${roomId}/messages/media`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export function chatAttachmentUrl(messageId: string): string {
+  const base = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
+  return `${base}/chat/messages/${messageId}/media`
+}
+
 export function markRead(roomId: string, uptoMessageId?: string) {
   return apiFetch<{ ok: true }>(`/chat/rooms/${roomId}/read`, {
     method: 'PATCH',
@@ -90,6 +112,10 @@ export function createRoom(userIds: string[], name?: string) {
 
 export function fetchUnreadTotal() {
   return apiFetch<{ total: number }>('/chat/unread-count')
+}
+
+export function fetchPresence() {
+  return apiFetch<{ onlineUserIds: string[] }>('/chat/presence')
 }
 
 export function roomDisplayName(room: ChatRoom, currentUserId: string): string {
