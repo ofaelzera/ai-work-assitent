@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
+import { maskPhone, maskCNPJ } from '@/lib/masks'
 import { toast } from 'sonner'
 import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -160,12 +161,15 @@ function CompanyDataPanel({ isAdmin }: { isAdmin: boolean }) {
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>
 
-  const field = (key: keyof CompanySettings, label: string, placeholder: string) => (
+  const field = (key: keyof CompanySettings, label: string, placeholder: string, mask?: (v: string) => string) => (
     <div>
       <label className="text-xs font-medium">{label}</label>
       <input
-        value={form[key] ?? ''}
-        onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}
+        value={mask ? mask(form[key] ?? '') : form[key] ?? ''}
+        onChange={e => {
+            const val = mask ? e.target.value.replace(/\D/g, '') : e.target.value;
+            setForm(p => ({ ...p, [key]: val }))
+        }}
         placeholder={placeholder}
         disabled={!isAdmin}
         className="mt-1.5 w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
@@ -181,8 +185,8 @@ function CompanyDataPanel({ isAdmin }: { isAdmin: boolean }) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {field('razaoSocial',    'Razão Social',  'Empresa S.A.')}
-        {field('cnpj',           'CNPJ',          '00.000.000/0001-00')}
-        {field('companyPhone',   'Telefone',      '(11) 3000-0000')}
+        {field('cnpj',           'CNPJ',          '00.000.000/0001-00', maskCNPJ)}
+        {field('companyPhone',   'Telefone',      '+55 (11) 99999-9999', maskPhone)}
         {field('companyEmail',   'E-mail',        'contato@empresa.com.br')}
       </div>
       {field('companyAddress', 'Endereço', 'Rua Exemplo, 123 – São Paulo/SP')}

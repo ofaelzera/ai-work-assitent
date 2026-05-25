@@ -14,6 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
 import { formatPhone, isInternalId } from '@/lib/phone'
+import { maskPhone } from '@/lib/masks'
 import { renderWhatsappText, stripWhatsappMarks, WhatsappText, MentionProvider } from '@/lib/whatsappText'
 import { useMentionResolver } from '@/lib/useMentionResolver'
 import { toast } from 'sonner'
@@ -648,7 +649,7 @@ function ContactDrawer({ contact, onClose, onSave, currentConvId }: {
                 <label className="text-xs text-muted-foreground">
                   Telefone {phoneIsId && <span className="text-amber-500">(número real não disponível via API)</span>}
                 </label>
-                <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="5544999999999"
+                <input value={maskPhone(phone)} onChange={e => setPhone(e.target.value.replace(/\D/g, ''))} placeholder="+55 (44) 99999-9999"
                   className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
                 {phoneIsId && <p className="text-[11px] text-muted-foreground">Digite o número real com DDI (ex: 5544999581292)</p>}
               </div>
@@ -1112,6 +1113,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
       // Invalida em background pra trazer dados completos (releasedFrom, etc)
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      window.dispatchEvent(new CustomEvent('chat:claim', { detail: 'mine' }))
       toast.success('Você assumiu esta conversa!')
     },
     onError: (err: any) => {
@@ -1759,7 +1761,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
             <input ref={fileInputRef} type="file"
               accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt"
               className="hidden" onChange={handleFileSelect} />
-            <div className="max-w-5xl mx-auto w-full">
+            <div className="w-full">
               {!pendingFile && (
                 <ChatInput
                   value={text}

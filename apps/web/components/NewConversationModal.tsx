@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
 import { X, Search, MessageSquare, Mail, Phone, UserPlus } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { maskPhone } from '@/lib/masks'
 
 interface Channel { id: string; type: string; label: string; status: string }
 interface Contact {
@@ -222,9 +223,9 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
                   <div className="mt-2">
                     <label className="text-xs text-muted-foreground block mb-1">Ou digite um número diretamente:</label>
                     <input
-                      value={manualPhone}
-                      onChange={e => setManualPhone(e.target.value)}
-                      placeholder="5511999999999"
+                      value={maskPhone(manualPhone)}
+                      onChange={e => setManualPhone(e.target.value.replace(/\D/g, ''))}
+                      placeholder="+55 (11) 99999-9999"
                       className="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
                     />
                   </div>
