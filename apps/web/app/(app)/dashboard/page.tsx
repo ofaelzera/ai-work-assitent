@@ -135,30 +135,41 @@ function KpiCard({ label, value, icon: Icon, iconBg, iconColor, trend, href, loa
       tabIndex={interactive ? 0 : -1}
       onClick={() => href && router.push(href)}
       className={cn(
-        'relative overflow-hidden rounded-2xl border bg-card px-5 py-5 transition-all duration-300',
-        interactive && 'hover:border-primary/30 hover:shadow-glass hover:-translate-y-1 cursor-pointer group',
+        'group relative overflow-hidden rounded-3xl border bg-card/50 backdrop-blur-sm p-6 transition-all duration-500',
+        interactive && 'hover:border-primary/40 hover:shadow-2xl hover:shadow-primary/5 hover:-translate-y-1.5 cursor-pointer',
       )}>
-      <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity duration-300">
-        <Icon className="h-24 w-24 -mt-6 -mr-6" />
+      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent pointer-events-none" />
+      <div className="absolute -top-24 -right-24 w-48 h-48 bg-gradient-to-br from-primary/10 to-transparent rounded-full blur-3xl group-hover:scale-150 transition-transform duration-700 pointer-events-none" />
+      
+      <div className="absolute top-0 right-0 p-4 opacity-[0.03] pointer-events-none group-hover:opacity-10 group-hover:-translate-x-2 group-hover:translate-y-2 transition-all duration-500">
+        <Icon className="h-28 w-28 -mt-6 -mr-6" />
       </div>
-      <div className="relative flex items-start justify-between">
-        <div className={cn('h-10 w-10 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110', iconBg)}>
-          <Icon className={cn('h-5 w-5', iconColor)} />
+      
+      <div className="relative flex items-start justify-between z-10">
+        <div className={cn('h-12 w-12 rounded-2xl flex items-center justify-center transition-transform duration-500 group-hover:scale-110 group-hover:rotate-3 shadow-inner ring-1 ring-white/10', iconBg)}>
+          <Icon className={cn('h-6 w-6', iconColor)} />
         </div>
         {trend != null && (
-          <span className={cn('text-[11px] font-bold px-2 py-0.5 rounded-full', trend.value >= 0 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400')}>
-            {trend.value >= 0 ? '↑' : '↓'} {Math.abs(trend.value)}%
+          <span className={cn(
+            'text-[11px] font-bold px-2.5 py-1 rounded-full shadow-sm flex items-center gap-1 transition-transform group-hover:scale-105', 
+            trend.value >= 0 
+              ? 'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400 ring-1 ring-emerald-500/20' 
+              : 'bg-red-500/10 text-red-600 dark:bg-red-500/20 dark:text-red-400 ring-1 ring-red-500/20'
+          )}>
+            {trend.value >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingUp className="h-3 w-3 rotate-180" />} 
+            {Math.abs(trend.value)}%
           </span>
         )}
       </div>
+      
       {loading
-        ? <Skeleton className="h-8 w-16 mt-4" />
+        ? <Skeleton className="h-10 w-20 mt-6 rounded-lg" />
         : (
-          <div className="relative mt-4">
-            <p className="text-3xl font-bold tracking-tight text-foreground">{value}</p>
-            <p className="text-[13px] font-medium text-muted-foreground mt-1">{label}</p>
+          <div className="relative mt-5 z-10">
+            <p className="text-4xl font-black tracking-tight text-foreground bg-clip-text text-transparent bg-gradient-to-br from-foreground to-foreground/70">{value}</p>
+            <p className="text-[14px] font-medium text-muted-foreground mt-1.5">{label}</p>
             {trend != null && (
-              <p className="text-[11px] text-muted-foreground mt-0.5">{trend.label}</p>
+              <p className="text-[11px] text-muted-foreground/70 mt-1">{trend.label}</p>
             )}
           </div>
         )}
@@ -170,11 +181,11 @@ function KpiCard({ label, value, icon: Icon, iconBg, iconColor, trend, href, loa
 function RecentConversationsList({ items, loading }: { items: ConvPreview[]; loading: boolean }) {
   const router = useRouter()
   return (
-    <div className="rounded-2xl border bg-card p-2 space-y-1 shadow-sm">
+    <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
       {loading && Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3 px-3 py-3">
-          <Skeleton className="h-10 w-10 rounded-full shrink-0" />
-          <div className="flex-1 space-y-1.5">
+        <div key={i} className="flex items-center gap-4 px-4 py-3.5">
+          <Skeleton className="h-11 w-11 rounded-full shrink-0" />
+          <div className="flex-1 space-y-2">
             <Skeleton className="h-3 w-32" />
             <Skeleton className="h-3 w-48" />
           </div>
@@ -182,9 +193,12 @@ function RecentConversationsList({ items, loading }: { items: ConvPreview[]; loa
       ))}
 
       {!loading && items.length === 0 && (
-        <div className="py-10 text-center text-sm text-muted-foreground">
-          <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-30" />
-          Nenhuma conversa ainda
+        <div className="py-12 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
+          <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
+            <MessageSquare className="h-6 w-6 text-primary" />
+          </div>
+          <p className="font-medium text-foreground">Nenhuma conversa ainda</p>
+          <p className="text-[12px] mt-0.5">As conversas recentes aparecerão aqui.</p>
         </div>
       )}
 
@@ -308,28 +322,31 @@ export default function DashboardPage() {
                       Ver todos <ArrowRight className="h-3 w-3" />
                     </button>
                   </div>
-                  <div className="rounded-2xl border bg-card p-2 space-y-1 shadow-sm">
+                  <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
                     {isLoading && Array.from({ length: 3 }).map((_, i) => (
-                      <div key={i} className="px-3 py-3 space-y-1.5">
+                      <div key={i} className="px-4 py-3.5 space-y-2">
                         <Skeleton className="h-3 w-full" />
                         <Skeleton className="h-3 w-20" />
                       </div>
                     ))}
                     {!isLoading && adminData.recentCards.length === 0 && (
-                      <div className="py-8 text-center text-sm text-muted-foreground">
-                        <Kanban className="h-6 w-6 mx-auto mb-2 opacity-30" />
-                        Nenhum card ainda
+                      <div className="py-12 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
+                        <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
+                          <Kanban className="h-6 w-6 text-primary" />
+                        </div>
+                        <p className="font-medium text-foreground">Nenhum card ainda</p>
+                        <p className="text-[12px] mt-0.5">Seus cards aparecerão aqui.</p>
                       </div>
                     )}
                     {adminData.recentCards.map(card => (
-                      <div key={card.id} className="group px-3 py-3 rounded-xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+                      <div key={card.id} className="group px-4 py-3.5 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
                         <div className="flex items-start justify-between gap-2">
                           <p className="text-[13px] font-semibold text-foreground truncate flex-1">{card.title}</p>
                           <span className={cn('shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full', priorityBadge(card.priority))}>
                             {priorityLabel(card.priority)}
                           </span>
                         </div>
-                        <div className="flex items-center gap-2 mt-1.5">
+                        <div className="flex items-center gap-2 mt-2">
                           <span className="text-[11px] font-medium text-muted-foreground">{card.column.name}</span>
                           {card.createdBy === 'AI' && (
                             <span className="text-[10px] bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
@@ -345,19 +362,21 @@ export default function DashboardPage() {
                 {adminData.channelBreakdown.length > 0 && (
                   <div className="space-y-3">
                     <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase px-1">Mensagens hoje por canal</h2>
-                    <div className="rounded-2xl border bg-card p-5 space-y-4 shadow-sm">
+                    <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-6 space-y-4 shadow-sm">
                       {adminData.channelBreakdown.map(({ type, total }) => {
                         const ch = channelLabel(type)
                         const maxTotal = Math.max(...adminData.channelBreakdown.map(b => b.total))
                         const pct = maxTotal > 0 ? Math.round((total / maxTotal) * 100) : 0
                         return (
-                          <div key={type}>
-                            <div className="flex items-center justify-between text-xs mb-1.5">
-                              <span className={cn('font-semibold flex items-center gap-1.5', ch.color)}>{ch.icon} {ch.label}</span>
+                          <div key={type} className="group">
+                            <div className="flex items-center justify-between text-[13px] mb-2">
+                              <span className={cn('font-semibold flex items-center gap-2 transition-transform group-hover:translate-x-1', ch.color)}>
+                                {ch.icon} {ch.label}
+                              </span>
                               <span className="text-muted-foreground font-bold">{total}</span>
                             </div>
-                            <div className="h-2 rounded-full bg-muted overflow-hidden">
-                              <div className="h-full rounded-full bg-primary transition-all duration-1000 ease-out" style={{ width: `${pct}%` }} />
+                            <div className="h-2.5 rounded-full bg-muted overflow-hidden">
+                              <div className="h-full rounded-full bg-gradient-to-r from-primary/60 to-primary transition-all duration-1000 ease-out" style={{ width: `${pct}%` }} />
                             </div>
                           </div>
                         )
@@ -416,26 +435,32 @@ export default function DashboardPage() {
                       Ver agenda <ArrowRight className="h-3 w-3" />
                     </button>
                   </div>
-                  <div className="rounded-2xl border bg-card p-2 space-y-1 shadow-sm">
+                  <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
                     {isLoading && Array.from({ length: 2 }).map((_, i) => (
-                      <div key={i} className="px-3 py-3 space-y-1.5">
+                      <div key={i} className="px-4 py-3.5 space-y-2">
                         <Skeleton className="h-3 w-full" />
                         <Skeleton className="h-3 w-20" />
                       </div>
                     ))}
                     {!isLoading && memberData.upcomingEvents.length === 0 && (
-                      <div className="py-8 text-center text-sm text-muted-foreground">
-                        <Calendar className="h-6 w-6 mx-auto mb-2 opacity-30" />
-                        Nenhum evento nos próximos 7 dias
+                      <div className="py-12 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
+                        <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
+                          <Calendar className="h-6 w-6 text-primary" />
+                        </div>
+                        <p className="font-medium text-foreground">Nenhum evento</p>
+                        <p className="text-[12px] mt-0.5">Próximos eventos nos 7 dias.</p>
                       </div>
                     )}
                     {memberData.upcomingEvents.map(ev => (
-                      <div key={ev.id} className="group px-3 py-3 rounded-xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+                      <div key={ev.id} className="group px-4 py-3.5 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
                         <p className="text-[13px] font-semibold text-foreground truncate">{ev.title}</p>
-                        <p className="text-[11px] font-medium text-muted-foreground mt-1 flex items-center gap-1.5">
+                        <p className="text-[11px] font-medium text-muted-foreground mt-2 flex items-center gap-1.5">
                           <Clock className="h-3.5 w-3.5" /> {formatEventTime(ev.startAt)}
                           {ev.contact && (
-                            <span className="ml-1 px-1.5 py-0.5 rounded-full bg-accent/50 truncate">• {ev.contact.name ?? ev.contact.phone}</span>
+                            <span className="ml-1 px-2 py-0.5 rounded-full bg-accent/50 truncate font-medium flex items-center gap-1">
+                              <Users className="h-2.5 w-2.5" />
+                              {ev.contact.name ?? ev.contact.phone}
+                            </span>
                           )}
                         </p>
                       </div>
@@ -450,18 +475,24 @@ export default function DashboardPage() {
                       Ver todas <ArrowRight className="h-3 w-3" />
                     </button>
                   </div>
-                  <div className="rounded-2xl border bg-card p-2 space-y-1 shadow-sm">
+                  <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
                     {isLoading && Array.from({ length: 2 }).map((_, i) => (
-                      <div key={i} className="px-3 py-3"><Skeleton className="h-3 w-full" /></div>
+                      <div key={i} className="px-4 py-3.5 space-y-2">
+                        <Skeleton className="h-3 w-full" />
+                        <Skeleton className="h-3 w-3/4" />
+                      </div>
                     ))}
                     {!isLoading && memberData.recentTasks.length === 0 && (
-                      <div className="py-8 text-center text-sm text-muted-foreground">
-                        <ListTodo className="h-6 w-6 mx-auto mb-2 opacity-30" />
-                        Nenhuma tarefa pendente
+                      <div className="py-12 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
+                        <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
+                          <ListTodo className="h-6 w-6 text-primary" />
+                        </div>
+                        <p className="font-medium text-foreground">Nenhuma tarefa pendente</p>
+                        <p className="text-[12px] mt-0.5">As tarefas atribuídas a você aparecerão aqui.</p>
                       </div>
                     )}
                     {memberData.recentTasks.map(t => (
-                      <div key={t.id} className="group px-3 py-3 rounded-xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+                      <div key={t.id} className="group px-4 py-3.5 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
                         <p className="text-[13px] font-semibold text-foreground truncate">{t.title}</p>
                         <div className="flex items-center gap-3 mt-1.5 text-[11px] font-medium text-muted-foreground">
                           {t.remindAt && (

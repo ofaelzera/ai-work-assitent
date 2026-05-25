@@ -280,22 +280,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      {/* Modern Sidebar */}
-      <aside className="w-64 flex-shrink-0 bg-card flex flex-col shadow-soft z-10">
-        <div className="p-4 pr-3 pb-2">
+    <div className="flex h-screen overflow-hidden bg-background relative">
+      {/* Background Mesh Gradient */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-background to-background pointer-events-none" />
+      <div className="absolute inset-0 bg-grid-black/[0.02] dark:bg-grid-white/[0.02] pointer-events-none" />
+
+      {/* Modern Sidebar with Glassmorphism */}
+      <aside className="w-64 flex-shrink-0 bg-card/60 backdrop-blur-xl border-r flex flex-col shadow-2xl z-10">
+        <div className="p-5 pb-3">
           <div className="flex items-center justify-between gap-1 animate-fade-in">
             <div className="flex items-center gap-2">
-              <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
-                <Bot className="h-4 w-4 text-primary" />
+              <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-lg shadow-primary/20">
+                <Bot className="h-4 w-4 text-primary-foreground" />
               </div>
-              <span className="font-bold text-[14px] tracking-tight">AI Work Assistant</span>
+              <span className="font-bold text-[15px] tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">Work Assistant</span>
             </div>
             <ThemeToggle />
           </div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-4 space-y-1 py-2">
+        <nav className="flex-1 overflow-y-auto px-4 space-y-1.5 py-4">
           {navItems.filter(it => userHasPerm(user, it.perm)).map((item, index) => {
             const isActive = pathname.startsWith(item.href)
             return (
@@ -303,96 +307,112 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 animate-slide-up',
+                  'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-300 animate-slide-up relative overflow-hidden',
                   isActive
-                    ? 'bg-primary/10 text-primary shadow-sm'
-                    : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+                    ? 'bg-primary/10 text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]'
+                    : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground',
                   `delay-${(index % 4) * 100}`
                 )}
               >
                 {isActive && (
-                  <div className="absolute left-0 w-1 h-8 bg-primary rounded-r-full shadow-[0_0_8px_rgba(var(--primary),0.5)]" />
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-1/2 bg-primary rounded-r-full shadow-[0_0_12px_rgba(var(--primary),0.8)]" />
                 )}
-                <item.icon className={cn("h-[18px] w-[18px] transition-transform duration-200", isActive ? "scale-110" : "group-hover:scale-110")} />
-                <span className="flex-1">{item.label}</span>
-                {item.href === '/chat' && <ChatUnreadBadge />}
-                {item.href === '/inbox' && <InboxBadges />}
+                {isActive && (
+                  <div className="absolute inset-0 bg-gradient-to-r from-primary/10 to-transparent pointer-events-none" />
+                )}
+                <item.icon className={cn("h-[18px] w-[18px] transition-transform duration-300 relative z-10", isActive ? "scale-110" : "group-hover:scale-110 group-hover:rotate-3")} />
+                <span className="flex-1 relative z-10">{item.label}</span>
+                <div className="relative z-10 flex items-center">
+                  {item.href === '/chat' && <ChatUnreadBadge />}
+                  {item.href === '/inbox' && <InboxBadges />}
+                </div>
               </Link>
             )
           })}
 
-          {/* Itens admin — cada um exige sua perm; seção aparece se houver pelo menos um visível */}
+          {/* Itens admin */}
           {(() => {
             const visibleAdmin = adminItems.filter(it => userHasPerm(user, it.perm))
             if (visibleAdmin.length === 0) return null
             return (
-            <div className="animate-slide-up delay-400">
+            <div className="animate-slide-up delay-400 mt-4">
               <div className="pt-6 pb-2">
-                <p className="px-3 text-[11px] font-bold text-muted-foreground/60 uppercase tracking-widest">
-                  Administração
-                </p>
+                <div className="flex items-center gap-2 px-3">
+                  <div className="h-px flex-1 bg-border/50" />
+                  <p className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em]">
+                    Administração
+                  </p>
+                  <div className="h-px flex-1 bg-border/50" />
+                </div>
               </div>
 
-              {visibleAdmin.map((item) => {
-                const isActive = pathname.startsWith(item.href)
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      'group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
-                      isActive
-                        ? 'bg-primary/10 text-primary shadow-sm'
-                        : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
-                    )}
-                  >
-                    {isActive && (
-                      <div className="absolute left-0 w-1 h-6 bg-primary rounded-r-full" />
-                    )}
-                    <Settings className={cn("h-4 w-4 transition-transform duration-200", isActive ? "scale-110" : "group-hover:rotate-90")} />
-                    {item.label}
-                  </Link>
-                )
-              })}
+              <div className="space-y-1 mt-2">
+                {visibleAdmin.map((item) => {
+                  const isActive = pathname.startsWith(item.href)
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn(
+                        'group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-all duration-300 relative',
+                        isActive
+                          ? 'bg-primary/10 text-primary'
+                          : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground'
+                      )}
+                    >
+                      {isActive && (
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-1/2 bg-primary rounded-r-full shadow-[0_0_12px_rgba(var(--primary),0.8)]" />
+                      )}
+                      <Settings className={cn("h-[16px] w-[16px] transition-all duration-300", isActive ? "scale-110 text-primary" : "group-hover:rotate-90")} />
+                      {item.label}
+                    </Link>
+                  )
+                })}
+              </div>
             </div>
             )
           })()}
         </nav>
 
         <div className="p-4 mt-auto">
-          <div className="rounded-xl bg-accent/30 p-2 space-y-1 animate-slide-up delay-400">
-            <Link
-              href="/profile"
-              className={cn(
-                'flex items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium transition-all',
-                pathname.startsWith('/profile')
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-muted-foreground hover:bg-background hover:text-foreground shadow-sm'
-              )}
-            >
-              {avatarUrl ? (
-                <img src={avatarUrl} alt={displayName} className="h-7 w-7 rounded-full object-cover shrink-0" />
-              ) : (
-                <div className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-violet-600 flex items-center justify-center text-[11px] font-semibold text-white shrink-0">
-                  {fallback}
+          <div className="rounded-2xl border bg-card/50 backdrop-blur-sm p-1 shadow-sm transition-all animate-slide-up delay-400 group">
+            <details className="relative">
+              <summary className="flex items-center gap-3 rounded-xl px-2 py-2 text-sm font-medium transition-all cursor-pointer hover:bg-accent/50 list-none [&::-webkit-details-marker]:hidden">
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt={displayName} className="h-8 w-8 rounded-lg object-cover shrink-0 ring-1 ring-border shadow-sm" />
+                ) : (
+                  <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary/80 to-violet-600 flex items-center justify-center text-[12px] font-bold text-white shrink-0 shadow-sm">
+                    {fallback}
+                  </div>
+                )}
+                <div className="flex flex-col flex-1 min-w-0">
+                  <span className="truncate text-[13px] text-foreground">{me?.name || 'Meu Perfil'}</span>
+                  <span className="truncate text-[10px] text-muted-foreground font-normal">{user?.role === 'ADMIN' ? 'Administrador' : 'Membro'}</span>
                 </div>
-              )}
-              <span className="truncate">{me?.name ? 'Meu Perfil' : 'Meu Perfil'}</span>
-            </Link>
-            <button
-              onClick={handleLogout}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-all hover:bg-destructive/10 hover:text-destructive"
-            >
-              <LogOut className="h-[18px] w-[18px]" />
-              Sair da Conta
-            </button>
+              </summary>
+              <div className="absolute bottom-full left-0 w-full mb-2 bg-popover border text-popover-foreground rounded-xl shadow-lg shadow-black/5 animate-in fade-in slide-in-from-bottom-2 z-50">
+                <Link
+                  href="/profile"
+                  className="flex items-center gap-2 w-full px-3 py-2 text-[13px] hover:bg-accent hover:text-accent-foreground rounded-t-xl transition-colors"
+                >
+                  <UserCircle className="h-4 w-4" />
+                  Ver Perfil
+                </Link>
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-2 w-full px-3 py-2 text-[13px] text-red-500 hover:bg-red-500/10 hover:text-red-600 rounded-b-xl transition-colors text-left"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sair da Conta
+                </button>
+              </div>
+            </details>
           </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-hidden flex flex-col bg-muted/20 relative">
-        <div className="absolute inset-0 bg-grid-black/[0.02] dark:bg-grid-white/[0.02] pointer-events-none" />
+      <main className="flex-1 flex flex-col relative overflow-hidden z-0">
         <div className="relative flex-1 overflow-y-auto">
           {children}
         </div>

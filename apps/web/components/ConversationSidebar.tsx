@@ -510,9 +510,23 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
     ? emailChannels
     : channels.filter(c => c.type === 'WHATSAPP')
 
+  useEffect(() => {
+    const handleClaim = (e: Event) => {
+      const ce = e as CustomEvent
+      if (ce.detail === 'mine') setFilter('mine')
+    }
+    window.addEventListener('chat:claim', handleClaim)
+    return () => window.removeEventListener('chat:claim', handleClaim)
+  }, [])
+
   const claimMutation = useMutation({
     mutationFn: (id: string) => apiFetch(`/conversations/${id}/claim`, { method: 'POST' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['conversations'] }),
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      setFilter('mine')
+      const url = view === 'email' ? `/inbox/${id}?view=email` : `/inbox/${id}`
+      router.push(url)
+    },
   })
 
   const { data, isLoading } = useQuery({
@@ -638,6 +652,13 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
     : TABS
   ).filter(t => isAdmin || (t.value !== 'all' && t.value !== 'archived' && t.value !== 'others'))
 
+  const uniqueChannelsInList = useMemo(() => {
+    if (!conversations) return new Set<string>()
+    return new Set(conversations.map(c => c.channel.id))
+  }, [conversations])
+
+  const showChannelFilter = filterableChannels.length >= 2 && (uniqueChannelsInList.size > 1 || selectedChannelId !== null)
+
   return (
     <div className="w-[300px] flex-shrink-0 border-r flex flex-col bg-card">
       {/* Header */}
@@ -700,7 +721,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
       </div>
 
       {/* Filtro por canal — só aparece se houver 2+ canais na view atual */}
-      {filterableChannels.length >= 2 && (
+      {showChannelFilter && (
         <div className="flex overflow-x-auto no-scrollbar gap-1.5 px-3 py-1.5 border-b bg-muted/10 mask-edges">
           <button
             onClick={() => setSelectedChannelId(null)}

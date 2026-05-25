@@ -4,6 +4,7 @@ import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { formatPhone, displayPhone, isInternalId, type PhoneType } from '@/lib/phone'
+import { maskPhone } from '@/lib/masks'
 import { toast } from 'sonner'
 import {
   Users, Search, Plus, Pencil, Trash2, X, Building2,
@@ -210,8 +211,8 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
             </Field>
 
             <Field label={phoneIsId ? 'Telefone (ID WA)' : 'Telefone (WhatsApp)'}>
-              <input value={phone} onChange={e => setPhone(e.target.value)}
-                placeholder="5511999999999"
+              <input value={maskPhone(phone)} onChange={e => setPhone(e.target.value.replace(/\D/g, ''))}
+                placeholder="+55 (11) 99999-9999"
                 className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
             </Field>
           </div>
