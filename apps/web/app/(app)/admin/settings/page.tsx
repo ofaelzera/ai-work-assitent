@@ -246,6 +246,7 @@ function GlobalRulesPanel({ isAdmin }: { isAdmin: boolean }) {
     defaultAssigneeId?: string | null
     roundRobinUserIds?: string[]
     claimTimeoutMinutes?: number | null
+    aiSuggestReplyEnabled?: boolean
   }
 
   const { data: settings, isLoading } = useQuery<WsSettings>({
@@ -370,6 +371,18 @@ function GlobalRulesPanel({ isAdmin }: { isAdmin: boolean }) {
       {!isAdmin && (
         <p className="text-xs text-muted-foreground italic">Apenas administradores podem alterar estas regras.</p>
       )}
+
+      {/* IA */}
+      <div className="space-y-3 pt-4 border-t">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Inteligência Artificial</p>
+        <Toggle
+          label="Permitir Sugestão de Resposta com IA"
+          description="Habilita o botão mágico no chat para os atendentes pedirem ajuda à IA para redigir ou melhorar respostas."
+          value={s.aiSuggestReplyEnabled ?? true} // Default true
+          onChange={v => patch({ aiSuggestReplyEnabled: v })}
+          disabled={!isAdmin || saveMutation.isPending}
+        />
+      </div>
     </div>
   )
 }

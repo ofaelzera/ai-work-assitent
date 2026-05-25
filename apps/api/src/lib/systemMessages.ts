@@ -15,6 +15,50 @@ import { interpolateMessage, shortProtocol } from './templates.js'
 
 export type SystemMessageKind = 'channel-welcome' | 'agent-welcome' | 'closing'
 
+/**
+ * Tipos de evento interno (NÃO enviam pro cliente — só ficam no timeline).
+ * Renderizados com estilo de "system note" na UI.
+ */
+export type InternalEventKind = 'transfer' | 'note' | 'claim' | 'release'
+
+interface CreateInternalEventArgs {
+  workspaceId: string
+  conversationId: string
+  kind: InternalEventKind
+  /** Texto descritivo do evento (ex: "Transferido para João: cliente aguarda retorno"). */
+  body: string
+  /** Usuário que disparou. null = sistema. */
+  fromUserId?: string | null
+  /** Metadados livres (ex: { fromName, toName, noteText }). */
+  meta?: Record<string, unknown>
+}
+
+/**
+ * Cria uma mensagem-evento INTERNA na conversa.
+ * NÃO envia para o cliente via WhatsApp/Email — só fica no DB para o timeline.
+ */
+export async function createInternalEvent({
+  workspaceId, conversationId, kind, body, fromUserId, meta,
+}: CreateInternalEventArgs) {
+  try {
+    return await prisma.message.create({
+      data: {
+        workspaceId,
+        conversationId,
+        direction: 'OUTBOUND',
+        fromUserId: fromUserId ?? null,
+        body,
+        sentAt: new Date(),
+        deliveryStatus: 'PENDING',
+        attachments: [{ kind: `internal-${kind}`, ...(meta ?? {}) }] as any,
+      },
+    })
+  } catch (err) {
+    logger.warn({ err, conversationId, kind }, 'Falha ao criar evento interno (ignorado)')
+    return null
+  }
+}
+
 interface SendSystemMessageArgs {
   conversationId: string
   /** Texto do template (já com variáveis); helper interpola e envia */

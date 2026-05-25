@@ -117,6 +117,11 @@ export async function createGroupRoom(
 
 /**
  * Lista salas internas em que `userId` é participante ativo, com last message e unread count.
+ *
+ * Deduplica DIRECT rooms com o mesmo externalId (`internal:direct:<userA>:<userB>` ordenado),
+ * mantendo a mais recente. Salas duplicadas podem existir por:
+ *  - Race condition em chamadas concorrentes a `findOrCreateDirectRoom`
+ *  - Rooms criadas antes do dedup ser introduzido
  */
 export async function listRoomsForUser(workspaceId: string, userId: string) {
   const rooms = await prisma.conversation.findMany({
@@ -141,9 +146,22 @@ export async function listRoomsForUser(workspaceId: string, userId: string) {
     },
   })
 
+  // Deduplica DIRECT rooms por externalId — mantém apenas a mais recente.
+  // Ordem já é desc por lastMessageAt, então o primeiro de cada chave é o "vencedor".
+  const seenDirectKey = new Set<string>()
+  const deduped: typeof rooms = []
+  for (const r of rooms) {
+    if (r.type === 'DIRECT') {
+      const key = r.externalId
+      if (seenDirectKey.has(key)) continue
+      seenDirectKey.add(key)
+    }
+    deduped.push(r)
+  }
+
   // Calcula unread por sala = mensagens criadas depois do lastReadAt do participante atual.
   const result = await Promise.all(
-    rooms.map(async (r) => {
+    deduped.map(async (r) => {
       const me = r.participants.find((p) => p.userId === userId)
       const unread = me?.lastReadAt
         ? await prisma.message.count({

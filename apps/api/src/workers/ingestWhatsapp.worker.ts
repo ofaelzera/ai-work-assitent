@@ -1,4 +1,5 @@
 import { Worker } from 'bullmq'
+import { Prisma } from '@prisma/client'
 import { classifyQueue } from './classifyMessage.worker.js'
 import { redis } from '../lib/redis.js'
 import { prisma } from '../lib/prisma.js'
@@ -15,6 +16,7 @@ import { parseJid } from '../lib/phone.js'
 import { mergeContacts } from '../modules/contacts/merge.service.js'
 import { sendSystemMessage } from '../lib/systemMessages.js'
 import { dedupChatConversations } from '../modules/messages/dedup.service.js'
+import { routeNewConversation } from '../modules/messages/routing.service.js'
 
 /**
  * Tenta baixar a mídia de uma mensagem WhatsApp e salva localmente.
@@ -208,96 +210,33 @@ export function startIngestWhatsappWorker() {
         orderBy: { createdAt: 'desc' },
       })
 
-      // Se não tem ativa mas existe RESOLVED do mesmo chat, REABRE em vez de criar nova.
-      // Modelo chat-contínuo: cliente respondendo após finalização reabre a mesma thread.
-      // Regras:
-      //  • Só msg INBOUND reabre (nossa OUTBOUND não)
-      //  • Antes de reabrir, garante que a msg NÃO é duplicata (idempotência) —
-      //    senão re-entregas do webhook reabririam convs sem necessidade
-      if (!conversation) {
-        const fromMe: boolean = message.key?.fromMe ?? false
-        if (!fromMe) {
-          const resolved = await prisma.conversation.findFirst({
-            where: { channelId, externalId: remoteJid, workspaceId, status: 'RESOLVED', source: 'LIVE' },
-            orderBy: { lastMessageAt: 'desc' },
-          })
-          if (resolved) {
-            // Verifica se essa mesma mensagem já está salva (em qualquer conv desse chat)
-            // — se sim, é re-entrega do webhook, não reabre nem processa.
-            const alreadyExists = await prisma.message.findFirst({
-              where: {
-                externalId: externalMsgId,
-                conversation: { channelId, externalId: remoteJid, workspaceId },
-              },
-              select: { id: true },
-            })
-            if (alreadyExists) {
-              logger.info({ remoteJid, externalMsgId }, 'Msg duplicada ignorada (não reabre conv RESOLVED)')
-              return
-            }
-
-            // Ao reabrir: volta pra fila (assignee=null) — quem finalizou não fica
-            // automaticamente responsável de novo. Modelo Whaticket: nova interação
-            // é como novo atendimento, qualquer um pode pegar.
-            conversation = await prisma.conversation.update({
-              where: { id: resolved.id },
-              data: {
-                status: 'OPEN',
-                resolvedAt: null,
-                assigneeId: null,           // ← volta pra fila pública
-                claimedAt: null,
-                reopenCount: { increment: 1 },
-                lastMessageAt: sentAt,
-                unreadCount: { increment: 1 },
-              },
-            })
-            logger.info({ conversationId: conversation.id, remoteJid }, 'Conv RESOLVED reaberta — voltou pra fila')
-
-            // Dispara welcome do canal pra avisar o cliente (mesma lógica de conv nova)
-            const welcomeTpl = typeof channelSettings.welcomeMessage === 'string'
-              ? channelSettings.welcomeMessage
-              : ''
-            if (welcomeTpl && !isGroup) {
-              void sendSystemMessage({
-                conversationId: conversation.id,
-                template: welcomeTpl,
-                kind: 'channel-welcome',
-                userId: null,
-              })
-            }
-          }
+      // Se não tem ativa, vamos criar uma nova.
+      // Mas antes, verifica se essa mesma mensagem já está salva (em qualquer conv desse chat)
+      // — se sim, é re-entrega do webhook de uma conversa finalizada, não cria nova nem processa.
+      if (!conversation && externalMsgId) {
+        const alreadyExists = await prisma.message.findFirst({
+          where: {
+            externalId: externalMsgId,
+            conversation: { channelId, externalId: remoteJid, workspaceId },
+          },
+          select: { id: true },
+        })
+        if (alreadyExists) {
+          logger.info({ remoteJid, externalMsgId }, 'Msg duplicada ignorada (não cria nova conv)')
+          return
         }
       }
 
       if (!conversation) {
-        // Calcula assigneeId: canal sobrescreve workspace; workspace é fallback global
-        let assigneeId: string | null = null
-        // distributionMode: canal > workspace > 'all'
-        const distMode = (channelSettings.distributionMode as string | undefined)
-          ?? (workspaceSettings.distributionMode as string | undefined)
-          ?? 'all'
-
-        if (distMode === 'fixed') {
-          // defaultAssigneeId: canal > workspace
-          assigneeId = (channelSettings.defaultAssigneeId as string | null)
-            ?? (workspaceSettings.defaultAssigneeId as string | null)
-            ?? null
-        } else if (distMode === 'round_robin') {
-          // roundRobinUserIds: canal > workspace
-          const userIds = (channelSettings.roundRobinUserIds as string[] | undefined)
-            ?? (workspaceSettings.roundRobinUserIds as string[] | undefined)
-            ?? []
-          if (userIds.length > 0) {
-            const lastIdx = typeof channelSettings.rrCursor === 'number' ? channelSettings.rrCursor : -1
-            const nextIdx = (lastIdx + 1) % userIds.length
-            assigneeId = userIds[nextIdx] ?? null
-            // Persiste cursor no canal (fire-and-forget)
-            prisma.channel.update({
-              where: { id: channelId },
-              data: { settings: { ...channelSettings, rrCursor: nextIdx } },
-            }).catch(() => {})
-          }
-        }
+        // Aplica regra de roteamento. A conv vai pra FILA (assigneeId=null),
+        // restrita aos usuários de `eligibleAssigneeIds` (ou pública se null).
+        // O atendente precisa clicar Assumir — dispara boas-vindas + cronômetro.
+        const route = await routeNewConversation({
+          workspaceId,
+          channelId,
+          contactId: contact?.id ?? null,
+          autoAssign: false,
+        })
 
         // Para grupos: tenta buscar o nome real do grupo via Evolution
         let groupSubject: string | null = null
@@ -330,7 +269,8 @@ export function startIngestWhatsappWorker() {
             status: 'OPEN',
             unreadCount: 1,
             archived: shouldArchive,
-            ...(assigneeId && { assigneeId }),
+            lastQueuedAt: sentAt,
+            ...(route.eligibleAssigneeIds && { eligibleAssigneeIds: route.eligibleAssigneeIds }),
           },
         }).catch(async () => {
           // Race condition: outro processo criou uma conv para o mesmo chat; reutiliza a existente
@@ -341,7 +281,10 @@ export function startIngestWhatsappWorker() {
           if (!existing) throw new Error(`Falha ao criar/encontrar conversa para ${remoteJid}`)
           return existing
         })
-        logger.info({ conversationId: conversation.id, contactId: contact.id, assigneeId }, 'Novo ticket criado')
+        logger.info(
+          { conversationId: conversation.id, contactId: contact.id, eligible: route.eligibleAssigneeIds, source: route.source, distMode: route.distMode },
+          'Novo ticket criado (na fila)',
+        )
 
         // ── Welcome message do canal ──────────────────────────────────────
         // Dispara só em ticket NOVO. Não em grupos, arquivadas ou se a 1ª msg foi nossa.

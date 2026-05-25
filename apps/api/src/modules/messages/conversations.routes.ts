@@ -5,7 +5,27 @@ import { getChannelConfig, getSmtpConfig } from '../channels/channels.service.js
 import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
 import { sendEmail, moveImapMessage } from '../channels/email.client.js'
 import { dedupConversations } from './dedup.service.js'
-import { sendSystemMessage, getUserMessageTemplate, getUserIgnoreGroups } from '../../lib/systemMessages.js'
+import { routeNewConversation } from './routing.service.js'
+import { Prisma } from '@prisma/client'
+
+/**
+ * Filtro de eligibility para queries de FILA (assigneeId=null).
+ * Retorna:
+ *  - `eligibleAssigneeIds IS NULL` (fila pública) OU
+ *  - `userId IN eligibleAssigneeIds` (fila restrita ao usuário)
+ *
+ * Aplicado APENAS quando a query envolve convs sem dono.
+ * Para "Todas"/"Outros" (supervisor view) NÃO se aplica — admin vê tudo.
+ */
+function eligibilityFilter(userId: string): Prisma.ConversationWhereInput {
+  return {
+    OR: [
+      { eligibleAssigneeIds: { equals: Prisma.DbNull } },
+      { eligibleAssigneeIds: { array_contains: userId } as any },
+    ],
+  }
+}
+import { sendSystemMessage, getUserMessageTemplate, getUserIgnoreGroups, createInternalEvent } from '../../lib/systemMessages.js'
 import { eventBus } from '../../lib/eventBus.js'
 import { logger } from '../../lib/logger.js'
 import { hasPermission } from '../../lib/acl.js'
@@ -60,11 +80,18 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       //   atribuídas pra ele poder assumir.
       const canViewAll = await hasPermission(req.user, 'conversations.viewAll')
       let assigneeFilter: Record<string, unknown> | null = null
+      // Helper: combina filtro de assignee=null com eligibility (fila restrita).
+      // Para admins/supervisores, eligibility é ignorado — vêem TODAS as convs da
+      // fila e a UI mostra "Aguardando @user" para distinguir filas restritas.
+      const queueClause = () =>
+        canViewAll
+          ? { assigneeId: null }
+          : { AND: [{ assigneeId: null }, eligibilityFilter(userId)] }
       if (canViewAll) {
         assigneeFilter = assigneeId === 'unassigned'
-          ? { assigneeId: null }
+          ? queueClause()
           : assigneeId === 'mine_and_queue'
-          ? { OR: [{ assigneeId: userId }, { assigneeId: null }] }
+          ? { OR: [{ assigneeId: userId }, queueClause()] }
           : assigneeId === 'others'
           // ADMIN-only: conversas com outros atendentes (excluindo as minhas e sem dono)
           ? { AND: [{ NOT: { assigneeId: null } }, { NOT: { assigneeId: userId } }] }
@@ -74,7 +101,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       } else {
         // Sem conversations.viewAll: só vê o que é dele
         if (assigneeId === 'unassigned') {
-          assigneeFilter = { assigneeId: null }
+          assigneeFilter = queueClause()
         } else {
           // Qualquer outro caso (mine, todos, others, undefined) → força só as minhas
           assigneeFilter = { assigneeId: userId }
@@ -139,11 +166,14 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           { favorite: 'desc' },
           { lastMessageAt: 'desc' },
         ],
-        take: limit,
+        // Sobre-busca pra compensar o dedup por (channelId, externalId) feito abaixo —
+        // assim o usuário não perde tickets quando há múltiplos para o mesmo chat.
+        take: limit * 2,
         include: {
           contact: { select: { id: true, name: true, phone: true, email: true, metadata: true, company: { select: { id: true, name: true, color: true } } } },
           channel: { select: { id: true, type: true, label: true } },
           assignee: { select: { id: true, name: true, email: true, settings: true } },
+          company: { select: { id: true, name: true, color: true } },
           messages: {
             orderBy: { sentAt: 'desc' },
             take: 1,
@@ -157,13 +187,57 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
 
+      // Dedup por (channelId, externalId) — modelo ticket cria múltiplas
+      // conversations para o mesmo chat (uma por ciclo aberto/finalizado).
+      // No inbox mostramos apenas a mais recente; o histórico completo fica
+      // acessível pelo drawer do contato. Não deduplica chat interno (DIRECT/GROUP).
+      const seenChat = new Set<string>()
+      const dedupedAll: typeof conversations = []
+      for (const c of conversations) {
+        if (c.type === 'EXTERNAL' && c.externalId) {
+          const key = `${c.channelId}:${c.externalId}`
+          if (seenChat.has(key)) continue
+          seenChat.add(key)
+        }
+        dedupedAll.push(c)
+        if (dedupedAll.length >= limit) break
+      }
+
+      // Enriquece eligibleAssigneeIds com nome/email pra UI mostrar "Aguardando @X"
+      const allEligibleIds = new Set<string>()
+      for (const c of dedupedAll) {
+        const ids = Array.isArray(c.eligibleAssigneeIds) ? (c.eligibleAssigneeIds as string[]) : []
+        ids.forEach(id => allEligibleIds.add(id))
+      }
+      const eligibleUsersList = allEligibleIds.size > 0
+        ? await prisma.user.findMany({
+            where: { id: { in: Array.from(allEligibleIds) }, workspaceId },
+            select: { id: true, name: true, email: true },
+          })
+        : []
+      const eligibleUsersMap = new Map(eligibleUsersList.map(u => [u.id, u]))
+
+      const dedupedConversations = dedupedAll.map(c => {
+        const ids = Array.isArray(c.eligibleAssigneeIds) ? (c.eligibleAssigneeIds as string[]) : null
+        return {
+          ...c,
+          eligibleAssignees: ids
+            ? ids.flatMap(id => {
+                const u = eligibleUsersMap.get(id)
+                return u ? [u] : []
+              })
+            : null,
+        }
+      })
+
       const nextCursor =
-        conversations.length === limit
-          ? conversations[conversations.length - 1].lastMessageAt?.toISOString()
+        dedupedConversations.length === limit
+          ? dedupedConversations[dedupedConversations.length - 1].lastMessageAt?.toISOString()
           : null
 
-      // Contagem da fila pública (independente do filtro/aba), pra badge na sidebar.
-      // Cheap: índice (workspaceId, assigneeId). Visível pra todos os roles.
+      // Contagem da fila para o usuário atual.
+      // - Atendente: só conta convs que ele pode assumir (eligibilityFilter).
+      // - Admin/Supervisor: conta TODAS as convs sem dono (visão geral da fila).
       const queueCount = await prisma.conversation.count({
         where: {
           workspaceId,
@@ -171,16 +245,15 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           assigneeId: null,
           source: 'LIVE',
           status: { in: ['OPEN', 'WAITING'] },
-          // Chat interno (DIRECT/GROUP) nasce com assigneeId=null mas NÃO é fila
           type: 'EXTERNAL',
-          // Só conta o que ainda não foi visualizado — badge some após abrir
           unreadCount: { gt: 0 },
           NOT: { externalId: 'status@broadcast' },
+          ...(canViewAll ? {} : eligibilityFilter(userId)),
           ...(Object.keys(channelTypeFilter).length && { channel: channelTypeFilter as any }),
         },
       })
 
-      return { conversations, nextCursor, queueCount }
+      return { conversations: dedupedConversations, nextCursor, queueCount }
     },
   )
 
@@ -191,6 +264,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     { onRequest: [app.authenticate] },
     async (req) => {
       const { workspaceId, sub: userId } = req.user
+      const canViewAll = await hasPermission(req.user, 'conversations.viewAll')
 
       const baseExternal = {
         workspaceId,
@@ -202,10 +276,14 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const [queueCount, myUnreadCount] = await Promise.all([
-        // Fila: só conta o que ainda NÃO foi visualizado (unreadCount > 0).
-        // Assim que alguém abre a conv, o badge some — mesmo sem assumir.
+        // Fila: atendente só conta o que pode assumir; admin conta tudo (visão geral).
         prisma.conversation.count({
-          where: { ...baseExternal, assigneeId: null, unreadCount: { gt: 0 } },
+          where: {
+            ...baseExternal,
+            assigneeId: null,
+            unreadCount: { gt: 0 },
+            ...(canViewAll ? {} : eligibilityFilter(userId)),
+          },
         }),
         prisma.conversation.count({
           where: { ...baseExternal, assigneeId: userId, unreadCount: { gt: 0 } },
@@ -793,9 +871,35 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         orderBy: { createdAt: 'desc' },
       })
       if (!conversation) {
-        conversation = await prisma.conversation.create({
-          data: { workspaceId, channelId, contactId: contact.id, externalId, subject, lastMessageAt: new Date(), unreadCount: 0 },
+        // Conv proativa iniciada por atendente: aplica routing com autoAssign=true.
+        // Se houver regra fixed/RR, atribui ao designado (assume na hora).
+        // Senão, fica com o próprio criador como dono.
+        const route = await routeNewConversation({
+          workspaceId,
+          channelId,
+          contactId: contact.id,
+          autoAssign: true,
+          fallbackUserId: req.user.sub,
         })
+        const now = new Date()
+        conversation = await prisma.conversation.create({
+          data: {
+            workspaceId,
+            channelId,
+            contactId: contact.id,
+            externalId,
+            subject,
+            lastMessageAt: now,
+            unreadCount: 0,
+            assigneeId: route.assigneeId,
+            claimedAt: route.assigneeId ? now : null,
+            lastQueuedAt: now,
+          },
+        })
+        logger.info(
+          { conversationId: conversation.id, assigneeId: route.assigneeId, source: route.source, distMode: route.distMode },
+          'Nova conversa proativa criada',
+        )
       }
 
       // Envia a primeira mensagem
@@ -1080,7 +1184,9 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
-  // ─── Atribuir conversa a um usuário (encaminhar / transferir) ──────────────
+  // ─── Encaminhar conversa para um usuário (transferir pra fila do destino) ──
+  // A conv vai para a FILA restrita ao usuário destino — ele precisa clicar
+  // Assumir para iniciar (gera métricas + dispara boas-vindas).
   // Quem pode: ADMIN sempre; MEMBER só se for o assignee atual.
   app.patch(
     '/conversations/:id/assign',
@@ -1088,27 +1194,78 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       onRequest: [app.authenticate],
       schema: {
         params: z.object({ id: z.string() }),
-        body: z.object({ assigneeId: z.string().nullable() }),
+        body: z.object({
+          assigneeId: z.string().nullable(),
+          note: z.string().max(1000).optional(),
+        }),
       },
     },
     async (req: any, reply) => {
       const { workspaceId, sub: userId, role } = req.user
+      const { assigneeId: targetUserId, note } = req.body
       const conv = await prisma.conversation.findFirstOrThrow({
         where: { id: req.params.id, workspaceId },
-        select: { assigneeId: true },
+        select: { assigneeId: true, assignee: { select: { id: true, name: true, email: true } } },
       })
       if (role !== 'ADMIN' && conv.assigneeId !== userId) {
         return reply.forbidden('Você precisa ser o atendente atual (ou admin) para encaminhar esta conversa')
       }
-      return prisma.conversation.update({
+
+      // Resolve nomes pra log de evento
+      const [fromUser, toUser] = await Promise.all([
+        prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, email: true } }),
+        targetUserId
+          ? prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true, name: true, email: true } })
+          : null,
+      ])
+
+      const now = new Date()
+      // Encaminhar para usuário específico → conv vai para FILA restrita a ele
+      // Encaminhar para null → devolve à fila pública
+      const updated = await prisma.conversation.update({
         where: { id: req.params.id, workspaceId },
-        data: { assigneeId: req.body.assigneeId },
+        data: {
+          assigneeId: null,
+          claimedAt: null,
+          lastQueuedAt: now,
+          eligibleAssigneeIds: targetUserId ? [targetUserId] as any : Prisma.JsonNull,
+        },
         select: {
           id: true,
           assigneeId: true,
+          eligibleAssigneeIds: true,
           assignee: { select: { id: true, name: true, email: true, settings: true } },
         },
       })
+
+      // Cria evento interno no timeline (não envia pro cliente)
+      const fromLabel = fromUser?.name ?? fromUser?.email ?? 'Sistema'
+      const toLabel = toUser ? (toUser.name ?? toUser.email) : 'Fila pública'
+      const transferBody = note
+        ? `${fromLabel} encaminhou para ${toLabel}\n— ${note}`
+        : `${fromLabel} encaminhou para ${toLabel}`
+      await createInternalEvent({
+        workspaceId,
+        conversationId: req.params.id,
+        kind: 'transfer',
+        body: transferBody,
+        fromUserId: userId,
+        meta: {
+          fromUserId: userId,
+          fromName: fromLabel,
+          toUserId: targetUserId,
+          toName: toLabel,
+          note: note ?? null,
+        },
+      })
+
+      await eventBus.audit(workspaceId, 'conversation.assigned', {
+        actorUserId: userId,
+        targetType: 'conversation',
+        targetId: req.params.id,
+      })
+
+      return updated
     },
   )
 
@@ -1127,6 +1284,26 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       const { id } = req.params
 
       const now = new Date()
+
+      // Valida eligibility: se a conv tem eligibleAssigneeIds preenchido, só
+      // usuários nessa lista podem assumir (exceto admins com takeover).
+      const eligibilityCheck = await prisma.conversation.findFirst({
+        where: { id, workspaceId },
+        select: { eligibleAssigneeIds: true },
+      })
+      if (eligibilityCheck) {
+        const eligible = Array.isArray(eligibilityCheck.eligibleAssigneeIds)
+          ? eligibilityCheck.eligibleAssigneeIds as string[]
+          : null
+        if (eligible && eligible.length > 0 && !eligible.includes(userId)) {
+          const canTakeover = await hasPermission(req.user, 'conversations.takeover')
+          if (!canTakeover) {
+            return reply.status(403).send({
+              error: 'Você não tem permissão para assumir esta conversa',
+            })
+          }
+        }
+      }
 
       // Tenta claim atômico (caminho normal: conv sem atribuição)
       const result = await prisma.conversation.updateMany({
@@ -1185,6 +1362,21 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       await eventBus.audit(workspaceId, 'conversation.claimed', {
         actorUserId: userId,
         targetType: 'conversation', targetId: id,
+      })
+
+      // Divisor no timeline: "Atendimento iniciado por X"
+      const claimer = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true, email: true },
+      })
+      const claimerLabel = claimer?.name ?? claimer?.email ?? 'atendente'
+      await createInternalEvent({
+        workspaceId,
+        conversationId: id,
+        kind: 'claim',
+        body: `Atendimento iniciado por ${claimerLabel}`,
+        fromUserId: userId,
+        meta: { userId, userName: claimerLabel },
       })
 
       // ── Welcome message do atendente (apresentação pessoal) ──────────────

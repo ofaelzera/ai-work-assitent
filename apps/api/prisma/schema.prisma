@@ -179,8 +179,26 @@ model Company {
   name        String
   color       String   @default("#6366f1")
   domain      String? // ex: empresa.com.br
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+
+  // Cadastro estendido
+  logoUrl   String? @db.LongText // data URL base64 — precisa de coluna grande
+  cnpj      String?
+  phone     String?
+  email     String?
+  website   String?
+  address   String? @db.Text
+  notes     String? @db.Text
+
+  // Regras de distribuição de atendimentos.
+  // Quando definidas, sobrescrevem canal/workspace.
+  // null = herda do canal/workspace.
+  distributionMode  String? // 'all' | 'fixed' | 'round_robin'
+  defaultAssigneeId String? // FK lógica para User (não criamos FK física pra evitar cascata)
+  roundRobinUserIds Json? // string[]
+  rrCursor          Int? // estado interno do round-robin
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   workspace     Workspace      @relation(fields: [workspaceId], references: [id])
   contacts      Contact[]
@@ -207,6 +225,8 @@ model Conversation {
   source          ConvSource         @default(LIVE) // LIVE = real-time, IMPORTED = veio do sync histórico
   importedAt      DateTime? // marca quando foi importada via sync histórico
   claimedAt       DateTime? // quando alguém assumiu a conversa (Fase B)
+  lastQueuedAt    DateTime? // última vez que entrou em fila (para métricas time-in-queue)
+  eligibleAssigneeIds Json? // string[] | null. null = fila pública; preenchido = só esses users veem
   releasedFrom    Json? // [{ userId, at, reason }] — audit de devoluções (Fase B)
   lastMessageAt   DateTime?
   firstResponseAt DateTime? // quando demos a primeira resposta

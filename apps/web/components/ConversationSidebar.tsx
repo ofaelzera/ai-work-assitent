@@ -45,11 +45,15 @@ interface Conversation {
   lastMessageAt: string | null
   assigneeId: string | null
   assignee: { id: string; name: string; email: string } | null
+  eligibleAssigneeIds: string[] | null
+  eligibleAssignees: Array<{ id: string; name: string | null; email: string }> | null
+  lastQueuedAt: string | null
   contact: {
     id: string; name: string | null; phone: string | null; email?: string | null
     metadata?: { avatarUrl?: string } | null
     company?: { id: string; name: string; color: string } | null
   } | null
+  company?: { id: string; name: string; color: string } | null // vínculo direto (grupos)
   channel: { id: string; type: string; label: string }
   participants?: Array<{ userId: string; user: { id: string; name: string; email: string } }>
   messages: Array<{ body: string; sentAt: string; direction: string; attachments?: Attachment[] | null; fromUserId?: string | null }>
@@ -66,6 +70,21 @@ function formatConvTime(iso: string | null): string {
   const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1)
   if (d.toDateString() === yesterday.toDateString()) return 'ontem'
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+}
+
+/**
+ * Formata tempo de espera relativo (compacto, estilo "5min", "2h", "3d").
+ * Usado pra mostrar há quanto tempo uma conversa está na fila.
+ */
+function formatWaitTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
+  if (diff < 60_000) return 'agora'
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 60) return `${mins} min`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  return `${days}d`
 }
 
 // ─── Channel badge ────────────────────────────────────────────────────────────
@@ -125,8 +144,9 @@ function MessagePreview({ msg, direction }: { msg: Conversation['messages'][0]; 
 }
 
 // ─── Item de conversa (WhatsApp) ──────────────────────────────────────────────
-function ConversationItem({ conv, active, onClick, onFavorite, onArchive, presenceTxt, onClaim, canArchive }: {
+function ConversationItem({ conv, active, currentUserId, onClick, onFavorite, onArchive, presenceTxt, onClaim, canArchive }: {
   conv: Conversation; active: boolean
+  currentUserId: string
   onClick: () => void
   onFavorite: (e: React.MouseEvent) => void
   onArchive: (e: React.MouseEvent) => void
@@ -159,7 +179,18 @@ function ConversationItem({ conv, active, onClick, onFavorite, onArchive, presen
 
   const lastMsg = conv.messages[0]
   const hasUnread = conv.unreadCount > 0
-  const company = conv.contact?.company
+  // Para grupos, a empresa pode estar diretamente na conversa (não no contato)
+  const company = conv.company ?? conv.contact?.company
+
+  // Conv na fila restrita a alguém específico (não eu) → mostra "Aguardando @X"
+  const isOnQueue = !conv.assigneeId && (conv.status === 'OPEN' || conv.status === 'WAITING')
+  const eligible = conv.eligibleAssignees ?? []
+  const restrictedToOthers = isOnQueue
+    && eligible.length > 0
+    && !eligible.some(u => u.id === currentUserId)
+
+  // Tempo aguardando na fila
+  const waitingFor = isOnQueue && conv.lastQueuedAt ? formatWaitTime(conv.lastQueuedAt) : null
 
   return (
     <div
@@ -196,6 +227,15 @@ function ConversationItem({ conv, active, onClick, onFavorite, onArchive, presen
                 @{(conv.assignee.name ?? conv.assignee.email).split(' ')[0].slice(0, 10)}
               </span>
             )}
+            {/* Badge "Aguardando @X" — fila restrita, mostra para quem não é o destinatário */}
+            {restrictedToOthers && eligible.length > 0 && (
+              <span
+                className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 leading-none"
+                title={`Fila restrita a ${eligible.map(u => u.name ?? u.email).join(', ')}`}>
+                Aguardando @{(eligible[0].name ?? eligible[0].email).split(' ')[0].slice(0, 10)}
+                {eligible.length > 1 && ` +${eligible.length - 1}`}
+              </span>
+            )}
           </div>
           <span className={cn('text-[11px] shrink-0', hasUnread ? 'text-primary font-medium' : 'text-muted-foreground')}>
             {formatConvTime(conv.lastMessageAt)}
@@ -203,22 +243,29 @@ function ConversationItem({ conv, active, onClick, onFavorite, onArchive, presen
         </div>
 
         <div className="flex items-center justify-between gap-1">
-          <div className="min-w-0 flex-1">
-            {presenceTxt
-              ? <p className="text-xs text-emerald-500 font-medium truncate">{presenceTxt}</p>
-              : lastMsg
-                ? <MessagePreview msg={lastMsg} direction={lastMsg.direction} />
-                : <p className="text-xs text-muted-foreground">Sem mensagens</p>}
+          <div className="min-w-0 flex-1 flex items-center gap-1.5">
+            <span className="shrink-0 text-[10px] font-medium text-muted-foreground max-w-[70px] truncate" title={conv.channel.label}>
+              {conv.channel.label}
+            </span>
+            <div className="w-1 h-1 rounded-full bg-border shrink-0" />
+            <div className="min-w-0 flex-1">
+              {presenceTxt
+                ? <p className="text-xs text-emerald-500 font-medium truncate">{presenceTxt}</p>
+                : lastMsg
+                  ? <MessagePreview msg={lastMsg} direction={lastMsg.direction} />
+                  : <p className="text-xs text-muted-foreground truncate">Sem mensagens</p>}
+            </div>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
-            {/* Botão "Assumir" — aparece no hover quando não atribuída */}
-            {!conv.assigneeId && onClaim && (
-              <button onClick={onClaim}
-                className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-amber-600 shrink-0"
-                title="Assumir atendimento">
-                Assumir
-              </button>
+            {/* Tempo de espera na fila (só pra convs sem dono) */}
+            {waitingFor && (
+              <span
+                className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 shrink-0"
+                title="Tempo na fila">
+                ⏱ {waitingFor}
+              </span>
             )}
+            {/* Botão Assumir foi removido da lista a pedido do usuário */}
             {/* Arquivar — só visível para ADMIN */}
             {canArchive && (
               <button onClick={onArchive}
@@ -234,7 +281,7 @@ function ConversationItem({ conv, active, onClick, onFavorite, onArchive, presen
               className={cn('p-0.5 rounded transition-opacity', conv.favorite ? 'opacity-100 text-amber-400' : 'opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-amber-400')}>
               <Star className={cn('h-3 w-3', conv.favorite && 'fill-amber-400')} />
             </button>
-            {!conv.assigneeId && !onClaim && (
+            {!conv.assigneeId && conv.status !== 'RESOLVED' && !onClaim && (
               <span className="text-[9px] font-semibold text-amber-600 bg-amber-100 dark:bg-amber-950 dark:text-amber-400 rounded px-1 py-0.5 shrink-0">
                 Na fila
               </span>
@@ -817,6 +864,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
               key={conv.id}
               conv={conv}
               active={activeId === conv.id}
+              currentUserId={currentUser?.sub ?? ''}
               onClick={() => handleClick(conv)}
               onFavorite={(e) => { e.stopPropagation(); favMutation.mutate(conv.id) }}
               onArchive={(e) => { e.stopPropagation(); archiveMutation.mutate(conv.id) }}

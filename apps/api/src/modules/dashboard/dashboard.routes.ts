@@ -1,4 +1,5 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
+import { Prisma } from '@prisma/client'
 import { prisma } from '../../lib/prisma.js'
 
 /**
@@ -127,9 +128,22 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
           where: { workspaceId, assigneeId: userId, archived: false, status: { in: ['OPEN', 'WAITING'] } },
         }),
 
-        // Conversas na fila pública (sem atribuição)
+        // Conversas na fila do usuário: respeita eligibleAssigneeIds (fila restrita)
         prisma.conversation.count({
-          where: { workspaceId, assigneeId: null, archived: false, status: { in: ['OPEN', 'WAITING'] }, source: 'LIVE' },
+          where: {
+            workspaceId,
+            assigneeId: null,
+            archived: false,
+            status: { in: ['OPEN', 'WAITING'] },
+            source: 'LIVE',
+            type: 'EXTERNAL',
+            unreadCount: { gt: 0 },
+            NOT: { externalId: 'status@broadcast' },
+            OR: [
+              { eligibleAssigneeIds: { equals: Prisma.DbNull } },
+              { eligibleAssigneeIds: { array_contains: userId } as any },
+            ],
+          },
         }),
 
         // Total de mensagens não lidas APENAS nas conversas atribuídas a mim

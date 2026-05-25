@@ -258,11 +258,15 @@ export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
     '/conversations/:id/suggest-reply',
     {
       onRequest: [app.authenticate],
-      schema: { params: z.object({ id: z.string() }) },
+      schema: { 
+        params: z.object({ id: z.string() }),
+        body: z.object({ draft: z.string().optional() }).optional(),
+      },
     },
     async (req) => {
       const { workspaceId } = req.user
       const { id } = req.params
+      const { draft } = req.body ?? {}
 
       // Busca últimas mensagens da conversa para contexto
       const messages = await prisma.message.findMany({
@@ -290,13 +294,27 @@ export const aiRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
 
+      let promptContent = historyText
+      let systemPrompt = agent ? undefined : REPLY_SUGGESTER_SYSTEM_PROMPT
+
+      // Se o usuário já digitou algo, a instrução muda para "melhorar" o texto
+      if (draft && draft.trim().length > 0) {
+        promptContent = `Histórico da conversa:\n${historyText}\n\nO atendente escreveu o seguinte rascunho de resposta:\n"${draft}"\n\nPor favor, melhore este rascunho. Corrija erros gramaticais, melhore o tom (mais profissional ou empático, conforme o contexto) e forneça 2 a 3 variações aprimoradas desse texto.`
+        if (!agent) {
+          systemPrompt = `Você é um assistente de IA focado em melhorar textos. Você receberá o histórico de uma conversa e um rascunho de resposta. Seu objetivo é melhorar o rascunho do atendente para enviar ao cliente. Responda SEMPRE com um JSON contendo uma propriedade "suggestions" que é um array de objetos com "label" (ex: "Mais Formal", "Mais Amigável", "Direto") e "text" (a resposta melhorada).`
+        } else {
+          // Garante que mesmo com agente customizado, ele receba a instrução explícita
+          promptContent += `\n\nResponda em formato JSON com um array 'suggestions' com objetos contendo 'label' e 'text'.`
+        }
+      }
+
       const result = await runAgent({
         agentId: agent?.id,
         workspaceId,
-        systemPrompt: agent ? undefined : REPLY_SUGGESTER_SYSTEM_PROMPT,
+        systemPrompt: systemPrompt,
         model: agent?.model ?? 'gemini-2.5-flash',
         provider: agent?.provider ?? 'gemini',
-        messages: [{ role: 'user', content: historyText }],
+        messages: [{ role: 'user', content: promptContent }],
         responseFormat: 'json',
       })
 

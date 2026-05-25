@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
 import { apiFetch, getAccessToken } from '@/lib/api'
 import { useSSE } from '@/lib/sse'
 import { usePresence, presenceLabel } from '@/lib/usePresence'
@@ -9,7 +10,7 @@ import {
   Send, Paperclip, FileText, Music, Video, Image as ImageIcon, X,
   ZoomIn, Download, Kanban, Phone, Mail, Reply,
   Check, CheckCheck, Sparkles, CheckCircle2, RotateCcw, Clock3, UserRound, ChevronDown,
-  LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History, MoreVertical
+  LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History, MoreVertical, ChevronRight
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
@@ -712,17 +713,30 @@ function ReplyBar({ reply, onCancel }: { reply: ReplyState; onCancel: () => void
 }
 
 // ─── Suggest Reply ────────────────────────────────────────────────────────────
-function SuggestReplyButton({ conversationId, onSelect }: { conversationId: string; onSelect: (text: string) => void }) {
+function SuggestReplyButton({ conversationId, draft, onSelect }: { conversationId: string; draft?: string; onSelect: (text: string) => void }) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [suggestions, setSuggestions] = useState<{ label: string; text: string }[]>([])
+
+  const { data: settings } = useQuery<{ aiSuggestReplyEnabled?: boolean }>({
+    queryKey: ['workspace-settings'],
+    queryFn: () => apiFetch('/workspace/settings'),
+    staleTime: 1000 * 60 * 5, // 5 min cache
+  })
+
+  if (settings && settings.aiSuggestReplyEnabled === false) {
+    return null
+  }
 
   const fetchSuggestions = async () => {
     setLoading(true)
     setOpen(true)
     try {
       const res = await apiFetch<{ suggestions: { label: string; text: string }[] }>(
-        `/conversations/${conversationId}/suggest-reply`, { method: 'POST' },
+        `/conversations/${conversationId}/suggest-reply`, { 
+          method: 'POST',
+          body: JSON.stringify(draft?.trim() ? { draft: draft.trim() } : {})
+        },
       )
       setSuggestions(res.suggestions)
     } catch {
@@ -846,11 +860,14 @@ function ForwardConversationModal({
     mutationFn: () =>
       apiFetch(`/conversations/${conversationId}/assign`, {
         method: 'PATCH',
-        body: JSON.stringify({ assigneeId: selectedUserId }),
+        body: JSON.stringify({
+          assigneeId: selectedUserId,
+          ...(note.trim() && { note: note.trim() }),
+        }),
       }),
     onSuccess: () => {
       const name = users.find(u => u.id === selectedUserId)?.name ?? 'atendente'
-      toast.success(`Conversa encaminhada para ${name}`)
+      toast.success(`Conversa enviada para a fila de ${name}`)
       onDone()
     },
     onError: () => toast.error('Erro ao encaminhar conversa'),
@@ -861,7 +878,9 @@ function ForwardConversationModal({
       <div className="bg-card rounded-xl shadow-xl border w-full max-w-sm mx-4 p-5 space-y-4">
         <div>
           <h3 className="font-semibold text-base">Encaminhar conversa</h3>
-          <p className="text-sm text-muted-foreground mt-0.5">Selecione o atendente que irá assumir esta conversa.</p>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            A conversa vai para a <strong>fila do atendente</strong> escolhido — ele precisa clicar em "Assumir" para iniciar.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -907,7 +926,7 @@ function ForwardConversationModal({
             onClick={() => forwardMutation.mutate()}
             disabled={!selectedUserId || forwardMutation.isPending}
             className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
-            {forwardMutation.isPending ? 'Encaminhando...' : 'Encaminhar'}
+            {forwardMutation.isPending ? 'Enviando…' : 'Enviar pra fila'}
           </button>
         </div>
       </div>
@@ -977,6 +996,7 @@ interface Props {
 }
 
 export default function WhatsappView({ conversationId, conv, messages, isLoading }: Props) {
+  const router = useRouter()
   const queryClient = useQueryClient()
   const currentUser = useAuthStore(s => s.user)
   // Resolve menções @<ID> nas mensagens visíveis (PN/LID → nome do contato)
@@ -1086,6 +1106,9 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
       toast.success(status === 'RESOLVED' ? 'Conversa finalizada!' : 'Status atualizado!')
+      if (status === 'RESOLVED') {
+        router.push('/inbox')
+      }
     },
     onError: () => toast.error('Erro ao atualizar status'),
   })
@@ -1428,7 +1451,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         </div>
 
         {/* ── Banner: conversa na fila (sem atribuição) ── */}
-        {isUnassigned && (
+        {isUnassigned && conv.status !== 'RESOLVED' && (
           <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 shrink-0">
             <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <p className="text-sm text-amber-800 dark:text-amber-200 flex-1">
@@ -1445,7 +1468,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         )}
 
         {/* ── Banner: em atendimento por outro (MEMBER ou ADMIN supervisionando) ── */}
-        {isOtherConv && !isAdmin && (
+        {isOtherConv && !isAdmin && conv.status !== 'RESOLVED' && (
           <div className="flex items-center gap-3 px-4 py-2 bg-muted/60 border-b shrink-0">
             <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />
             <p className="text-sm text-muted-foreground">
@@ -1456,7 +1479,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         )}
 
         {/* ── Banner: ADMIN supervisionando — pode finalizar/assumir/transferir, mas não digitar ── */}
-        {isOtherConv && isAdmin && (
+        {isOtherConv && isAdmin && conv.status !== 'RESOLVED' && (
           <div className="flex items-center gap-3 px-4 py-2 bg-blue-50/60 dark:bg-blue-950/20 border-b border-blue-200 dark:border-blue-800 shrink-0">
             <AlertCircle className="h-4 w-4 text-blue-500 shrink-0" />
             <p className="text-sm text-blue-700 dark:text-blue-300">
@@ -1490,6 +1513,42 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
               </div>
 
               {group.messages.map((msg, i) => {
+                // Eventos internos (transferência, notas) — renderizados como
+                // divisor centralizado, não como bolha de chat.
+                const att = msg.attachments?.[0] as any
+                const intKind = typeof att?.kind === 'string' && att.kind.startsWith('internal-')
+                  ? att.kind.replace('internal-', '')
+                  : null
+                if (intKind === 'transfer') {
+                  return (
+                    <div key={msg.id} className="flex items-center justify-center my-3 animate-slide-up">
+                      <div className="max-w-[80%] bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-xl px-3 py-2 text-xs text-amber-800 dark:text-amber-300 shadow-sm">
+                        <div className="flex items-center gap-1.5 font-semibold mb-1">
+                          <ChevronRight className="h-3 w-3" />
+                          Encaminhamento
+                          <span className="ml-auto text-[10px] font-normal opacity-70">
+                            {formatTime(msg.sentAt)}
+                          </span>
+                        </div>
+                        <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
+                      </div>
+                    </div>
+                  )
+                }
+                if (intKind === 'claim' || intKind === 'release') {
+                  return (
+                    <div key={msg.id} className="flex items-center justify-center my-3 animate-slide-up">
+                      <div className="flex items-center gap-2 max-w-[80%]">
+                        <div className="flex-1 h-px bg-border" />
+                        <span className="text-[11px] text-muted-foreground font-medium px-2 py-0.5 rounded-full bg-muted/60">
+                          {msg.body} · {formatTime(msg.sentAt)}
+                        </span>
+                        <div className="flex-1 h-px bg-border" />
+                      </div>
+                    </div>
+                  )
+                }
+
                 const isOut = msg.direction === 'OUTBOUND'
                 const senderId = msg.fromContactId ?? (isOut ? '__me' : '__unknown')
                 const isFirstOfSender = senderId !== lastSenderId
@@ -1722,8 +1781,13 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         )}
 
         {/* ── Input / CTA ── */}
-        {/* Caso 1: conversa sem atribuição — qualquer um precisa assumir primeiro */}
-        {isUnassigned ? (
+        {conv.status === 'RESOLVED' ? (
+          <div className="border-t bg-muted/20 px-4 py-4 shrink-0 flex flex-col items-center gap-2">
+            <p className="text-sm text-muted-foreground text-center">
+              Esta conversa foi finalizada. Reabra para enviar novas mensagens.
+            </p>
+          </div>
+        ) : isUnassigned ? (
           <div className="border-t bg-muted/20 px-4 py-4 shrink-0 flex flex-col items-center gap-2">
             <p className="text-sm text-muted-foreground">Assuma a conversa para poder responder</p>
             <button
@@ -1791,6 +1855,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                     <>
                       <SuggestReplyButton 
                         conversationId={conversationId} 
+                        draft={text}
                         onSelect={t => { setText(t ?? ''); setTimeout(() => textareaRef.current?.focus(), 50) }} 
                       />
                       <button 
@@ -1910,6 +1975,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
             })
             queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
             queryClient.invalidateQueries({ queryKey: ['conversations'] })
+            router.push('/inbox')
           }}
         />
       )}
@@ -1923,6 +1989,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
             setShowForward(false)
             queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
             queryClient.invalidateQueries({ queryKey: ['conversations'] })
+            router.push('/inbox')
           }}
         />
       )}
