@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users } from 'lucide-react'
+import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
@@ -99,6 +99,108 @@ function MaintenancePanel() {
           }
         </button>
       </div>
+    </div>
+  )
+}
+
+// ─── Dados da empresa ─────────────────────────────────────────────────────────
+function CompanyDataPanel({ isAdmin }: { isAdmin: boolean }) {
+  const queryClient = useQueryClient()
+
+  type CompanySettings = {
+    razaoSocial?: string | null
+    cnpj?: string | null
+    companyPhone?: string | null
+    companyEmail?: string | null
+    companyAddress?: string | null
+  }
+
+  const { data: settings, isLoading } = useQuery<Record<string, unknown>>({
+    queryKey: ['workspace-settings'],
+    queryFn: () => apiFetch<Record<string, unknown>>('/workspace/settings'),
+  })
+
+  const [form, setForm] = useState<CompanySettings>({
+    razaoSocial: '',
+    cnpj: '',
+    companyPhone: '',
+    companyEmail: '',
+    companyAddress: '',
+  })
+
+  useEffect(() => {
+    if (settings) {
+      setForm({
+        razaoSocial:    typeof settings.razaoSocial    === 'string' ? settings.razaoSocial    : '',
+        cnpj:           typeof settings.cnpj           === 'string' ? settings.cnpj           : '',
+        companyPhone:   typeof settings.companyPhone   === 'string' ? settings.companyPhone   : '',
+        companyEmail:   typeof settings.companyEmail   === 'string' ? settings.companyEmail   : '',
+        companyAddress: typeof settings.companyAddress === 'string' ? settings.companyAddress : '',
+      })
+    }
+  }, [settings])
+
+  const saveMutation = useMutation({
+    mutationFn: (patch: Partial<CompanySettings>) =>
+      apiFetch('/workspace/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workspace-settings'] })
+      toast.success('Dados da empresa salvos')
+    },
+    onError: () => toast.error('Erro ao salvar dados da empresa'),
+  })
+
+  const dirty = settings && (
+    form.razaoSocial    !== (typeof settings.razaoSocial    === 'string' ? settings.razaoSocial    : '') ||
+    form.cnpj           !== (typeof settings.cnpj           === 'string' ? settings.cnpj           : '') ||
+    form.companyPhone   !== (typeof settings.companyPhone   === 'string' ? settings.companyPhone   : '') ||
+    form.companyEmail   !== (typeof settings.companyEmail   === 'string' ? settings.companyEmail   : '') ||
+    form.companyAddress !== (typeof settings.companyAddress === 'string' ? settings.companyAddress : '')
+  )
+
+  if (isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>
+
+  const field = (key: keyof CompanySettings, label: string, placeholder: string) => (
+    <div>
+      <label className="text-xs font-medium">{label}</label>
+      <input
+        value={form[key] ?? ''}
+        onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}
+        placeholder={placeholder}
+        disabled={!isAdmin}
+        className="mt-1.5 w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
+      />
+    </div>
+  )
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-muted-foreground">
+        Disponíveis como variáveis nos templates de mensagem: <code className="font-mono text-xs bg-muted px-1 rounded">{'{razao_social}'}</code>, <code className="font-mono text-xs bg-muted px-1 rounded">{'{cnpj}'}</code>
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {field('razaoSocial',    'Razão Social',  'Empresa S.A.')}
+        {field('cnpj',           'CNPJ',          '00.000.000/0001-00')}
+        {field('companyPhone',   'Telefone',      '(11) 3000-0000')}
+        {field('companyEmail',   'E-mail',        'contato@empresa.com.br')}
+      </div>
+      {field('companyAddress', 'Endereço', 'Rua Exemplo, 123 – São Paulo/SP')}
+
+      <div className="flex justify-end pt-2 border-t">
+        <button
+          onClick={() => saveMutation.mutate(form)}
+          disabled={!dirty || !isAdmin || saveMutation.isPending}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+        >
+          <Save className="h-3.5 w-3.5" />
+          {saveMutation.isPending ? 'Salvando...' : 'Salvar'}
+        </button>
+      </div>
+
+      {!isAdmin && (
+        <p className="text-xs text-muted-foreground italic">Apenas administradores podem alterar estes dados.</p>
+      )}
     </div>
   )
 }
@@ -361,6 +463,11 @@ export default function SettingsPage() {
             <p className="text-muted-foreground">Seu perfil: <span className="font-semibold text-foreground">{user?.role ?? '—'}</span></p>
           </div>
         </div>
+      </AdminSection>
+
+      {/* Dados da empresa */}
+      <AdminSection title="Dados da empresa" icon={Building2} description="Informações usadas nos templates de mensagem automática">
+        <CompanyDataPanel isAdmin={isAdmin} />
       </AdminSection>
 
       {/* Regras globais de distribuição */}

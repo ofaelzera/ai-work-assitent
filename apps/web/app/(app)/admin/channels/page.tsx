@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import MessageTemplateField from '@/components/MessageTemplateField'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 import RichEditor from '@/components/RichEditor'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 interface Channel {
   id: string
@@ -107,17 +108,68 @@ const AVAILABLE_INTEGRATIONS = [
   },
 ]
 
+interface EvolutionServer { id: string; name: string; status: string }
+interface ServerInstance {
+  name: string
+  connectionStatus?: string
+  profileName?: string
+  profilePictureUrl?: string
+  ownerJid?: string
+  alreadyAdopted: boolean
+  adoptedByLabel?: string
+  adoptedInSameWorkspace: boolean
+}
+
 // ─── Modal WhatsApp ───────────────────────────────────────────────────────────
-function WhatsAppModal({ onClose, onCreate }: { onClose: () => void; onCreate: (label: string) => void; isPending: boolean }) {
+function WhatsAppModal({ onClose, onCreate, onAdopt }: {
+  onClose: () => void
+  onCreate: (label: string, evolutionServerId?: string) => void
+  onAdopt: (label: string, evolutionServerId: string, instanceName: string) => void
+  isPending: boolean
+}) {
+  const [mode, setMode] = useState<'new' | 'existing'>('new')
   const [label, setLabel] = useState('')
+  const [serverId, setServerId] = useState('')
+  const [instanceName, setInstanceName] = useState('')
+
+  const { data: servers = [] } = useQuery({
+    queryKey: ['evolution-servers'],
+    queryFn: () => apiFetch<EvolutionServer[]>('/evolution-servers'),
+  })
+  const activeServers = servers.filter(s => s.status === 'ACTIVE')
+
+  const { data: instances = [], isLoading: loadingInstances } = useQuery({
+    queryKey: ['evolution-server-instances', serverId],
+    queryFn: () => apiFetch<ServerInstance[]>(`/evolution-servers/${serverId}/instances`),
+    enabled: mode === 'existing' && !!serverId,
+  })
+
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [onClose])
+
+  // Ao trocar de modo, limpa instância selecionada
+  useEffect(() => { setInstanceName('') }, [mode, serverId])
+
+  function handleSubmit() {
+    if (!label) return
+    if (mode === 'new') {
+      onCreate(label, serverId || undefined)
+    } else {
+      if (!serverId || !instanceName) return
+      onAdopt(label, serverId, instanceName)
+    }
+  }
+
+  const canSubmit = mode === 'new'
+    ? !!label
+    : !!label && !!serverId && !!instanceName
+
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-5" onClick={e => e.stopPropagation()}>
+      <div className="bg-card rounded-xl shadow-2xl w-full max-w-md p-6 space-y-5" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <WhatsAppIcon size={32} />
@@ -128,29 +180,132 @@ function WhatsAppModal({ onClose, onCreate }: { onClose: () => void; onCreate: (
           </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground"><X className="h-4 w-4" /></button>
         </div>
+
+        {/* Tabs: Nova vs Existente */}
+        <div className="flex gap-1 bg-muted/50 p-1 rounded-lg">
+          <button
+            type="button"
+            onClick={() => setMode('new')}
+            className={cn(
+              'flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition',
+              mode === 'new'
+                ? 'bg-card shadow-sm text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            Nova instância
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('existing')}
+            disabled={activeServers.length === 0}
+            className={cn(
+              'flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition',
+              mode === 'existing'
+                ? 'bg-card shadow-sm text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+              activeServers.length === 0 && 'opacity-50 cursor-not-allowed',
+            )}
+          >
+            Conectar existente
+          </button>
+        </div>
+
         <div className="space-y-2">
           <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Nome do canal</label>
           <input
             autoFocus
             value={label}
             onChange={e => setLabel(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && label && onCreate(label)}
+            onKeyDown={e => e.key === 'Enter' && canSubmit && handleSubmit()}
             placeholder="Ex: WhatsApp Principal"
             className="w-full rounded-lg border bg-transparent px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
         </div>
+
+        {/* Seletor de servidor */}
+        {(mode === 'existing' || activeServers.length > 0) && (
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Servidor Evolution
+              {mode === 'new' && <span className="normal-case font-normal"> (opcional — automático se vazio)</span>}
+            </label>
+            <select
+              value={serverId}
+              onChange={e => setServerId(e.target.value)}
+              className="w-full rounded-lg border bg-transparent px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            >
+              {mode === 'new' && <option value="">Automático (menor carga)</option>}
+              {mode === 'existing' && <option value="">Selecione um servidor…</option>}
+              {activeServers.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Lista de instâncias (modo existente) */}
+        {mode === 'existing' && serverId && (
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Instância</label>
+            {loadingInstances ? (
+              <div className="text-xs text-muted-foreground py-2">Carregando instâncias…</div>
+            ) : instances.length === 0 ? (
+              <div className="text-xs text-muted-foreground py-2">Nenhuma instância encontrada neste servidor.</div>
+            ) : (
+              <div className="space-y-1 max-h-56 overflow-y-auto border rounded-lg p-1">
+                {instances.map(inst => {
+                  const disabled = inst.alreadyAdopted
+                  return (
+                    <button
+                      key={inst.name}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => setInstanceName(inst.name)}
+                      className={cn(
+                        'w-full text-left px-3 py-2 rounded-md text-sm transition flex items-center gap-2',
+                        instanceName === inst.name && !disabled && 'bg-primary/10 ring-1 ring-primary',
+                        !disabled && instanceName !== inst.name && 'hover:bg-accent',
+                        disabled && 'opacity-50 cursor-not-allowed',
+                      )}
+                    >
+                      <div className={cn(
+                        'h-1.5 w-1.5 rounded-full',
+                        inst.connectionStatus === 'open' ? 'bg-emerald-500' : 'bg-yellow-500',
+                      )} />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium truncate">{inst.name}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {inst.profileName ?? inst.ownerJid ?? '(sem perfil)'}
+                          {disabled && inst.adoptedByLabel && (
+                            <> — já vinculada a "{inst.adoptedByLabel}"</>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
-          Após criar, um QR Code será exibido. Escaneie com o WhatsApp em <strong>Dispositivos vinculados → Vincular dispositivo</strong>.
+          {mode === 'new'
+            ? <>Após criar, um QR Code será exibido. Escaneie com o WhatsApp em <strong>Dispositivos vinculados → Vincular dispositivo</strong>.</>
+            : <>Conectaremos à instância existente e atualizaremos seu webhook para receber eventos no nosso sistema. Se já estiver conectada ao WhatsApp, nenhum re-pareamento é necessário.</>
+          }
         </p>
+
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm hover:bg-accent">Cancelar</button>
           <button
-            onClick={() => label && onCreate(label)}
-            disabled={!label}
+            onClick={handleSubmit}
+            disabled={!canSubmit}
             className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
           >
             <Plus className="h-3.5 w-3.5" />
-            Criar canal
+            {mode === 'new' ? 'Criar canal' : 'Conectar instância'}
           </button>
         </div>
       </div>
@@ -696,6 +851,7 @@ function ImportHistoryModal({
 // ─── Página principal ─────────────────────────────────────────────────────────
 export default function ChannelsPage() {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [modal, setModal] = useState<null | 'whatsapp' | 'smtp'>(null)
   const [smtp, setSmtp] = useState<any>(null)
   const [qr, setQr] = useState<{ channelId: string; data: QrData } | null>(null)
@@ -753,7 +909,8 @@ export default function ChannelsPage() {
   })
 
   const createWa = useMutation({
-    mutationFn: (label: string) => apiFetch<Channel>('/channels/whatsapp', { method: 'POST', body: JSON.stringify({ label }) }),
+    mutationFn: ({ label, evolutionServerId }: { label: string; evolutionServerId?: string }) =>
+      apiFetch<Channel>('/channels/whatsapp', { method: 'POST', body: JSON.stringify({ label, evolutionServerId }) }),
     onSuccess: (ch) => {
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       setModal(null)
@@ -761,6 +918,19 @@ export default function ChannelsPage() {
       loadQr(ch.id)
     },
     onError: () => toast.error('Erro ao criar canal'),
+  })
+
+  const adoptWa = useMutation({
+    mutationFn: (data: { label: string; evolutionServerId: string; instanceName: string }) =>
+      apiFetch<Channel>('/channels/whatsapp/adopt', { method: 'POST', body: JSON.stringify(data) }),
+    onSuccess: (ch) => {
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      setModal(null)
+      toast.success(`Instância vinculada como "${ch.label}"!`)
+      // Se já está conectada, não precisa de QR; senão exibe pra reconectar
+      if (ch.status !== 'CONNECTED') loadQr(ch.id)
+    },
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao adotar instância'),
   })
 
   const createSmtp = useMutation({
@@ -779,6 +949,7 @@ export default function ChannelsPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiFetch(`/channels/${id}`, { method: 'DELETE' }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['channels'] }); toast.success('Canal removido') },
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao remover canal'),
   })
 
   const statusMutation = useMutation({
@@ -790,20 +961,20 @@ export default function ChannelsPage() {
     mutationFn: (id: string) => apiFetch<{ chats: number; messages: number }>(`/channels/${id}/sync`, { method: 'POST' }),
     onMutate: () => toast.loading('Sincronizando...', { id: 'sync' }),
     onSuccess: (data) => { toast.dismiss('sync'); toast.success(`${data.messages} mensagens em ${data.chats} conversas`) },
-    onError: () => { toast.dismiss('sync'); toast.error('Erro ao sincronizar') },
+    onError: (e: any) => { toast.dismiss('sync'); toast.error(e?.message ?? 'Erro ao sincronizar') },
   })
 
   const avatarMutation = useMutation({
     mutationFn: (id: string) => apiFetch(`/channels/${id}/sync-avatars`, { method: 'POST' }),
     onMutate: () => toast.loading('Buscando fotos...', { id: 'avatars' }),
     onSuccess: () => { toast.dismiss('avatars'); toast.success('Fotos sendo buscadas em background') },
-    onError: () => { toast.dismiss('avatars'); toast.error('Erro ao buscar fotos') },
+    onError: (e: any) => { toast.dismiss('avatars'); toast.error(e?.message ?? 'Erro ao buscar fotos') },
   })
 
   const webhookMutation = useMutation({
     mutationFn: (id: string) => apiFetch<{ ok: boolean; instanceName: string }>(`/channels/${id}/update-webhook`, { method: 'POST' }),
     onSuccess: (data) => toast.success(`Webhook atualizado para "${data.instanceName}"`),
-    onError: () => toast.error('Erro ao atualizar webhook'),
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao atualizar webhook'),
   })
 
   const loadQr = async (channelId: string) => {
@@ -843,7 +1014,18 @@ export default function ChannelsPage() {
               onSync={() => syncMutation.mutate(ch.id)}
               onAvatars={() => avatarMutation.mutate(ch.id)}
               onStatus={() => statusMutation.mutate(ch.id)}
-              onDelete={() => { if (confirm(`Remover "${ch.label}"?`)) deleteMutation.mutate(ch.id) }}
+              onDelete={async () => {
+                const ok = await confirm({
+                  type: 'danger',
+                  title: `Remover canal "${ch.label}"?`,
+                  message: ch.type === 'WHATSAPP'
+                    ? 'Se o canal foi criado por aqui, a instância também será removida do servidor Evolution. Se foi adotada via "Conectar existente", a instância permanece intacta no servidor.'
+                    : 'O canal será desvinculado do sistema. As conversas e mensagens existentes continuarão acessíveis.',
+                  warning: 'Conversas e mensagens existentes permanecem no sistema.',
+                  confirmLabel: 'Remover canal',
+                })
+                if (ok) deleteMutation.mutate(ch.id)
+              }}
               onUpdateWebhook={() => webhookMutation.mutate(ch.id)}
               syncPending={syncMutation.isPending}
               avatarPending={avatarMutation.isPending}
@@ -898,8 +1080,11 @@ export default function ChannelsPage() {
     {modal === 'whatsapp' && (
       <WhatsAppModal
         onClose={() => setModal(null)}
-        onCreate={(label) => createWa.mutate(label)}
-        isPending={createWa.isPending}
+        onCreate={(label, evolutionServerId) => createWa.mutate({ label, evolutionServerId })}
+        onAdopt={(label, evolutionServerId, instanceName) =>
+          adoptWa.mutate({ label, evolutionServerId, instanceName })
+        }
+        isPending={createWa.isPending || adoptWa.isPending}
       />
     )}
     {modal === 'smtp' && (

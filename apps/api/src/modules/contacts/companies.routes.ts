@@ -12,11 +12,16 @@ export const companiesRoutes: FastifyPluginAsyncZod = async (app) => {
       where: {
         workspaceId,
         ...(!canViewAll && {
-          contacts: { some: { conversations: { some: { assigneeId: userId } } } },
+          OR: [
+            { contacts: { some: { conversations: { some: { assigneeId: userId } } } } },
+            { conversations: { some: { assigneeId: userId } } },
+          ],
         }),
       },
       orderBy: { name: 'asc' },
-      include: { _count: { select: { contacts: true } } },
+      include: {
+        _count: { select: { contacts: true, conversations: true } },
+      },
     })
   })
 
@@ -72,6 +77,11 @@ export const companiesRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId } = req.user
       await prisma.company.findFirstOrThrow({ where: { id: req.params.id, workspaceId } })
       await prisma.contact.updateMany({
+        where: { workspaceId, companyId: req.params.id },
+        data: { companyId: null },
+      })
+      // Também desvincula conversations diretamente vinculadas (grupos)
+      await prisma.conversation.updateMany({
         where: { workspaceId, companyId: req.params.id },
         data: { companyId: null },
       })

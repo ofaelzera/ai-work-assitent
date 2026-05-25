@@ -18,7 +18,9 @@ const PATH_PERMS: Array<{ prefix: string; perm: string }> = [
   { prefix: '/admin/reports',  perm: 'reports.view' },
   { prefix: '/admin/users',    perm: 'admin.users' },
   { prefix: '/admin/roles',    perm: 'admin.users' },
-  { prefix: '/admin/settings', perm: 'admin.settings' },
+  { prefix: '/admin/settings',          perm: 'admin.settings' },
+  { prefix: '/admin/quick-replies',     perm: 'admin.settings' },
+  { prefix: '/admin/evolution-servers', perm: 'admin.settings' },
 ]
 
 /** Perms que destravam acesso a alguma sub-página de /admin/*. */

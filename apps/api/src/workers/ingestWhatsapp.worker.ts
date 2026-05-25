@@ -5,8 +5,8 @@ import { prisma } from '../lib/prisma.js'
 import { eventBus } from '../lib/eventBus.js'
 import { logger } from '../lib/logger.js'
 import { extractText, extractMediaInfo, mediaTypeLabel, isMetaMessage } from '../modules/channels/media.utils.js'
-import { evolutionClient } from '../modules/channels/evolution.client.js'
 import { getChannelConfig } from '../modules/channels/channels.service.js'
+import { getClientForChannel } from '../modules/evolution-servers/evolution-servers.service.js'
 import { env } from '../config/env.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -31,7 +31,8 @@ async function downloadAndSaveMedia(
 
   try {
     const { instanceName } = await getChannelConfig(channelId)
-    const result = await evolutionClient.getMediaBase64(instanceName, mediaInfo.key)
+    const client = await getClientForChannel(channelId)
+    const result = await client.getMediaBase64(instanceName, mediaInfo.key)
     if (!result?.base64) return null
 
     const buffer = Buffer.from(result.base64, 'base64')
@@ -307,7 +308,8 @@ export function startIngestWhatsappWorker() {
           }
           try {
             const { instanceName } = await getChannelConfig(channelId)
-            const groupInfo = await evolutionClient.fetchGroupInfo(instanceName, remoteJid)
+            const groupClient = await getClientForChannel(channelId)
+            const groupInfo = await groupClient.fetchGroupInfo(instanceName, remoteJid)
             groupSubject = groupInfo?.subject ?? null
           } catch {
             // Se falhar, deixa subject null — sidebar vai mostrar o JID limpo
@@ -369,7 +371,8 @@ export function startIngestWhatsappWorker() {
         if (isGroup && !conversation.subject) {
           try {
             const { instanceName: instName } = await getChannelConfig(channelId)
-            const groupInfo = await evolutionClient.fetchGroupInfo(instName, remoteJid)
+            const grpClient = await getClientForChannel(channelId)
+            const groupInfo = await grpClient.fetchGroupInfo(instName, remoteJid)
             if (groupInfo?.subject) updateData.subject = groupInfo.subject
           } catch {
             // ignora

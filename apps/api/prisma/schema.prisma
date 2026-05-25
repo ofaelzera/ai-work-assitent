@@ -36,6 +36,7 @@ model Workspace {
   eventLogs        EventLog[]
   companies        Company[]
   customRoles      CustomRole[]
+  quickReplies     QuickReply[]
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -100,25 +101,46 @@ model RefreshToken {
   @@index([userId])
 }
 
+// ─── Evolution Servers ───────────────────────────────────────────────────────
+model EvolutionServer {
+  id              String               @id @default(cuid())
+  name            String               // "VPS Brasil", "VPS EUA"
+  url             String               // "https://evo.meusite.com"
+  apiKey          String               @db.Text // criptografada (AES-256-GCM)
+  status          EvolutionServerStatus @default(ACTIVE)
+  maxInstances    Int                  @default(100)
+  instanceCount   Int                  @default(0)
+  priority        Int                  @default(0) // maior = preferido
+  isHealthy       Boolean              @default(true)
+  lastHealthCheck DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  channels Channel[]
+}
+
 // ─── Channels ────────────────────────────────────────────────────────────────
 model Channel {
-  id           String        @id @default(cuid())
-  workspaceId  String
-  type         ChannelType
-  label        String
-  status       ChannelStatus @default(DISCONNECTED)
-  config       Json // segredos cifrados em repouso (AES-256-GCM)
-  signature    String?       @db.Text // assinatura de email (HTML ou texto)
-  settings     Json? // não-criptografado: { ignoreGroups, defaultAssigneeId, autoResolveOnRead, distributionMode, imapFolders, lastAssignedUserId }
-  lastSyncedAt DateTime? // última sincronização bem-sucedida (usado pra delta sync)
-  deletedAt    DateTime?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id                String        @id @default(cuid())
+  workspaceId       String
+  evolutionServerId String? // null = fallback para env vars (retrocompatibilidade)
+  type              ChannelType
+  label             String
+  status            ChannelStatus @default(DISCONNECTED)
+  config            Json // segredos cifrados em repouso (AES-256-GCM)
+  signature         String?       @db.Text // assinatura de email (HTML ou texto)
+  settings          Json? // não-criptografado: { ignoreGroups, defaultAssigneeId, autoResolveOnRead, distributionMode, imapFolders, lastAssignedUserId }
+  lastSyncedAt      DateTime? // última sincronização bem-sucedida (usado pra delta sync)
+  deletedAt         DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
-  workspace     Workspace      @relation(fields: [workspaceId], references: [id])
-  conversations Conversation[]
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id])
+  evolutionServer EvolutionServer? @relation(fields: [evolutionServerId], references: [id])
+  conversations   Conversation[]
 
   @@index([workspaceId, type])
+  @@index([evolutionServerId])
 }
 
 // ─── Contacts ────────────────────────────────────────────────────────────────
@@ -160,8 +182,9 @@ model Company {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
-  contacts  Contact[]
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id])
+  contacts      Contact[]
+  conversations Conversation[]
 
   @@index([workspaceId])
 }
@@ -172,6 +195,7 @@ model Conversation {
   workspaceId     String
   channelId       String
   contactId       String?
+  companyId       String? // vínculo direto com empresa — útil para grupos (DMs herdam via contact.companyId)
   assigneeId      String? // usuário responsável (Fase 1: regras de canal)
   externalId      String // chatId WA / threadId Gmail
   folder          String? // pasta IMAP de origem (só pra emails)
@@ -200,6 +224,7 @@ model Conversation {
   workspace      Workspace                 @relation(fields: [workspaceId], references: [id])
   channel        Channel                   @relation(fields: [channelId], references: [id])
   contact        Contact?                  @relation(fields: [contactId], references: [id])
+  company        Company?                  @relation(fields: [companyId], references: [id])
   assignee       User?                     @relation("ConversationAssignee", fields: [assigneeId], references: [id])
   messages       Message[]
   participants   ConversationParticipant[]
@@ -214,6 +239,7 @@ model Conversation {
   @@index([workspaceId, assigneeId])
   @@index([channelId, folder])
   @@index([workspaceId, source])
+  @@index([workspaceId, companyId])
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
@@ -710,6 +736,12 @@ enum ChannelStatus {
   ERROR
 }
 
+enum EvolutionServerStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
 enum MessageDirection {
   INBOUND
   OUTBOUND
@@ -731,6 +763,22 @@ enum ConversationStatus {
   OPEN // em atendimento
   WAITING // aguardando resposta do cliente
   RESOLVED // finalizada
+}
+
+// ─── Quick Replies ────────────────────────────────────────────────────────────
+model QuickReply {
+  id          String   @id @default(cuid())
+  workspaceId String
+  shortcut    String   // atalho digitado após /
+  title       String?
+  body        String   @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, shortcut])
+  @@index([workspaceId])
 }
 
 enum ConvSource {

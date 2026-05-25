@@ -17,6 +17,8 @@ interface UserSettings {
   closingMessage?: string | null
   signature?: string | null
   avatarUrl?: string | null
+  ignoreGroupsWelcome?: boolean | null
+  ignoreGroupsClosing?: boolean | null
 }
 interface CalendarAccount { id: string; provider: string; createdAt: string }
 
@@ -314,6 +316,33 @@ function GoogleAccounts() {
   )
 }
 
+// ─── Toggle simples ───────────────────────────────────────────────────────────
+function Toggle({ label, description, value, onChange }: {
+  label: string
+  description?: string
+  value: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <label className="flex items-start gap-3 cursor-pointer">
+      <div className="relative mt-0.5 shrink-0">
+        <input
+          type="checkbox"
+          className="sr-only peer"
+          checked={value}
+          onChange={e => onChange(e.target.checked)}
+        />
+        <div className="w-9 h-5 bg-muted rounded-full peer peer-checked:bg-primary transition-colors" />
+        <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-4" />
+      </div>
+      <div>
+        <p className="text-sm font-medium leading-none">{label}</p>
+        {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
+      </div>
+    </label>
+  )
+}
+
 // ─── Mensagens automáticas ───────────────────────────────────────────────────
 function MessageTemplates() {
   const qc = useQueryClient()
@@ -324,11 +353,15 @@ function MessageTemplates() {
 
   const [welcome, setWelcome] = useState('')
   const [closing, setClosing] = useState('')
+  const [ignoreGroupsWelcome, setIgnoreGroupsWelcome] = useState(false)
+  const [ignoreGroupsClosing, setIgnoreGroupsClosing] = useState(false)
 
   useEffect(() => {
     if (settings) {
       setWelcome(settings.welcomeMessage ?? '')
       setClosing(settings.closingMessage ?? '')
+      setIgnoreGroupsWelcome(settings.ignoreGroupsWelcome ?? false)
+      setIgnoreGroupsClosing(settings.ignoreGroupsClosing ?? false)
     }
   }, [settings])
 
@@ -344,31 +377,53 @@ function MessageTemplates() {
 
   const dirty =
     welcome !== (settings?.welcomeMessage ?? '') ||
-    closing !== (settings?.closingMessage ?? '')
+    closing !== (settings?.closingMessage ?? '') ||
+    ignoreGroupsWelcome !== (settings?.ignoreGroupsWelcome ?? false) ||
+    ignoreGroupsClosing !== (settings?.ignoreGroupsClosing ?? false)
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>
 
   return (
     <div className="space-y-5">
-      <MessageTemplateField
-        label="Apresentação ao assumir conversa"
-        helperText="Enviada quando você clica em 'Assumir atendimento'. Adicional à mensagem de boas-vindas do canal."
-        value={welcome}
-        onChange={setWelcome}
-        placeholder="Olá {cliente}, aqui é {atendente} 👋 Em que posso ajudar?"
-      />
-      <MessageTemplateField
-        label="Mensagem ao finalizar conversa"
-        helperText="Substitui a mensagem padrão do canal. Deixe vazio pra usar a do canal."
-        value={closing}
-        onChange={setClosing}
-        placeholder="Por hoje encerro o atendimento. Qualquer dúvida estou à disposição! - {atendente}"
-      />
+      <div className="space-y-3">
+        <MessageTemplateField
+          label="Apresentação ao assumir conversa"
+          helperText="Enviada quando você clica em 'Assumir atendimento'. Adicional à mensagem de boas-vindas do canal."
+          value={welcome}
+          onChange={setWelcome}
+          placeholder="Olá {cliente}, aqui é {atendente} 👋 Em que posso ajudar?"
+        />
+        <Toggle
+          label="Não enviar em grupos"
+          description="Suprime esta mensagem quando a conversa for um grupo do WhatsApp"
+          value={ignoreGroupsWelcome}
+          onChange={setIgnoreGroupsWelcome}
+        />
+      </div>
+
+      <div className="space-y-3">
+        <MessageTemplateField
+          label="Mensagem ao finalizar conversa"
+          helperText="Substitui a mensagem padrão do canal. Deixe vazio pra usar a do canal."
+          value={closing}
+          onChange={setClosing}
+          placeholder="Por hoje encerro o atendimento. Qualquer dúvida estou à disposição! - {atendente}"
+        />
+        <Toggle
+          label="Não enviar em grupos"
+          description="Suprime esta mensagem quando a conversa for um grupo do WhatsApp"
+          value={ignoreGroupsClosing}
+          onChange={setIgnoreGroupsClosing}
+        />
+      </div>
+
       <div className="flex justify-end pt-2 border-t">
         <button
           onClick={() => save.mutate({
             welcomeMessage: welcome.trim() || null,
             closingMessage: closing.trim() || null,
+            ignoreGroupsWelcome,
+            ignoreGroupsClosing,
           })}
           disabled={!dirty || save.isPending}
           className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">

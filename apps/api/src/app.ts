@@ -29,6 +29,8 @@ import { rolesRoutes } from './modules/workspaces/roles.routes.js'
 import { storageRoutes } from './modules/storage/storage.routes.js'
 import { reportsRoutes } from './modules/reports/reports.routes.js'
 import { chatRoutes } from './modules/chat/chat.routes.js'
+import { quickRepliesRoutes } from './modules/quick-replies/quick-replies.routes.js'
+import { evolutionServersRoutes } from './modules/evolution-servers/evolution-servers.routes.js'
 import type { JwtPayload } from '@aiwa/shared'
 
 declare module '@fastify/jwt' {
@@ -175,6 +177,8 @@ export async function buildApp() {
   await app.register(storageRoutes)
   await app.register(reportsRoutes)
   await app.register(chatRoutes)
+  await app.register(quickRepliesRoutes)
+  await app.register(evolutionServersRoutes)
 
   return app
 }

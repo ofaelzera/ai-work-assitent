@@ -9,8 +9,8 @@
  */
 import { prisma } from './prisma.js'
 import { logger } from './logger.js'
-import { evolutionClient } from '../modules/channels/evolution.client.js'
 import { getChannelConfig } from '../modules/channels/channels.service.js'
+import { getClientForChannel } from '../modules/evolution-servers/evolution-servers.service.js'
 import { interpolateMessage, shortProtocol } from './templates.js'
 
 export type SystemMessageKind = 'channel-welcome' | 'agent-welcome' | 'closing'
@@ -23,6 +23,8 @@ interface SendSystemMessageArgs {
   kind: SystemMessageKind
   /** Usuário relacionado (atendente atual / quem disparou). null para mensagens de canal sem dono. */
   userId?: string | null
+  /** Quando true, aborta o envio silenciosamente se a conversa for de grupo */
+  skipIfGroup?: boolean
 }
 
 /**
@@ -31,7 +33,7 @@ interface SendSystemMessageArgs {
  * Retorna a Message criada ou null se não enviou.
  */
 export async function sendSystemMessage({
-  conversationId, template, kind, userId,
+  conversationId, template, kind, userId, skipIfGroup,
 }: SendSystemMessageArgs) {
   if (!template?.trim()) return null
 
@@ -41,27 +43,34 @@ export async function sendSystemMessage({
       include: {
         channel: { select: { id: true, type: true, label: true } },
         contact: { select: { id: true, name: true, company: { select: { name: true } } } },
+        workspace: { select: { settings: true } },
       },
     })
     if (!conv) return null
     if (conv.channel.type !== 'WHATSAPP') return null  // por ora só WhatsApp suporta isso
+    if (skipIfGroup && conv.type === 'GROUP') return null
 
     const user = userId
       ? await prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } })
       : null
 
+    const wsSettings = (conv.workspace.settings as Record<string, unknown> | null) ?? {}
+
     const text = interpolateMessage(template, {
-      cliente:   conv.contact?.name ?? '',
-      atendente: user?.name ?? user?.email?.split('@')[0] ?? '',
-      canal:     conv.channel.label,
-      empresa:   conv.contact?.company?.name ?? '',
-      protocolo: shortProtocol(conv.id),
+      cliente:     conv.contact?.name ?? '',
+      atendente:   user?.name ?? user?.email?.split('@')[0] ?? '',
+      canal:       conv.channel.label,
+      empresa:     conv.contact?.company?.name ?? '',
+      protocolo:   shortProtocol(conv.id),
+      cnpj:        typeof wsSettings.cnpj === 'string' ? wsSettings.cnpj : '',
+      razaoSocial: typeof wsSettings.razaoSocial === 'string' ? wsSettings.razaoSocial : '',
     }).trim()
 
     if (!text) return null
 
     const { instanceName } = await getChannelConfig(conv.channel.id)
-    const result = await evolutionClient.sendText(instanceName, conv.externalId, text)
+    const client = await getClientForChannel(conv.channel.id)
+    const result = await client.sendText(instanceName, conv.externalId, text)
 
     const msg = await prisma.message.create({
       data: {
@@ -96,4 +105,17 @@ export async function getUserMessageTemplate(
   const s = (u?.settings as Record<string, unknown> | null) ?? {}
   const t = s[key]
   return typeof t === 'string' ? t : ''
+}
+
+/** Lê a flag booleana de ignorar grupos para welcome ou closing. */
+export async function getUserIgnoreGroups(
+  userId: string,
+  key: 'ignoreGroupsWelcome' | 'ignoreGroupsClosing',
+): Promise<boolean> {
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { settings: true },
+  })
+  const s = (u?.settings as Record<string, unknown> | null) ?? {}
+  return s[key] === true
 }

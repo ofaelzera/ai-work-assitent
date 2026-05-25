@@ -1,8 +1,10 @@
+import { Prisma } from '@prisma/client'
 import { prisma } from '../../lib/prisma.js'
 import { encryptJson, decryptJson } from '../../lib/crypto.js'
-import { evolutionClient } from './evolution.client.js'
+import { makeEvolutionClient } from './evolution.client.js'
 import { testSmtpConnection, type SmtpConfig } from './email.client.js'
 import { env } from '../../config/env.js'
+import { selectBestServer, getClientForChannel, getServerCredentials } from '../evolution-servers/evolution-servers.service.js'
 
 export async function listChannels(workspaceId: string) {
   return prisma.channel.findMany({
@@ -12,22 +14,137 @@ export async function listChannels(workspaceId: string) {
   })
 }
 
-export async function createWhatsAppChannel(workspaceId: string, label: string) {
+export async function createWhatsAppChannel(workspaceId: string, label: string, evolutionServerId?: string) {
   const instanceName = `aiwa-${workspaceId.slice(0, 8)}-${Date.now()}`
-  const webhookUrl = env.EVOLUTION_WEBHOOK_URL ?? `${env.EVOLUTION_SERVER_URL}/webhooks/whatsapp`
 
-  const instance = await evolutionClient.createInstance(instanceName, webhookUrl)
+  const server = evolutionServerId
+    ? await getServerCredentials(evolutionServerId)
+    : await selectBestServer()
+
+  const serverId = server.id
+
+  const webhookUrl = env.EVOLUTION_WEBHOOK_URL ?? `${server.url}/webhooks/whatsapp`
+  const client = makeEvolutionClient(server.url, server.apiKey)
+
+  const instance = await client.createInstance(instanceName, webhookUrl)
   const { ciphertext, iv, authTag } = encryptJson({ instanceName, ...instance })
 
-  return prisma.channel.create({
+  const channel = await prisma.channel.create({
     data: {
       workspaceId,
+      evolutionServerId: serverId,
       type: 'WHATSAPP',
       label,
       status: 'DISCONNECTED',
       config: { ciphertext: ciphertext.toString('base64'), iv: iv.toString('base64'), authTag: authTag.toString('base64') },
     },
   })
+
+  // Incrementa contador no servidor
+  if (serverId) {
+    await prisma.evolutionServer.update({
+      where: { id: serverId },
+      data: { instanceCount: { increment: 1 } },
+    }).catch(() => {})
+  }
+
+  return channel
+}
+
+/**
+ * Adota uma instância Evolution já existente, criando um Channel vinculado a ela.
+ * Valida que a instância existe no servidor informado e ainda não está adotada
+ * por outro canal. Atualiza o webhook da instância para apontar ao nosso backend.
+ */
+export async function adoptExistingInstance(
+  workspaceId: string,
+  data: { label: string; evolutionServerId: string; instanceName: string },
+) {
+  const server = await getServerCredentials(data.evolutionServerId)
+  const client = makeEvolutionClient(server.url, server.apiKey)
+
+  // Busca a instância no Evolution
+  const raw = await client.fetchInstances() as unknown as any[]
+  const all = Array.isArray(raw) ? raw : []
+  const inst = all.find((i) => {
+    const name = i?.name ?? i?.instance?.instanceName
+    return name === data.instanceName
+  })
+
+  if (!inst) {
+    throw new Error(`Instância "${data.instanceName}" não encontrada no servidor`)
+  }
+
+  // Garante que não está adotada por outro canal (verifica todos os canais WhatsApp ativos)
+  const existing = await prisma.channel.findMany({
+    where: { type: 'WHATSAPP', deletedAt: null },
+    select: { id: true, config: true, label: true },
+  })
+  for (const ch of existing) {
+    try {
+      const cfg = ch.config as { ciphertext: string; iv: string; authTag: string }
+      const { instanceName } = decryptJson<{ instanceName: string }>(
+        Buffer.from(cfg.ciphertext, 'base64'),
+        Buffer.from(cfg.iv, 'base64'),
+        Buffer.from(cfg.authTag, 'base64'),
+      )
+      if (instanceName === data.instanceName) {
+        throw new Error(`Instância já adotada pelo canal "${ch.label}"`)
+      }
+    } catch (err: any) {
+      if (err?.message?.startsWith('Instância já adotada')) throw err
+      // outros erros de decrypt — ignora
+    }
+  }
+
+  const connectionStatus =
+    (inst as any)?.connectionStatus ?? (inst as any)?.instance?.status
+  const status = connectionStatus === 'open' ? 'CONNECTED' : 'DISCONNECTED'
+
+  const { ciphertext, iv, authTag } = encryptJson({
+    instanceName: data.instanceName,
+    adopted: true, // marca como adotada — não deletar do Evolution ao remover o canal
+    ...inst,
+  })
+
+  // Extrai profileName e ownerJid pra settings (usado pra resolver self-mentions)
+  const ownerProfileName: string | undefined =
+    (inst as any)?.profileName ?? (inst as any)?.instance?.profileName
+  const ownerJidRaw: string | undefined =
+    (inst as any)?.ownerJid ?? (inst as any)?.instance?.owner
+  const ownerPhone = ownerJidRaw?.match(/^(\d+)@s\.whatsapp\.net/)?.[1]
+  const initialSettings = {
+    ...(ownerProfileName ? { ownerProfileName } : {}),
+    ...(ownerPhone ? { ownerPhone } : {}),
+  }
+
+  const channel = await prisma.channel.create({
+    data: {
+      workspaceId,
+      evolutionServerId: data.evolutionServerId,
+      type: 'WHATSAPP',
+      label: data.label,
+      status,
+      config: {
+        ciphertext: ciphertext.toString('base64'),
+        iv: iv.toString('base64'),
+        authTag: authTag.toString('base64'),
+      },
+      ...(Object.keys(initialSettings).length > 0 && { settings: initialSettings }),
+    },
+  })
+
+  // Aponta o webhook/websocket da instância para o nosso backend
+  const webhookUrl = env.EVOLUTION_WEBHOOK_URL ?? `${server.url}/webhooks/whatsapp`
+  await client.updateInstanceWebhook(data.instanceName, webhookUrl).catch(() => {})
+  await client.updateInstanceWebsocket(data.instanceName).catch(() => {})
+
+  await prisma.evolutionServer.update({
+    where: { id: data.evolutionServerId },
+    data: { instanceCount: { increment: 1 } },
+  }).catch(() => {})
+
+  return channel
 }
 
 export async function getChannelQr(channelId: string) {
@@ -38,7 +155,8 @@ export async function getChannelQr(channelId: string) {
     Buffer.from(cfg.iv, 'base64'),
     Buffer.from(cfg.authTag, 'base64'),
   )
-  return evolutionClient.connectInstance(decrypted.instanceName)
+  const client = await getClientForChannel(channelId)
+  return client.connectInstance(decrypted.instanceName)
 }
 
 export async function syncChannelStatus(channelId: string) {
@@ -60,12 +178,39 @@ export async function syncChannelStatus(channelId: string) {
 
   // Canal WhatsApp — consulta Evolution API
   try {
-    const instances = await evolutionClient.getInstance(decrypted.instanceName) as unknown as EvolutionInstanceV2[]
+    const client = await getClientForChannel(channelId)
+    const instances = await client.getInstance(decrypted.instanceName) as unknown as EvolutionInstanceV2[]
     const inst = Array.isArray(instances) ? instances[0] : instances
     const connectionStatus = (inst as any)?.connectionStatus ?? (inst as any)?.instance?.status
     const connected = connectionStatus === 'open'
     const status = connected ? 'CONNECTED' : 'DISCONNECTED'
-    await prisma.channel.update({ where: { id: channelId }, data: { status } })
+
+    // Captura profileName e ownerPhone no settings (pra resolver self-mentions)
+    const ownerProfileName: string | undefined =
+      (inst as any)?.profileName ?? (inst as any)?.instance?.profileName
+    const ownerJidRaw: string | undefined =
+      (inst as any)?.ownerJid ?? (inst as any)?.instance?.owner
+    const ownerPhone = ownerJidRaw?.match(/^(\d+)@s\.whatsapp\.net/)?.[1]
+
+    const current = (channel.settings as Record<string, unknown> | null) ?? {}
+    const newSettings = { ...current } as Record<string, unknown>
+    let settingsChanged = false
+    if (ownerProfileName && current.ownerProfileName !== ownerProfileName) {
+      newSettings.ownerProfileName = ownerProfileName
+      settingsChanged = true
+    }
+    if (ownerPhone && current.ownerPhone !== ownerPhone) {
+      newSettings.ownerPhone = ownerPhone
+      settingsChanged = true
+    }
+
+    await prisma.channel.update({
+      where: { id: channelId },
+      data: {
+        status,
+        ...(settingsChanged && { settings: newSettings as Prisma.InputJsonValue }),
+      },
+    })
     return { status, instanceName: decrypted.instanceName, connectionStatus }
   } catch {
     await prisma.channel.update({ where: { id: channelId }, data: { status: 'ERROR' } })
@@ -83,13 +228,34 @@ interface EvolutionInstanceV2 {
 
 export async function deleteChannel(channelId: string) {
   const channel = await prisma.channel.findUniqueOrThrow({ where: { id: channelId } })
-  const cfg = channel.config as { ciphertext: string; iv: string; authTag: string }
-  const decrypted = decryptJson<{ instanceName: string }>(
-    Buffer.from(cfg.ciphertext, 'base64'),
-    Buffer.from(cfg.iv, 'base64'),
-    Buffer.from(cfg.authTag, 'base64'),
-  )
-  await evolutionClient.deleteInstance(decrypted.instanceName).catch(() => {})
+
+  // Apenas canais WhatsApp têm instância Evolution para deletar
+  if (channel.type === 'WHATSAPP') {
+    try {
+      const cfg = channel.config as { ciphertext: string; iv: string; authTag: string }
+      const { instanceName, adopted } = decryptJson<{ instanceName?: string; adopted?: boolean }>(
+        Buffer.from(cfg.ciphertext, 'base64'),
+        Buffer.from(cfg.iv, 'base64'),
+        Buffer.from(cfg.authTag, 'base64'),
+      )
+      // Instâncias adotadas (criadas fora do nosso sistema) não são deletadas no Evolution
+      if (instanceName && !adopted) {
+        const client = await getClientForChannel(channelId)
+        await client.deleteInstance(instanceName).catch(() => {})
+      }
+    } catch {
+      // Config malformado — segue para soft delete mesmo assim
+    }
+
+    // Decrementa contador no servidor
+    if (channel.evolutionServerId) {
+      await prisma.evolutionServer.update({
+        where: { id: channel.evolutionServerId },
+        data: { instanceCount: { decrement: 1 } },
+      }).catch(() => {})
+    }
+  }
+
   await prisma.channel.update({ where: { id: channelId }, data: { deletedAt: new Date() } })
 }
 

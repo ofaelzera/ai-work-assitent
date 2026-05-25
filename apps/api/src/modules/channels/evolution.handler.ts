@@ -16,6 +16,49 @@ import { mergeContacts } from '../contacts/merge.service.js'
 
 export const ingestQueue = new Queue('ingestWhatsapp', { connection: redis })
 
+// ─── Aprender JIDs do dono do canal (a partir de mensagens fromMe) ──────────
+// Cache para não bater no banco a cada msg fromMe
+const ownerLearnedCache = new Map<string, { phone?: string; lid?: string }>()
+
+async function learnChannelOwner(channelId: string, primaryJid?: string, altJid?: string): Promise<void> {
+  const parsed1 = primaryJid ? parseJid(primaryJid) : null
+  const parsed2 = altJid ? parseJid(altJid) : null
+
+  // Extrai o melhor PN e LID que conseguir
+  const phone = parsed1?.kind === 'pn' ? parsed1.phone
+    : parsed2?.kind === 'pn' ? parsed2.phone
+    : undefined
+  const lid = parsed1?.kind === 'lid' ? parsed1.lid
+    : parsed2?.kind === 'lid' ? parsed2.lid
+    : undefined
+
+  if (!phone && !lid) return
+
+  // Já aprendeu? Pula
+  const cached = ownerLearnedCache.get(channelId)
+  if (cached && cached.phone === phone && cached.lid === lid) return
+
+  // Lê settings atual e atualiza só se houver mudança
+  const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: { settings: true } })
+  const current = (channel?.settings as Record<string, unknown> | null) ?? {}
+  const newOwner = {
+    ...(typeof current.ownerPhone === 'string' ? { ownerPhone: current.ownerPhone } : {}),
+    ...(typeof current.ownerLid === 'string' ? { ownerLid: current.ownerLid } : {}),
+  } as { ownerPhone?: string; ownerLid?: string }
+  let changed = false
+  if (phone && newOwner.ownerPhone !== phone) { newOwner.ownerPhone = phone; changed = true }
+  if (lid && newOwner.ownerLid !== lid) { newOwner.ownerLid = lid; changed = true }
+
+  if (changed) {
+    await prisma.channel.update({
+      where: { id: channelId },
+      data: { settings: { ...current, ...newOwner } },
+    })
+    logger.info({ channelId, ...newOwner }, 'Dono do canal descoberto')
+  }
+  ownerLearnedCache.set(channelId, { phone, lid })
+}
+
 // ─── Resolver channelId/workspaceId a partir do instanceName ─────────────────
 // Cache simples em memória para evitar bater no banco a cada evento.
 const instanceCache = new Map<string, { channelId: string; workspaceId: string }>()
@@ -76,7 +119,17 @@ export async function handleEvolutionEvent(body: unknown): Promise<void> {
 
     for (const msg of messages as Record<string, unknown>[]) {
       if (!(msg?.key as any)?.id) continue
-      if ((msg?.key as any)?.fromMe) continue   // enviado por nós via WA Web
+      if ((msg?.key as any)?.fromMe) {
+        // Mensagem enviada por nós: não armazenamos, mas aproveitamos para
+        // aprender o LID/PN do dono do canal (usado para resolver self-mentions)
+        const key = msg.key as any
+        const remoteJid: string = key.remoteJid ?? ''
+        const isGroup = remoteJid.endsWith('@g.us')
+        if (isGroup && (key.participant || key.participantAlt)) {
+          learnChannelOwner(channelId, key.participant, key.participantAlt).catch(() => {})
+        }
+        continue
+      }
 
       await ingestQueue.add(
         'ingest',

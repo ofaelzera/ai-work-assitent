@@ -6,6 +6,13 @@ import { cn } from '@/lib/utils'
 import EmojiPicker, { Theme } from 'emoji-picker-react'
 import { useTheme } from 'next-themes'
 
+export interface QuickReply {
+  id: string
+  shortcut: string
+  title: string | null
+  body: string
+}
+
 interface ChatInputProps {
   value: string
   onChange: (value: string) => void
@@ -16,23 +23,28 @@ interface ChatInputProps {
   leftToolbarActions?: React.ReactNode
   bottomRightActions?: React.ReactNode
   inputRef?: React.RefObject<HTMLTextAreaElement>
+  quickReplies?: QuickReply[]
 }
 
-export function ChatInput({ 
-  value, 
-  onChange, 
-  onSend, 
-  onTyping, 
-  disabled, 
+export function ChatInput({
+  value,
+  onChange,
+  onSend,
+  onTyping,
+  disabled,
   placeholder = 'Digite uma mensagem...',
   leftToolbarActions,
   bottomRightActions,
-  inputRef
+  inputRef,
+  quickReplies = [],
 }: ChatInputProps) {
   const internalRef = useRef<HTMLTextAreaElement>(null)
   const textareaRef = inputRef || internalRef
   const emojiRef = useRef<HTMLDivElement>(null)
+  const slashMenuRef = useRef<HTMLDivElement>(null)
   const [showEmoji, setShowEmoji] = useState(false)
+  const [slashMatches, setSlashMatches] = useState<QuickReply[]>([])
+  const [slashIndex, setSlashIndex] = useState(0)
   const { resolvedTheme } = useTheme()
 
   // Auto-resize textarea
@@ -53,6 +65,31 @@ export function ChatInput({
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  // Detecta /atalho no início do texto e filtra respostas rápidas
+  useEffect(() => {
+    const match = value.match(/^\/(\w*)$/)
+    if (match && quickReplies.length > 0) {
+      const typed = match[1].toLowerCase()
+      const filtered = quickReplies.filter(qr =>
+        qr.shortcut.toLowerCase().startsWith(typed)
+      )
+      setSlashMatches(filtered)
+      setSlashIndex(0)
+    } else {
+      setSlashMatches([])
+    }
+  }, [value, quickReplies])
+
+  const applyQuickReply = (qr: QuickReply) => {
+    onChange(qr.body)
+    setSlashMatches([])
+    setTimeout(() => {
+      textareaRef.current?.focus()
+      const len = qr.body.length
+      textareaRef.current?.setSelectionRange(len, len)
+    }, 0)
+  }
 
   const insertFormat = (prefix: string, suffix: string = prefix) => {
     const el = textareaRef.current
@@ -96,6 +133,29 @@ export function ChatInput({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashMatches.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashIndex(i => (i + 1) % slashMatches.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashIndex(i => (i - 1 + slashMatches.length) % slashMatches.length)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        applyQuickReply(slashMatches[slashIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashMatches([])
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (value.trim() && !disabled) {
@@ -106,6 +166,37 @@ export function ChatInput({
 
   return (
     <div className="flex flex-col bg-card border border-border/80 rounded-2xl shadow-sm overflow-visible transition-all focus-within:ring-2 focus-within:ring-primary/40 focus-within:border-primary/50 relative">
+      {/* Popup de respostas rápidas (slash menu) */}
+      {slashMatches.length > 0 && (
+        <div
+          ref={slashMenuRef}
+          className="absolute bottom-full mb-2 left-0 right-0 z-50 rounded-xl border bg-card shadow-lg overflow-hidden"
+        >
+          <div className="px-3 py-2 border-b bg-muted/30">
+            <p className="text-xs text-muted-foreground font-medium">Respostas rápidas · <kbd className="font-mono text-[10px] bg-muted px-1 rounded">↑↓</kbd> navegar · <kbd className="font-mono text-[10px] bg-muted px-1 rounded">Enter</kbd> ou <kbd className="font-mono text-[10px] bg-muted px-1 rounded">Tab</kbd> para inserir</p>
+          </div>
+          <div className="max-h-52 overflow-y-auto">
+            {slashMatches.map((qr, i) => (
+              <button
+                key={qr.id}
+                onMouseDown={e => { e.preventDefault(); applyQuickReply(qr) }}
+                onMouseEnter={() => setSlashIndex(i)}
+                className={cn(
+                  'w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors',
+                  i === slashIndex ? 'bg-primary/10' : 'hover:bg-muted/40',
+                )}
+              >
+                <span className="shrink-0 mt-0.5 font-mono text-sm font-semibold text-primary min-w-[80px]">/{qr.shortcut}</span>
+                <div className="flex-1 min-w-0">
+                  {qr.title && <p className="text-xs font-medium truncate">{qr.title}</p>}
+                  <p className="text-xs text-muted-foreground line-clamp-1">{qr.body}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Barra superior de ferramentas */}
       <div className="flex items-center gap-1 bg-muted/20 px-2 py-1.5 border-b border-border/50 relative rounded-t-2xl">
         {leftToolbarActions && (

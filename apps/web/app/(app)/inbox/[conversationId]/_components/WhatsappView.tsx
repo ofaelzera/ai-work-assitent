@@ -14,7 +14,8 @@ import {
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
 import { formatPhone, isInternalId } from '@/lib/phone'
-import { renderWhatsappText, stripWhatsappMarks } from '@/lib/whatsappText'
+import { renderWhatsappText, stripWhatsappMarks, WhatsappText, MentionProvider } from '@/lib/whatsappText'
+import { useMentionResolver } from '@/lib/useMentionResolver'
 import { toast } from 'sonner'
 import CreateCardModal from '@/components/CreateCardModal'
 import CreateTaskModal from '@/components/CreateTaskModal'
@@ -24,6 +25,7 @@ import SaveToLibraryModal from '@/components/SaveToLibraryModal'
 import { ConversationTimelineModal } from '@/components/ConversationTimelineModal'
 import { useAuthStore } from '@/store/auth'
 import { ChatInput } from '@/components/ChatInput'
+import { GroupPanel } from './GroupPanel'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
 
@@ -84,6 +86,8 @@ export interface ConversationInfo {
   assigneeId?: string | null
   assignee?: { id: string; name: string | null; email: string } | null
   contact: Contact | null
+  companyId?: string | null
+  company?: { id: string; name: string; color: string } | null
   channel: {
     id: string; type: string; label: string; signature?: string | null
     settings?: { imapFolders?: string[] } | null
@@ -197,7 +201,7 @@ function MediaImage({ msgId, caption }: { msgId: string; caption?: string }) {
           </div>
         )}
       </div>
-      {caption && <p className="text-sm whitespace-pre-wrap mt-1">{renderWhatsappText(caption)}</p>}
+      {caption && <p className="text-sm whitespace-pre-wrap mt-1"><WhatsappText text={caption} /></p>}
       {modal && src && (
         <MediaModal onClose={() => setModal(false)}>
           <img src={src} alt="imagem" className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain" />
@@ -232,7 +236,7 @@ function VideoPlayer({ msgId, caption }: { msgId: string; caption?: string }) {
     <div>
       {src ? <video src={src} controls className="max-w-[280px] rounded-lg" />
         : <div className="w-48 h-28 bg-black/10 rounded-lg animate-pulse" />}
-      {caption && <p className="text-sm whitespace-pre-wrap mt-1">{renderWhatsappText(caption)}</p>}
+      {caption && <p className="text-sm whitespace-pre-wrap mt-1"><WhatsappText text={caption} /></p>}
     </div>
   )
 }
@@ -275,12 +279,12 @@ function DocumentBubble({ msgId, filename, mimetype }: { msgId: string; filename
 
 function MediaBubble({ msg }: { msg: Message }) {
   const att = msg.attachments?.[0]
-  if (!att) return <p className="whitespace-pre-wrap break-words text-sm">{renderWhatsappText(msg.body)}</p>
+  if (!att) return <p className="whitespace-pre-wrap break-words text-sm"><WhatsappText text={msg.body} /></p>
   if (att.type === 'image' || att.type === 'sticker') return <MediaImage msgId={msg.id} caption={att.caption} />
   if (att.type === 'audio') return <AudioPlayer msgId={msg.id} seconds={att.seconds} />
   if (att.type === 'video') return <VideoPlayer msgId={msg.id} caption={att.caption} />
   if (att.type === 'document') return <DocumentBubble msgId={msg.id} filename={att.filename} mimetype={att.mimetype} />
-  return <p className="whitespace-pre-wrap break-words text-sm">{renderWhatsappText(msg.body)}</p>
+  return <p className="whitespace-pre-wrap break-words text-sm"><WhatsappText text={msg.body} /></p>
 }
 
 function groupByDate(messages: Message[]) {
@@ -974,6 +978,8 @@ interface Props {
 export default function WhatsappView({ conversationId, conv, messages, isLoading }: Props) {
   const queryClient = useQueryClient()
   const currentUser = useAuthStore(s => s.user)
+  // Resolve menções @<ID> nas mensagens visíveis (PN/LID → nome do contato)
+  const mentionResolver = useMentionResolver(messages.map(m => m.body))
   const [text, setText] = useState('')
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [caption, setCaption] = useState('')
@@ -985,6 +991,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const [showCreateMenu, setShowCreateMenu] = useState(false)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showContact, setShowContact] = useState(false)
+  const [showGroupPanel, setShowGroupPanel] = useState(false)
   const [showRelease, setShowRelease] = useState(false)
   const [showForward, setShowForward] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
@@ -995,6 +1002,12 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const presenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isComposing = useRef(false)
+
+  const { data: quickReplies = [] } = useQuery<{ id: string; shortcut: string; title: string | null; body: string }[]>({
+    queryKey: ['quick-replies'],
+    queryFn: () => apiFetch('/quick-replies'),
+    staleTime: 60_000,
+  })
 
   // Envia "composing" para o WhatsApp quando o agente digita
   const sendComposing = useCallback(() => {
@@ -1243,9 +1256,10 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
       <div className="flex flex-col h-full">
         {/* ── Header ── */}
         <div className="flex items-center gap-3 px-4 py-2.5 border-b bg-card shrink-0 z-10">
-          <button onClick={() => conv.contact && setShowContact(true)}
-            className={cn('shrink-0', conv.contact && 'cursor-pointer hover:opacity-80 transition-opacity')}
-            disabled={!conv.contact}>
+          <button onClick={() => isGroup ? setShowGroupPanel(true) : conv.contact && setShowContact(true)}
+            className={cn('shrink-0', (isGroup || conv.contact) && 'cursor-pointer hover:opacity-80 transition-opacity')}
+            disabled={!isGroup && !conv.contact}
+            title={isGroup ? 'Detalhes do grupo' : undefined}>
             {!isGroup && conv.contact?.metadata?.avatarUrl ? (
               <img
                 src={conv.contact.metadata.avatarUrl}
@@ -1272,9 +1286,10 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           </button>
 
           <button
-            className={cn('flex-1 min-w-0 text-left', conv.contact && 'cursor-pointer hover:opacity-80 transition-opacity')}
-            onClick={() => conv.contact && setShowContact(true)}
-            disabled={!conv.contact}>
+            className={cn('flex-1 min-w-0 text-left', (isGroup || conv.contact) && 'cursor-pointer hover:opacity-80 transition-opacity')}
+            onClick={() => isGroup ? setShowGroupPanel(true) : conv.contact && setShowContact(true)}
+            disabled={!isGroup && !conv.contact}
+            title={isGroup ? 'Detalhes do grupo' : undefined}>
             <p className="font-semibold text-sm truncate">{contactName}</p>
             {presenceTxt ? (
               <p className="text-xs text-emerald-500 font-medium truncate flex items-center gap-1">
@@ -1450,6 +1465,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         )}
 
         {/* ── Área de mensagens com padrão de fundo ── */}
+        <MentionProvider resolver={mentionResolver}>
         <div
           className="flex-1 overflow-y-auto px-4 py-3 space-y-0.5 relative"
           style={{
@@ -1679,6 +1695,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           )}
           <div ref={bottomRef} />
         </div>
+        </MentionProvider>
 
         {/* ── Reply bar ── */}
         {replyTo && <ReplyBar reply={replyTo} onCancel={() => setReplyTo(null)} />}
@@ -1751,6 +1768,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                   onTyping={sendComposing}
                   disabled={sendMediaMutation.isPending}
                   inputRef={textareaRef}
+                  quickReplies={quickReplies}
                   leftToolbarActions={
                     <>
                       <button
@@ -1855,6 +1873,15 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           onClose={() => setShowContact(false)}
           onSave={data => updateContactMutation.mutate(data)}
           currentConvId={conversationId}
+        />
+      )}
+
+      {showGroupPanel && (
+        <GroupPanel
+          conversationId={conversationId}
+          groupAvatarUrl={conv.contact?.metadata?.avatarUrl ?? null}
+          currentCompanyId={conv.companyId ?? conv.company?.id ?? null}
+          onClose={() => setShowGroupPanel(false)}
         />
       )}
 

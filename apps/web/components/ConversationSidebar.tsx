@@ -478,6 +478,8 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   const [showComposeEmail, setShowComposeEmail] = useState(false)
   // Modo email: pasta IMAP selecionada (null = todas)
   const [activeFolder, setActiveFolder] = useState<{ channelId: string; folder: string } | null>(null)
+  // Filtro por canal (null = todos os canais da view atual)
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null)
 
   // Quando troca de view (Conversas <-> Email), reseta os filtros locais.
   // Default: "Minhas" — atendente vê o próprio trabalho. Auto-fallback pra Fila
@@ -486,6 +488,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
     setSearch('')
     setFilter('mine')
     setActiveFolder(null)
+    setSelectedChannelId(null)
     setAutoSwitched(false)  // permite re-rodar o fallback ao trocar de view
   }, [view])
   // Map de conversationId → presença atual (expira via timeout)
@@ -495,14 +498,17 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   // Detecta conversa ativa pela URL (/inbox/[id])
   const activeId = pathname.match(/^\/inbox\/([^/]+)$/)?.[1] ?? null
 
-  // Canais disponíveis (pra árvore de pastas IMAP no modo email)
+  // Canais disponíveis (filtro de canal e árvore de pastas IMAP no modo email)
   const { data: channels = [] } = useQuery({
     queryKey: ['channels'],
     queryFn: () => apiFetch<Channel[]>('/channels'),
-    enabled: view === 'email',
     staleTime: 60_000,
   })
   const emailChannels = channels.filter(c => c.type === 'GMAIL' || c.type === 'IMAP_SMTP')
+  // Canais visíveis no filtro: WhatsApp na view de conversas, Email na view de email
+  const filterableChannels = view === 'email'
+    ? emailChannels
+    : channels.filter(c => c.type === 'WHATSAPP')
 
   const claimMutation = useMutation({
     mutationFn: (id: string) => apiFetch(`/conversations/${id}/claim`, { method: 'POST' }),
@@ -510,7 +516,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['conversations', view, filter, search, activeFolder],
+    queryKey: ['conversations', view, filter, search, activeFolder, selectedChannelId],
     queryFn: () => {
       // 'mine'/'queue'/'others' são meta-filtros que viram filter=all + assigneeId=*
       const isMeta = filter === 'mine' || filter === 'queue' || filter === 'others'
@@ -529,6 +535,8 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
       } else {
         params.set('excludeChannelType', 'GMAIL,IMAP_SMTP')
       }
+      // Filtro por canal (sobrescreve activeFolder.channelId se ambos estiverem setados)
+      if (selectedChannelId) params.set('channelId', selectedChannelId)
       return apiFetch<{ conversations: Conversation[]; queueCount: number }>(`/conversations?${params}`)
     },
     refetchInterval: 30_000,
@@ -690,6 +698,40 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
           })}
         </div>
       </div>
+
+      {/* Filtro por canal — só aparece se houver 2+ canais na view atual */}
+      {filterableChannels.length >= 2 && (
+        <div className="flex overflow-x-auto no-scrollbar gap-1.5 px-3 py-1.5 border-b bg-muted/10 mask-edges">
+          <button
+            onClick={() => setSelectedChannelId(null)}
+            title="Todos os canais"
+            className={cn(
+              'shrink-0 text-[11px] py-1 px-2.5 rounded-full font-medium transition-all duration-200 border',
+              selectedChannelId === null
+                ? 'bg-primary/15 text-primary border-primary/40'
+                : 'bg-transparent text-muted-foreground border-transparent hover:bg-accent hover:text-foreground',
+            )}>
+            Todos os canais
+          </button>
+          {filterableChannels.map(ch => {
+            const isActive = selectedChannelId === ch.id
+            return (
+              <button
+                key={ch.id}
+                onClick={() => setSelectedChannelId(isActive ? null : ch.id)}
+                title={ch.label}
+                className={cn(
+                  'shrink-0 text-[11px] py-1 px-2.5 rounded-full font-medium transition-all duration-200 border max-w-[140px] truncate',
+                  isActive
+                    ? 'bg-primary/15 text-primary border-primary/40'
+                    : 'bg-transparent text-muted-foreground border-transparent hover:bg-accent hover:text-foreground',
+                )}>
+                {ch.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* Árvore de pastas IMAP (apenas no modo email) */}
       {view === 'email' && emailChannels.length > 0 && (

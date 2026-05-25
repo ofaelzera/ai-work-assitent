@@ -1,4 +1,10 @@
-import React from 'react'
+import React, { createContext, useContext } from 'react'
+
+// Context opcional pra evitar prop-drilling do resolver em árvores grandes de mensagens
+const MentionContext = createContext<ResolveMention | undefined>(undefined)
+export function MentionProvider({ resolver, children }: { resolver: ResolveMention | undefined; children: React.ReactNode }) {
+  return <MentionContext.Provider value={resolver}>{children}</MentionContext.Provider>
+}
 
 /**
  * Renderiza texto no estilo do WhatsApp:
@@ -7,6 +13,7 @@ import React from 'react'
  *   ~texto~    → riscado
  *   `texto`    → monospace
  *   ```bloco```→ bloco de código
+ *   @<dígitos> → menção (resolvida via callback opcional `resolveMention`)
  *
  * Os marcadores são removidos da saída. Não-formatado fica como texto puro,
  * preservando quebras de linha (use junto com `whitespace-pre-wrap`).
@@ -19,9 +26,10 @@ import React from 'react'
 
 type Token =
   | { type: 'text'; value: string }
+  | { type: 'mention'; id: string }
   | { type: 'bold' | 'italic' | 'strike' | 'mono' | 'codeblock'; children: Token[] }
 
-const RULES: { type: Exclude<Token['type'], 'text'>; marker: string }[] = [
+const RULES: { type: 'bold' | 'italic' | 'strike' | 'mono' | 'codeblock'; marker: string }[] = [
   { type: 'codeblock', marker: '```' },
   { type: 'bold',      marker: '*' },
   { type: 'italic',    marker: '_' },
@@ -46,32 +54,44 @@ function tokenize(text: string): Token[] {
   let i = 0
   while (i < text.length) {
     let matched = false
-    for (const rule of RULES) {
-      const { marker, type } = rule
-      if (text.startsWith(marker, i) && isBoundaryBefore(text, i)) {
-        // procura fechamento
-        const startContent = i + marker.length
-        let j = startContent
-        while (j < text.length) {
-          if (text.startsWith(marker, j) && isBoundaryAfter(text, j + marker.length)) {
-            // achou par válido
-            const inner = text.slice(startContent, j)
-            // não pode ser vazio
-            if (inner.length > 0) {
-              tokens.push({ type, children: tokenize(inner) })
-              i = j + marker.length
-              matched = true
-            }
-            break
-          }
-          // pula linha quebra? para `*` e `_` o WhatsApp permite multi-linha
-          j++
-        }
-        if (matched) break
+
+    // Menção: @<dígitos> precedido por boundary (5+ dígitos para evitar falsos positivos como "@1")
+    if (text[i] === '@' && isBoundaryBefore(text, i)) {
+      const start = i + 1
+      let j = start
+      while (j < text.length && /\d/.test(text[j])) j++
+      const id = text.slice(start, j)
+      if (id.length >= 5) {
+        tokens.push({ type: 'mention', id })
+        i = j
+        matched = true
       }
     }
+
     if (!matched) {
-      // adiciona char como texto (mesclando com último texto)
+      for (const rule of RULES) {
+        const { marker, type } = rule
+        if (text.startsWith(marker, i) && isBoundaryBefore(text, i)) {
+          const startContent = i + marker.length
+          let j = startContent
+          while (j < text.length) {
+            if (text.startsWith(marker, j) && isBoundaryAfter(text, j + marker.length)) {
+              const inner = text.slice(startContent, j)
+              if (inner.length > 0) {
+                tokens.push({ type, children: tokenize(inner) })
+                i = j + marker.length
+                matched = true
+              }
+              break
+            }
+            j++
+          }
+          if (matched) break
+        }
+      }
+    }
+
+    if (!matched) {
       const last = tokens[tokens.length - 1]
       if (last && last.type === 'text') last.value += text[i]
       else tokens.push({ type: 'text', value: text[i] })
@@ -81,11 +101,28 @@ function tokenize(text: string): Token[] {
   return tokens
 }
 
-function renderTokens(tokens: Token[], keyPrefix = ''): React.ReactNode[] {
+export type ResolveMention = (id: string) => string | null | undefined
+
+function renderTokens(tokens: Token[], resolveMention: ResolveMention | undefined, keyPrefix = ''): React.ReactNode[] {
   return tokens.map((t, i) => {
     const k = `${keyPrefix}${i}`
     if (t.type === 'text') return <React.Fragment key={k}>{t.value}</React.Fragment>
-    const children = renderTokens(t.children, `${k}.`)
+    if (t.type === 'mention') {
+      const resolved = resolveMention?.(t.id)
+      const label = resolved ?? t.id
+      return (
+        <span
+          key={k}
+          title={resolved ? `WhatsApp ID: ${t.id}` : 'Contato desconhecido'}
+          className={resolved
+            ? 'inline-flex items-baseline font-medium text-primary cursor-default'
+            : 'inline-flex items-baseline text-muted-foreground cursor-help'}
+        >
+          @{label}
+        </span>
+      )
+    }
+    const children = renderTokens(t.children, resolveMention, `${k}.`)
     switch (t.type) {
       case 'bold':      return <strong key={k}>{children}</strong>
       case 'italic':    return <em key={k}>{children}</em>
@@ -96,19 +133,40 @@ function renderTokens(tokens: Token[], keyPrefix = ''): React.ReactNode[] {
   })
 }
 
-export function renderWhatsappText(text: string | null | undefined): React.ReactNode {
+/**
+ * Componente que renderiza texto WhatsApp consumindo o resolver do MentionContext.
+ * Preferível ao `renderWhatsappText` quando se está dentro de um <MentionProvider>.
+ */
+export function WhatsappText({ text }: { text: string | null | undefined }) {
+  const resolver = useContext(MentionContext)
   if (!text) return null
-  return renderTokens(tokenize(text))
+  return <>{renderTokens(tokenize(text), resolver)}</>
+}
+
+export function renderWhatsappText(
+  text: string | null | undefined,
+  resolveMention?: ResolveMention,
+): React.ReactNode {
+  if (!text) return null
+  return renderTokens(tokenize(text), resolveMention)
 }
 
 /**
  * Strip plano dos marcadores (sem JSX). Útil pra previews, notificações, etc.
  * `*Rafael:*` → `Rafael:`
+ * `@123456 oi` → `@123456 oi` (mantém o @ID como está)
  */
-export function stripWhatsappMarks(text: string | null | undefined): string {
+export function stripWhatsappMarks(text: string | null | undefined, resolveMention?: ResolveMention): string {
   if (!text) return ''
   function walk(tokens: Token[]): string {
-    return tokens.map((t) => t.type === 'text' ? t.value : walk(t.children)).join('')
+    return tokens.map((t) => {
+      if (t.type === 'text') return t.value
+      if (t.type === 'mention') {
+        const resolved = resolveMention?.(t.id)
+        return `@${resolved ?? t.id}`
+      }
+      return walk(t.children)
+    }).join('')
   }
   return walk(tokenize(text))
 }

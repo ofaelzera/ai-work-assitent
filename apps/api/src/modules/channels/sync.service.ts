@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { prisma } from '../../lib/prisma.js'
-import { evolutionClient } from './evolution.client.js'
+import { makeEvolutionClient, type EvolutionClient } from './evolution.client.js'
+import { getClientForChannel, getServerCredentials } from '../evolution-servers/evolution-servers.service.js'
 import { fetchImapMessages, listImapFolders } from './email.client.js'
 import { eventBus } from '../../lib/eventBus.js'
 import { logger } from '../../lib/logger.js'
@@ -15,9 +16,9 @@ function threadHash(id: string): string {
 }
 
 /** Busca o nome real de um grupo WhatsApp via Evolution (fire-and-forget safe) */
-async function fetchGroupSubject(instanceName: string, groupJid: string): Promise<string | null> {
+async function fetchGroupSubject(client: EvolutionClient, instanceName: string, groupJid: string): Promise<string | null> {
   try {
-    const info = await evolutionClient.fetchGroupInfo(instanceName, groupJid)
+    const info = await client.fetchGroupInfo(instanceName, groupJid)
     return info?.subject ?? null
   } catch {
     return null
@@ -25,9 +26,9 @@ async function fetchGroupSubject(instanceName: string, groupJid: string): Promis
 }
 
 /** Busca e salva avatar do contato no WhatsApp (fire-and-forget, sem bloquear o sync) */
-async function refreshContactAvatar(instanceName: string, contactId: string, phone: string) {
+async function refreshContactAvatar(client: EvolutionClient, instanceName: string, contactId: string, phone: string) {
   try {
-    const result = await evolutionClient.fetchProfilePicture(instanceName, phone)
+    const result = await client.fetchProfilePicture(instanceName, phone)
     if (result.profilePictureUrl) {
       const contact = await prisma.contact.findUnique({ where: { id: contactId } })
       const meta = (contact?.metadata as Record<string, unknown> | null) ?? {}
@@ -157,21 +158,10 @@ export async function syncWhatsAppChannel(
   const isFirstSync = !channel.lastSyncedAt
   const startedAt = new Date()
 
+  const client = await getClientForChannel(channelId)
+
   // 1. Buscar todos os chats da instância
-  const chatsResponse = await fetch(
-    `${process.env.EVOLUTION_SERVER_URL}/chat/findChats/${instanceName}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: process.env.EVOLUTION_API_KEY! },
-      body: JSON.stringify({}),
-    },
-  )
-
-  if (!chatsResponse.ok) {
-    throw new Error(`Erro ao buscar chats: ${chatsResponse.status}`)
-  }
-
-  const chats = await chatsResponse.json() as any[]
+  const chats = await client.findChats(instanceName)
   const counts = {
     messagesLive: 0,
     messagesImported: 0,
@@ -211,7 +201,7 @@ export async function syncWhatsAppChannel(
           rootContact = created
           counts.newContacts++
           if (parsed.kind === 'pn' && parsed.phone) {
-            void refreshContactAvatar(instanceName, created.id, parsed.phone)
+            void refreshContactAvatar(client, instanceName, created.id, parsed.phone)
           }
         } else {
           rootContact = { id: existing.id }
@@ -222,7 +212,7 @@ export async function syncWhatsAppChannel(
             await prisma.contact.update({ where: { id: existing.id }, data: { name: pushName } })
           }
           if (parsed.kind === 'pn' && parsed.phone && !(existing.metadata as any)?.avatarUrl) {
-            void refreshContactAvatar(instanceName, existing.id, parsed.phone)
+            void refreshContactAvatar(client, instanceName, existing.id, parsed.phone)
           }
         }
       } else {
@@ -240,7 +230,7 @@ export async function syncWhatsAppChannel(
     // ── Nome real do grupo (busca assíncrona, não bloqueia se falhar) ────────
     let groupSubject: string | null = null
     if (isGroup) {
-      groupSubject = await fetchGroupSubject(instanceName, remoteJid)
+      groupSubject = await fetchGroupSubject(client, instanceName, remoteJid)
     }
 
     // ── Conv LIVE ativa (se já existe) ─────────────────────────────────────
@@ -284,19 +274,13 @@ export async function syncWhatsAppChannel(
     if (isReadElsewhere && !importHistory) continue
 
     // ── Buscar mensagens via Evolution ─────────────────────────────────────
-    const msgsResponse = await fetch(
-      `${process.env.EVOLUTION_SERVER_URL}/chat/findMessages/${instanceName}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: process.env.EVOLUTION_API_KEY! },
-        body: JSON.stringify({ where: { key: { remoteJid } }, limit: importHistory ? 200 : 50 }),
-      },
-    )
-
-    if (!msgsResponse.ok) continue
-
-    const msgsData: any = await msgsResponse.json()
-    const records: any[] = msgsData?.messages?.records ?? []
+    let records: any[] = []
+    try {
+      const msgsData = await client.getMessages(instanceName, remoteJid, importHistory ? 200 : 50)
+      records = msgsData?.messages?.records ?? []
+    } catch {
+      continue
+    }
 
     // Ordena por timestamp asc pra processar em ordem cronológica (importante pro lazy create)
     records.sort((a, b) => (a.messageTimestamp ?? 0) - (b.messageTimestamp ?? 0))
@@ -465,6 +449,28 @@ export async function syncWhatsAppChannel(
       const sParsed = sParsedAlt?.kind === 'pn' ? sParsedAlt : sParsedPrimary
       const sKnownLid: string | null = sParsedPrimary.kind === 'lid' ? (sParsedPrimary.lid ?? null)
         : sParsedAlt?.kind === 'lid' ? (sParsedAlt.lid ?? null) : null
+
+      // Aprende identidade do DONO do canal a partir de mensagens fromMe em grupos
+      if (fromMe && isGroup && (senderPrimaryJid || senderAltJid)) {
+        const ownerPhone = sParsedPrimary.kind === 'pn' ? sParsedPrimary.phone
+          : sParsedAlt?.kind === 'pn' ? sParsedAlt.phone
+          : undefined
+        const ownerLid = sParsedPrimary.kind === 'lid' ? sParsedPrimary.lid
+          : sParsedAlt?.kind === 'lid' ? sParsedAlt.lid
+          : undefined
+        if (ownerPhone || ownerLid) {
+          const cur = (channel.settings as Record<string, unknown> | null) ?? {}
+          const next = { ...cur } as Record<string, unknown>
+          let chg = false
+          if (ownerPhone && cur.ownerPhone !== ownerPhone) { next.ownerPhone = ownerPhone; chg = true }
+          if (ownerLid && cur.ownerLid !== ownerLid) { next.ownerLid = ownerLid; chg = true }
+          if (chg) {
+            await prisma.channel.update({ where: { id: channelId }, data: { settings: next as any } }).catch(() => {})
+            // Atualiza a referência em memória pra próximas iterações desta sync
+            ;(channel as any).settings = next
+          }
+        }
+      }
 
       let fromContactId: string | null = null
       if (!fromMe) {
@@ -798,7 +804,8 @@ async function _runAvatarSync(channelId: string) {
 
     for (const contact of contacts) {
       try {
-        const result = await evolutionClient.fetchProfilePicture(instanceName, contact.phone!)
+        const avatarClient = await getClientForChannel(channelId)
+        const result = await avatarClient.fetchProfilePicture(instanceName, contact.phone!)
         if (result.profilePictureUrl) {
           const meta = (contact.metadata as Record<string, unknown> | null) ?? {}
           await prisma.contact.update({

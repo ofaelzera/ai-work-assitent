@@ -5,6 +5,7 @@ import { redis } from './lib/redis.js'
 import { logger } from './lib/logger.js'
 import { startWorkers } from './workers/index.js'
 import { startEvolutionSocket, stopEvolutionSocket } from './modules/channels/evolution.socket.js'
+import { seedDefaultServerFromEnv } from './modules/evolution-servers/evolution-servers.service.js'
 import { startImapPollers, stopAllImapPollers } from './modules/channels/imap.poller.js'
 import { syncWhatsAppChannel } from './modules/channels/sync.service.js'
 
@@ -47,7 +48,10 @@ async function main() {
     await app.listen({ port: env.PORT, host: env.HOST })
     console.log(`🚀 API rodando em http://${env.HOST}:${env.PORT}`)
 
-    // Conecta ao Evolution via Socket.IO (substitui webhook em localhost)
+    // Migra servidor do .env para o banco se ainda não houver nenhum cadastrado
+    await seedDefaultServerFromEnv()
+
+    // Conecta ao Evolution via Socket.IO (um socket por servidor cadastrado)
     startEvolutionSocket()
 
     // Polling IMAP desativado temporariamente (módulo de email em pausa)

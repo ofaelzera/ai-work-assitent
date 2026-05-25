@@ -60,7 +60,9 @@ const adminItems: Array<{ href: string; label: string; perm: string }> = [
   { href: '/admin/reports',  label: 'Relatórios',          perm: 'reports.view' },
   { href: '/admin/users',    label: 'Usuários',            perm: 'admin.users' },
   { href: '/admin/roles',    label: 'Roles e permissões',  perm: 'admin.users' },
-  { href: '/admin/settings', label: 'Configurações',       perm: 'admin.settings' },
+  { href: '/admin/quick-replies',     label: 'Respostas Rápidas',   perm: 'admin.settings' },
+  { href: '/admin/evolution-servers', label: 'Servidores Evolution', perm: 'admin.settings' },
+  { href: '/admin/settings',          label: 'Configurações',        perm: 'admin.settings' },
 ]
 
 function userHasPerm(user: { role: string; permissions?: string[] } | null, perm?: string): boolean {

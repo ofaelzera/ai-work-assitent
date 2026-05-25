@@ -102,6 +102,12 @@ export function ChatView({ roomId }: { roomId: string }) {
     queryFn: () => fetchRoom(roomId),
   })
 
+  const { data: quickReplies = [] } = useQuery<{ id: string; shortcut: string; title: string | null; body: string }[]>({
+    queryKey: ['quick-replies'],
+    queryFn: () => apiFetch('/quick-replies'),
+    staleTime: 60_000,
+  })
+
   const { data, refetch } = useQuery({
     queryKey: ['chat', 'messages', roomId],
     queryFn: () => fetchMessages(roomId),
@@ -339,6 +345,7 @@ export function ChatView({ roomId }: { roomId: string }) {
           disabled={send.isPending || sendMediaMutation.isPending}
           placeholder={pendingFile ? 'Legenda (opcional)...' : 'Digite uma mensagem...'}
           inputRef={composerRef}
+          quickReplies={quickReplies}
           leftToolbarActions={
             <>
               <button

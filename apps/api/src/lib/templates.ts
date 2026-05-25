@@ -24,6 +24,8 @@ export interface TemplateContext {
   canal?: string | null
   empresa?: string | null
   protocolo?: string | null
+  cnpj?: string | null
+  razaoSocial?: string | null
   /** Override pra testes — quando omitido usa Date.now() em America/Sao_Paulo */
   now?: Date
 }
@@ -46,13 +48,15 @@ export function interpolateMessage(template: string | null | undefined, ctx: Tem
   if (!template) return ''
   const now = ctx.now ?? new Date()
   const values: Record<string, string> = {
-    cliente:   (ctx.cliente   ?? '').trim(),
-    atendente: (ctx.atendente ?? '').trim(),
-    canal:     (ctx.canal     ?? '').trim(),
-    empresa:   (ctx.empresa   ?? '').trim(),
-    protocolo: (ctx.protocolo ?? '').trim(),
-    data:      formatDate(now),
-    hora:      formatTime(now),
+    cliente:      (ctx.cliente     ?? '').trim(),
+    atendente:    (ctx.atendente   ?? '').trim(),
+    canal:        (ctx.canal       ?? '').trim(),
+    empresa:      (ctx.empresa     ?? '').trim(),
+    protocolo:    (ctx.protocolo   ?? '').trim(),
+    cnpj:         (ctx.cnpj        ?? '').trim(),
+    razao_social: (ctx.razaoSocial ?? '').trim(),
+    data:         formatDate(now),
+    hora:         formatTime(now),
   }
   return template.replace(/\{(\w+)\}/g, (full, key: string) => {
     const lowerKey = key.toLowerCase()
@@ -62,11 +66,13 @@ export function interpolateMessage(template: string | null | undefined, ctx: Tem
 
 /** Lista de variáveis pra UI mostrar como ajuda. */
 export const AVAILABLE_TEMPLATE_VARIABLES: Array<{ key: string; label: string; example: string }> = [
-  { key: '{cliente}',   label: 'Nome do contato',           example: 'Bruno Silva' },
-  { key: '{atendente}', label: 'Nome do atendente',         example: 'Rafael Ferreira' },
-  { key: '{canal}',     label: 'Nome do canal',             example: 'WhatsApp Comercial' },
-  { key: '{empresa}',   label: 'Empresa do contato',        example: 'Positiva' },
-  { key: '{data}',      label: 'Data atual (DD/MM/YYYY)',   example: '20/05/2026' },
-  { key: '{hora}',      label: 'Hora atual (HH:MM)',        example: '14:35' },
-  { key: '{protocolo}', label: 'Protocolo da conversa',     example: 'X4F2A1' },
+  { key: '{cliente}',      label: 'Nome do contato',           example: 'Bruno Silva' },
+  { key: '{atendente}',    label: 'Nome do atendente',         example: 'Rafael Ferreira' },
+  { key: '{canal}',        label: 'Nome do canal',             example: 'WhatsApp Comercial' },
+  { key: '{empresa}',      label: 'Empresa do contato',        example: 'Positiva' },
+  { key: '{cnpj}',         label: 'CNPJ da empresa',           example: '00.000.000/0001-00' },
+  { key: '{razao_social}', label: 'Razão social da empresa',   example: 'Empresa Ltda.' },
+  { key: '{data}',         label: 'Data atual (DD/MM/YYYY)',   example: '20/05/2026' },
+  { key: '{hora}',         label: 'Hora atual (HH:MM)',        example: '14:35' },
+  { key: '{protocolo}',    label: 'Protocolo da conversa',     example: 'X4F2A1' },
 ]

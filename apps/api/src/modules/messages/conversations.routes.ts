@@ -1,11 +1,11 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
-import { evolutionClient } from '../channels/evolution.client.js'
 import { getChannelConfig, getSmtpConfig } from '../channels/channels.service.js'
+import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
 import { sendEmail, moveImapMessage } from '../channels/email.client.js'
 import { dedupConversations } from './dedup.service.js'
-import { sendSystemMessage, getUserMessageTemplate } from '../../lib/systemMessages.js'
+import { sendSystemMessage, getUserMessageTemplate, getUserIgnoreGroups } from '../../lib/systemMessages.js'
 import { eventBus } from '../../lib/eventBus.js'
 import { logger } from '../../lib/logger.js'
 import { hasPermission } from '../../lib/acl.js'
@@ -28,6 +28,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           excludeChannelType: z.string().optional(), // CSV
           folder: z.string().optional(),
           assigneeId: z.string().optional(),  // "me" | "unassigned" | "mine_and_queue" | <userId>
+          companyId: z.string().optional(),   // filtra conversas da empresa (direto OU via contato)
           q: z.string().optional(),
           cursor: z.string().optional(),
           limit: z.coerce.number().default(50),
@@ -38,7 +39,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req) => {
       const { workspaceId, sub: userId } = req.user
-      const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, q, cursor, limit, filter, includeImported } = req.query
+      const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, companyId, q, cursor, limit, filter, includeImported } = req.query
 
       // Resolve filtro de canal por tipo (single, CSV-in ou CSV-not-in)
       const channelTypeFilter: Record<string, unknown> = {}
@@ -123,6 +124,13 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
               { contact: { name: { contains: q } } },
               { contact: { phone: { contains: q } } },
               { externalId: { contains: q } },
+            ],
+          }),
+          // Filtro por empresa: pega conversas com vínculo direto OU via contato
+          ...(companyId && {
+            OR: [
+              { companyId },
+              { contact: { companyId } },
             ],
           }),
           ...(cursor && { lastMessageAt: { lt: new Date(cursor) } }),
@@ -302,6 +310,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           contact: { select: { id: true, name: true, phone: true, email: true, metadata: true, companyId: true } },
           channel: { select: { id: true, type: true, label: true, signature: true, settings: true } },
           assignee: { select: { id: true, name: true, email: true, settings: true } },
+          company: { select: { id: true, name: true, color: true } },
         },
       })
 
@@ -309,6 +318,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       if (conversation?.channel.type === 'WHATSAPP' && !cursor) {
         try {
           const { instanceName } = await getChannelConfig(conversation.channelId)
+          const waClient = await getClientForChannel(conversation.channelId)
           const remoteJid = conversation.externalId
           // Evolution espera só o número (sem o sufixo @s.whatsapp.net / @g.us)
           const phoneNumber = remoteJid.replace(/@.+$/, '')
@@ -320,11 +330,11 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
 
           if (unreadIds.length > 0) {
             // markMessageAsRead usa o JID completo
-            await evolutionClient.markMessageAsRead(instanceName, remoteJid, unreadIds).catch(() => {})
+            await waClient.markMessageAsRead(instanceName, remoteJid, unreadIds).catch(() => {})
           }
 
           // subscribePresence usa só o número
-          await evolutionClient.subscribePresence(instanceName, phoneNumber).catch(() => {})
+          await waClient.subscribePresence(instanceName, phoneNumber).catch(() => {})
         } catch {
           // Falhas aqui não devem quebrar o carregamento da conversa
         }
@@ -406,10 +416,11 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       if (conversation.channel.type === 'WHATSAPP') {
         // WhatsApp: envia via Evolution API
         const { instanceName } = await getChannelConfig(conversation.channelId)
+        const waClient = await getClientForChannel(conversation.channelId)
         const quoted = quotedMsgId && quotedBody
           ? { id: quotedMsgId, remoteJid: conversation.externalId, fromMe: false, body: quotedBody }
           : undefined
-        const result = await evolutionClient.sendText(instanceName, conversation.externalId, outboundText, quoted)
+        const result = await waClient.sendText(instanceName, conversation.externalId, outboundText, quoted)
         externalId = result.key?.id
 
       } else if (conversation.channel.type === 'IMAP_SMTP') {
@@ -499,10 +510,11 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // Fallback: busca da Evolution API (CDN WhatsApp — pode expirar)
       const { instanceName } = await getChannelConfig(message.conversation.channelId)
+      const waClient = await getClientForChannel(message.conversation.channelId)
       let base64: string
       let mimetype: string
       try {
-        const result = await evolutionClient.getMediaBase64(instanceName, att.key)
+        const result = await waClient.getMediaBase64(instanceName, att.key)
         base64 = result.base64
         mimetype = result.mimetype
       } catch (err: any) {
@@ -567,7 +579,8 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       let externalId: string | undefined
       if (conversation.channel.type === 'WHATSAPP') {
         const { instanceName } = await getChannelConfig(conversation.channelId)
-        const result = await evolutionClient.sendMedia(
+        const waClient = await getClientForChannel(conversation.channelId)
+        const result = await waClient.sendMedia(
           instanceName, conversation.externalId,
           mediatype, mimetype, caption, base64,
           mediatype === 'document' ? filename : undefined,
@@ -683,7 +696,8 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       let externalId: string | undefined
       if (conversation.channel.type === 'WHATSAPP') {
         const { instanceName } = await getChannelConfig(conversation.channelId)
-        const result = await evolutionClient.sendMedia(
+        const waClient = await getClientForChannel(conversation.channelId)
+        const result = await waClient.sendMedia(
           instanceName, conversation.externalId,
           mediatype, mime, finalCaption, buffer.toString('base64'),
           mediatype === 'document' ? file.filename : undefined,
@@ -788,7 +802,8 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       let msgExternalId: string | undefined
       if (channel.type === 'WHATSAPP') {
         const { instanceName } = await getChannelConfig(channelId)
-        const result = await evolutionClient.sendText(instanceName, externalId, text)
+        const waClient = await getClientForChannel(channelId)
+        const result = await waClient.sendText(instanceName, externalId, text)
         msgExternalId = result.key?.id
       } else if (channel.type === 'IMAP_SMTP') {
         const smtpCfg = await getSmtpConfig(channelId)
@@ -853,9 +868,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       try {
         const { instanceName } = await getChannelConfig(conversation.channelId)
+        const waClient = await getClientForChannel(conversation.channelId)
         // Evolution espera só o número sem sufixo JID
         const phoneNumber = conversation.externalId.replace(/@.+$/, '')
-        await evolutionClient.sendPresence(instanceName, phoneNumber, presence)
+        await waClient.sendPresence(instanceName, phoneNumber, presence)
       } catch {
         // Silencioso — presença é best-effort
       }
@@ -988,11 +1004,15 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
             : ''
           const template = userTpl || channelTpl
           if (template) {
+            const skipGroupsClosing = userTpl
+              ? await getUserIgnoreGroups(userId, 'ignoreGroupsClosing')
+              : false
             void sendSystemMessage({
               conversationId: id,
               template,
               kind: 'closing',
               userId,
+              skipIfGroup: skipGroupsClosing,
             })
           }
         } else {
@@ -1171,11 +1191,13 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       // Dispara fire-and-forget no background, nunca bloqueia a resposta do claim.
       const userWelcomeTpl = await getUserMessageTemplate(userId, 'welcomeMessage')
       if (userWelcomeTpl) {
+        const skipGroupsWelcome = await getUserIgnoreGroups(userId, 'ignoreGroupsWelcome')
         void sendSystemMessage({
           conversationId: id,
           template: userWelcomeTpl,
           kind: 'agent-welcome',
           userId,
+          skipIfGroup: skipGroupsWelcome,
         })
       }
 
@@ -1449,6 +1471,248 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       })
 
       return reply.code(201).send({ conversationId: conversation.id })
+    },
+  )
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // ── Grupo: gerenciamento via Evolution API ──────────────────────────────────
+  // Todas as rotas exigem que a conversa seja WhatsApp e isGroup=true
+  // ────────────────────────────────────────────────────────────────────────────
+
+  async function loadGroupConversation(id: string, workspaceId: string) {
+    const conv = await prisma.conversation.findFirstOrThrow({
+      where: { id, workspaceId },
+      include: { channel: { select: { id: true, type: true } } },
+    })
+    if (conv.channel.type !== 'WHATSAPP') throw new Error('Apenas canais WhatsApp')
+    if (!conv.isGroup) throw new Error('Apenas conversas de grupo')
+    const { instanceName } = await getChannelConfig(conv.channelId)
+    const client = await getClientForChannel(conv.channelId)
+    return { conv, client, instanceName, groupJid: conv.externalId }
+  }
+
+  /** GET /conversations/:id/group — info + membros */
+  app.get(
+    '/conversations/:id/group',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req: any, reply) => {
+      try {
+        const { client, instanceName, groupJid } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+        const [info, members] = await Promise.all([
+          client.fetchGroupInfo(instanceName, groupJid),
+          client.findGroupMembers(instanceName, groupJid).catch(() => ({ participants: [] })),
+        ])
+
+        // Enriquece participantes com nome/foto do Contact (se existir)
+        const participants = (members?.participants ?? []) as Array<{ id: string; admin?: string | null }>
+        const jids = participants.map(p => p.id.replace(/@.*$/, ''))
+        const contacts = await prisma.contact.findMany({
+          where: {
+            workspaceId: req.user.workspaceId,
+            mergedIntoId: null,
+            OR: [{ phone: { in: jids } }, { lid: { in: jids } }],
+          },
+          select: { id: true, name: true, phone: true, lid: true, metadata: true },
+        })
+        const byId = new Map<string, typeof contacts[number]>()
+        for (const c of contacts) {
+          if (c.phone) byId.set(c.phone, c)
+          if (c.lid) byId.set(c.lid, c)
+        }
+
+        const enriched = participants.map(p => {
+          const raw = p.id.replace(/@.*$/, '')
+          const contact = byId.get(raw)
+          const avatarUrl = (contact?.metadata as any)?.avatarUrl ?? null
+          return {
+            jid: p.id,
+            number: raw,
+            admin: p.admin ?? null,
+            name: contact?.name ?? null,
+            contactId: contact?.id ?? null,
+            avatarUrl,
+          }
+        })
+
+        return { info, participants: enriched }
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao buscar grupo')
+      }
+    },
+  )
+
+  /** PATCH /conversations/:id/group — atualiza subject e/ou description */
+  app.patch(
+    '/conversations/:id/group',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          subject: z.string().min(1).max(100).optional(),
+          description: z.string().max(500).optional(),
+        }),
+      },
+    },
+    async (req: any, reply) => {
+      try {
+        const { client, instanceName, groupJid, conv } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+        const { subject, description } = req.body
+        if (subject) {
+          await client.updateGroupSubject(instanceName, groupJid, subject)
+          // Atualiza o subject local da conversation pra refletir imediatamente
+          await prisma.conversation.update({ where: { id: conv.id }, data: { subject } })
+        }
+        if (description !== undefined) {
+          await client.updateGroupDescription(instanceName, groupJid, description)
+        }
+        return { ok: true }
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao atualizar grupo')
+      }
+    },
+  )
+
+  /** POST /conversations/:id/group/picture — upload de foto do grupo */
+  app.post(
+    '/conversations/:id/group/picture',
+    { onRequest: [app.authenticate] },
+    async (req: any, reply) => {
+      try {
+        const { client, instanceName, groupJid } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+        const data = await req.file()
+        if (!data) return reply.badRequest('Arquivo obrigatório')
+        const chunks: Buffer[] = []
+        for await (const chunk of data.file) chunks.push(chunk)
+        const base64 = Buffer.concat(chunks).toString('base64')
+        const mime: string = data.mimetype || 'image/jpeg'
+        await client.updateGroupPicture(instanceName, groupJid, `data:${mime};base64,${base64}`)
+        return { ok: true }
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao atualizar foto')
+      }
+    },
+  )
+
+  /** POST /conversations/:id/group/members — add/remove/promote/demote */
+  app.post(
+    '/conversations/:id/group/members',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          action: z.enum(['add', 'remove', 'promote', 'demote']),
+          participants: z.array(z.string()).min(1).max(50),
+        }),
+      },
+    },
+    async (req: any, reply) => {
+      try {
+        const { client, instanceName, groupJid } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+        const { action, participants } = req.body
+        await client.updateGroupMembers(instanceName, groupJid, action, participants)
+        return { ok: true }
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao atualizar membros')
+      }
+    },
+  )
+
+  /** DELETE /conversations/:id/group/leave — sair do grupo */
+  app.delete(
+    '/conversations/:id/group/leave',
+    { onRequest: [app.authenticate], schema: { params: z.object({ id: z.string() }) } },
+    async (req: any, reply) => {
+      try {
+        const { client, instanceName, groupJid, conv } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+        await client.leaveGroup(instanceName, groupJid)
+        // Marca a conversa como resolvida — já não temos mais acesso ao grupo
+        await prisma.conversation.update({
+          where: { id: conv.id },
+          data: { status: 'RESOLVED', resolvedAt: new Date() },
+        })
+        return { ok: true }
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao sair do grupo')
+      }
+    },
+  )
+
+  /** GET /conversations/:id/group/invite — pega link de convite */
+  app.get(
+    '/conversations/:id/group/invite',
+    { onRequest: [app.authenticate], schema: { params: z.object({ id: z.string() }) } },
+    async (req: any, reply) => {
+      try {
+        const { client, instanceName, groupJid } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+        const data = await client.fetchInviteCode(instanceName, groupJid)
+        return data
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao buscar convite')
+      }
+    },
+  )
+
+  /** PATCH /conversations/:id/company — vincula/desvincula empresa */
+  app.patch(
+    '/conversations/:id/company',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ companyId: z.string().nullable() }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId } = req.user
+      const { id } = req.params
+      const { companyId } = req.body
+
+      // Garante que a conversa pertence ao workspace
+      const conv = await prisma.conversation.findFirst({
+        where: { id, workspaceId },
+        select: { id: true },
+      })
+      if (!conv) return reply.notFound()
+
+      // Se companyId não-nulo: garante que pertence ao workspace
+      if (companyId) {
+        const company = await prisma.company.findFirst({
+          where: { id: companyId, workspaceId },
+          select: { id: true },
+        })
+        if (!company) return reply.badRequest('Empresa não encontrada')
+      }
+
+      const updated = await prisma.conversation.update({
+        where: { id },
+        data: { companyId },
+        select: {
+          id: true,
+          companyId: true,
+          company: { select: { id: true, name: true, color: true } },
+        },
+      })
+      return updated
+    },
+  )
+
+  /** POST /conversations/:id/group/invite/revoke — revoga e regenera */
+  app.post(
+    '/conversations/:id/group/invite/revoke',
+    { onRequest: [app.authenticate], schema: { params: z.object({ id: z.string() }) } },
+    async (req: any, reply) => {
+      try {
+        const { client, instanceName, groupJid } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+        const data = await client.revokeInviteCode(instanceName, groupJid)
+        return data
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao revogar convite')
+      }
     },
   )
 }

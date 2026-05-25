@@ -5,7 +5,7 @@ import { parseJid } from '../../lib/phone.js'
 import { logger } from '../../lib/logger.js'
 import { mergeContacts } from './merge.service.js'
 import { autoDedupContacts } from '../channels/sync.service.js'
-import { evolutionClient } from '../channels/evolution.client.js'
+import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
 import { hasPermission, requirePerm } from '../../lib/acl.js'
 
 export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
@@ -220,6 +220,63 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
+  // ── Resolver IDs de menção (WhatsApp PN/LID → nome do contato) ───────────
+  // Usado pelo frontend para renderizar @<dígitos> nas mensagens com o nome certo.
+  app.post(
+    '/contacts/resolve-mentions',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        body: z.object({ ids: z.array(z.string()).max(200) }),
+      },
+    },
+    async (req) => {
+      const { workspaceId } = req.user
+      const { ids } = req.body
+      if (ids.length === 0) return {}
+
+      const dedup = Array.from(new Set(ids))
+      const contacts = await prisma.contact.findMany({
+        where: {
+          workspaceId,
+          mergedIntoId: null,
+          OR: [
+            { phone: { in: dedup } },
+            { lid: { in: dedup } },
+          ],
+        },
+        select: { name: true, phone: true, lid: true },
+      })
+
+      const map: Record<string, string> = {}
+      for (const c of contacts) {
+        const label = c.name ?? c.phone ?? c.lid ?? ''
+        if (c.phone && dedup.includes(c.phone)) map[c.phone] = label
+        if (c.lid && dedup.includes(c.lid)) map[c.lid] = label
+      }
+
+      // Fallback: também resolve menções que correspondem ao DONO do canal
+      // (LID/PN aprendido a partir de mensagens fromMe — ver evolution.handler).
+      const remaining = dedup.filter(id => !map[id])
+      if (remaining.length > 0) {
+        const channels = await prisma.channel.findMany({
+          where: { workspaceId, type: 'WHATSAPP', deletedAt: null },
+          select: { label: true, settings: true },
+        })
+        for (const ch of channels) {
+          const s = (ch.settings as Record<string, unknown> | null) ?? {}
+          const phone = typeof s.ownerPhone === 'string' ? s.ownerPhone : undefined
+          const lid = typeof s.ownerLid === 'string' ? s.ownerLid : undefined
+          const profile = typeof s.ownerProfileName === 'string' ? s.ownerProfileName : ch.label
+          if (phone && remaining.includes(phone) && !map[phone]) map[phone] = profile
+          if (lid && remaining.includes(lid) && !map[lid]) map[lid] = profile
+        }
+      }
+
+      return map
+    },
+  )
+
   // ── Deduplicar contatos (merge de duplicatas por telefone OU LID) ─────────
   // Reusa o helper `autoDedupContacts` que também roda automaticamente após sync.
   app.post(
@@ -296,11 +353,12 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const { getChannelConfig } = await import('../channels/channels.service.js')
       const { instanceName } = await getChannelConfig(channel.id)
+      const waClient = await getClientForChannel(channel.id)
 
       const jid = `${contact.phone}@s.whatsapp.net`
       let profilePictureUrl: string | null = null
       try {
-        const result = await evolutionClient.fetchProfilePicture(instanceName, jid)
+        const result = await waClient.fetchProfilePicture(instanceName, jid)
         profilePictureUrl = result.profilePictureUrl ?? null
       } catch {
         return reply.badRequest('Não foi possível buscar a foto — contato pode ter privacidade restrita')

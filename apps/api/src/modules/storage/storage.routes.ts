@@ -6,8 +6,8 @@ import { logger } from '../../lib/logger.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { evolutionClient } from '../channels/evolution.client.js'
 import { getChannelConfig } from '../channels/channels.service.js'
+import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
 import type { MediaAttachment } from '../channels/media.utils.js'
 import { hasPermission } from '../../lib/acl.js'
 import type { JwtPayload } from '@aiwa/shared'
@@ -840,10 +840,11 @@ export const storageRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // Baixa da Evolution
       const { instanceName } = await getChannelConfig(message.conversation.channelId)
+      const waClient = await getClientForChannel(message.conversation.channelId)
       let base64: string
       let mimetype: string
       try {
-        const result = await evolutionClient.getMediaBase64(instanceName, att.key)
+        const result = await waClient.getMediaBase64(instanceName, att.key)
         base64 = result.base64
         mimetype = result.mimetype ?? att.mimetype
       } catch (err: any) {

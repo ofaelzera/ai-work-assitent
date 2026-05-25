@@ -9,11 +9,12 @@ import {
   syncChannelStatus,
   deleteChannel,
   getChannelConfig,
+  adoptExistingInstance,
 } from './channels.service.js'
 import { syncWhatsAppChannel, syncWhatsAppAvatars, syncImapChannel } from './sync.service.js'
 import { testSmtpConnection, createImapFolder, listImapFolders } from './email.client.js'
 import { getSmtpConfig } from './channels.service.js'
-import { evolutionClient } from './evolution.client.js'
+import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
 import { env } from '../../config/env.js'
 import { addImapPoller, removeImapPoller } from './imap.poller.js'
 
@@ -26,11 +27,39 @@ export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
     '/channels/whatsapp',
     {
       onRequest: [app.authenticate],
-      schema: { body: z.object({ label: z.string().min(1) }) },
+      schema: {
+        body: z.object({
+          label: z.string().min(1),
+          evolutionServerId: z.string().optional(),
+        }),
+      },
     },
     async (req, reply) => {
-      const channel = await createWhatsAppChannel(req.user.workspaceId, req.body.label)
+      const channel = await createWhatsAppChannel(req.user.workspaceId, req.body.label, req.body.evolutionServerId)
       return reply.code(201).send(channel)
+    },
+  )
+
+  // Adota uma instância Evolution já existente
+  app.post(
+    '/channels/whatsapp/adopt',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        body: z.object({
+          label: z.string().min(1),
+          evolutionServerId: z.string().min(1),
+          instanceName: z.string().min(1),
+        }),
+      },
+    },
+    async (req, reply) => {
+      try {
+        const channel = await adoptExistingInstance(req.user.workspaceId, req.body)
+        return reply.code(201).send(channel)
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao adotar instância')
+      }
     },
   )
 
@@ -121,7 +150,7 @@ export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
       onRequest: [app.authenticate],
       schema: {
         params: z.object({ id: z.string() }),
-        body: z.object({ importHistory: z.boolean().optional() }).optional(),
+        body: z.object({ importHistory: z.boolean().optional() }).nullish(),
       },
     },
     async (req: any) => {
@@ -151,12 +180,17 @@ export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
 
   // Atualiza webhook + websocket do canal WA (PRESENCE_UPDATE, MESSAGES_UPDATE etc.)
   app.post('/channels/:id/update-webhook', { onRequest: [app.authenticate] }, async (req: any, reply) => {
-    const channel = await prisma.channel.findFirstOrThrow({ where: { id: req.params.id, workspaceId: req.user.workspaceId } })
+    const channel = await prisma.channel.findFirstOrThrow({
+      where: { id: req.params.id, workspaceId: req.user.workspaceId },
+      include: { evolutionServer: { select: { url: true } } },
+    })
     if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
     const { instanceName } = await getChannelConfig(req.params.id)
-    const webhookUrl = env.EVOLUTION_WEBHOOK_URL ?? `${env.EVOLUTION_SERVER_URL}/webhooks/whatsapp`
-    await evolutionClient.updateInstanceWebhook(instanceName, webhookUrl)
-    await evolutionClient.updateInstanceWebsocket(instanceName).catch(() => {}) // ignora se rota não existir
+    const client = await getClientForChannel(req.params.id)
+    const serverUrl = channel.evolutionServer?.url ?? env.EVOLUTION_SERVER_URL ?? ''
+    const webhookUrl = env.EVOLUTION_WEBHOOK_URL ?? `${serverUrl}/webhooks/whatsapp`
+    await client.updateInstanceWebhook(instanceName, webhookUrl)
+    await client.updateInstanceWebsocket(instanceName).catch(() => {})
     return { ok: true, instanceName }
   })
 
