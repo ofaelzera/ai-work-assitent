@@ -164,6 +164,13 @@ export function makeEvolutionClient(baseUrl: string, apiKey: string) {
       })
     },
 
+    sendWhatsAppAudio(instanceName: string, to: string, base64: string) {
+      return req<{ key?: { id: string } }>('POST', `/message/sendWhatsAppAudio/${instanceName}`, {
+        number: to,
+        audio: base64,
+      })
+    },
+
     fetchProfilePicture(instanceName: string, number: string) {
       return req<{ wuid: string; profilePictureUrl: string | null }>(
         'POST',

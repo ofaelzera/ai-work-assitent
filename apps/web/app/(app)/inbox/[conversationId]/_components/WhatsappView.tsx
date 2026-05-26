@@ -11,7 +11,7 @@ import {
   ZoomIn, Download, Kanban, Phone, Mail, Reply,
   Check, CheckCheck, Sparkles, CheckCircle2, RotateCcw, Clock3, UserRound, ChevronDown,
   LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History, MoreVertical, ChevronRight,
-  Smile, Trash2, Pencil, MapPin, Contact, BarChart2, Shield, ShieldOff
+  Smile, Trash2, Pencil, MapPin, Contact, BarChart2, Shield, ShieldOff, Mic
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
@@ -1039,6 +1039,64 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const presenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isComposing = useRef(false)
 
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingTime, setRecordingTime] = useState(0)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream)
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data)
+      }
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        const file = new File([audioBlob], 'audio.webm', { type: 'audio/webm' })
+        sendMediaMutation.mutate({ file, caption: '', voiceNote: true })
+        stream.getTracks().forEach(track => track.stop())
+      }
+
+      mediaRecorder.start()
+      setIsRecording(true)
+      setRecordingTime(0)
+    } catch (error) {
+      console.error('Erro ao acessar microfone', error)
+      toast.error('Não foi possível acessar o microfone')
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+    }
+  }
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.onstop = () => {
+        mediaRecorderRef.current?.stream.getTracks().forEach(track => track.stop())
+      }
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+      setRecordingTime(0)
+    }
+  }
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout
+    if (isRecording) {
+      interval = setInterval(() => setRecordingTime(t => t + 1), 1000)
+    }
+    return () => clearInterval(interval)
+  }, [isRecording])
+
   const { data: quickReplies = [] } = useQuery<{ id: string; shortcut: string; title: string | null; body: string }[]>({
     queryKey: ['quick-replies'],
     queryFn: () => apiFetch('/quick-replies'),
@@ -1096,8 +1154,9 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   })
 
   const sendMediaMutation = useMutation({
-    mutationFn: ({ file, caption }: { file: File; caption: string }) => {
+    mutationFn: ({ file, caption, voiceNote }: { file: File; caption: string; voiceNote?: boolean }) => {
       const form = new FormData(); form.append('file', file); if (caption) form.append('caption', caption)
+      if (voiceNote) form.append('voiceNote', 'true')
       return apiFetch<Message>(`/conversations/${conversationId}/messages/media`, { method: 'POST', body: form })
     },
     onSuccess: () => {
@@ -2088,7 +2147,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
               accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt"
               className="hidden" onChange={handleFileSelect} />
             <div className="w-full">
-              {!pendingFile && (
+              {!pendingFile && !isRecording && (
                 <ChatInput
                   value={text}
                   onChange={setText}
@@ -2144,15 +2203,45 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                         draft={text}
                         onSelect={t => { setText(t ?? ''); setTimeout(() => textareaRef.current?.focus(), 50) }} 
                       />
-                      <button 
-                        onClick={handleSend}
-                        disabled={!(text ?? '').trim() || sendMutation.isPending}
-                        className="rounded-full bg-primary text-primary-foreground p-2 hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-transform active:scale-95 flex items-center justify-center">
-                        <Send className="h-4 w-4" />
-                      </button>
+                      {(text ?? '').trim() ? (
+                        <button 
+                          onClick={handleSend}
+                          disabled={sendMutation.isPending}
+                          className="rounded-full bg-primary text-primary-foreground p-2 hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-transform active:scale-95 flex items-center justify-center">
+                          <Send className="h-4 w-4" />
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={startRecording}
+                          disabled={sendMediaMutation.isPending}
+                          className="rounded-full bg-muted text-muted-foreground p-2 hover:bg-accent hover:text-foreground shadow-sm transition-transform active:scale-95 flex items-center justify-center disabled:opacity-50">
+                          <Mic className="h-4 w-4" />
+                        </button>
+                      )}
                     </>
                   }
                 />
+              )}
+              {isRecording && (
+                <div className="flex-1 flex items-center justify-between px-4 py-3 bg-red-50/50 border border-red-100 rounded-xl">
+                  <div className="flex items-center gap-3 text-red-500">
+                    <div className="relative flex items-center justify-center">
+                      <Mic className="h-5 w-5 animate-pulse" />
+                      <div className="absolute inset-0 bg-red-500 rounded-full animate-ping opacity-20" />
+                    </div>
+                    <span className="text-sm font-medium tabular-nums">
+                      Gravando... {Math.floor(recordingTime / 60).toString().padStart(2, '0')}:{(recordingTime % 60).toString().padStart(2, '0')}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={cancelRecording} className="p-2 hover:bg-red-100 rounded-full transition-colors text-red-600 shadow-sm" title="Cancelar">
+                      <Trash2 className="h-5 w-5" />
+                    </button>
+                    <button onClick={stopRecording} className="p-2 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors shadow-sm" title="Enviar">
+                      <Send className="h-5 w-5" />
+                    </button>
+                  </div>
+                </div>
               )}
               {pendingFile && (
                 <div className="flex items-end gap-2">

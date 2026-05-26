@@ -671,11 +671,19 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       if (conversation.channel.type === 'WHATSAPP') {
         const { instanceName } = await getChannelConfig(conversation.channelId)
         const waClient = await getClientForChannel(conversation.channelId)
-        const result = await waClient.sendMedia(
-          instanceName, conversation.externalId,
-          mediatype, mimetype, caption, base64,
-          mediatype === 'document' ? filename : undefined,
-        )
+        
+        const isVoiceNote = data.fields?.voiceNote?.value === 'true'
+        let result: any
+        
+        if (isVoiceNote) {
+          result = await waClient.sendWhatsAppAudio(instanceName, conversation.externalId, base64)
+        } else {
+          result = await waClient.sendMedia(
+            instanceName, conversation.externalId,
+            mediatype, mimetype, caption, base64,
+            mediatype === 'document' ? filename : undefined,
+          )
+        }
         externalId = result.key?.id
       } else if (conversation.channel.type === 'META_WHATSAPP') {
         const metaCredentials = await getMetaConfig(conversation.channelId)
