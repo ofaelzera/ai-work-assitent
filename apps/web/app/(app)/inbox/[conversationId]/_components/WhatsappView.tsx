@@ -10,7 +10,8 @@ import {
   Send, Paperclip, FileText, Music, Video, Image as ImageIcon, X,
   ZoomIn, Download, Kanban, Phone, Mail, Reply,
   Check, CheckCheck, Sparkles, CheckCircle2, RotateCcw, Clock3, UserRound, ChevronDown,
-  LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History, MoreVertical, ChevronRight
+  LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History, MoreVertical, ChevronRight,
+  Smile, Trash2, Pencil, MapPin, Contact, BarChart2, Shield, ShieldOff
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
@@ -56,6 +57,13 @@ export interface MediaAttachment {
   key?: { id: string; remoteJid: string; fromMe: boolean }
 }
 
+export interface MessageReaction {
+  emoji: string
+  senderId: string
+  senderName?: string
+  fromMe: boolean
+}
+
 export interface Message {
   id: string
   externalId?: string | null
@@ -71,6 +79,7 @@ export interface Message {
   quotedMsgId?: string | null
   quotedBody?: string | null
   quotedSender?: string | null
+  metadata?: { reactions?: MessageReaction[]; deleted?: boolean; edited?: boolean } | null
 }
 
 export interface Contact {
@@ -1018,6 +1027,12 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const [showTimeline, setShowTimeline] = useState(false)
   const [attachMessageId, setAttachMessageId] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<ReplyState | null>(null)
+  const [reactingMsgId, setReactingMsgId] = useState<string | null>(null)
+  const [editingMsg, setEditingMsg] = useState<{ id: string; text: string; prefix?: string } | null>(null)
+  const [showLocationModal, setShowLocationModal] = useState(false)
+  const [showContactModal, setShowContactModal] = useState(false)
+  const [showPollModal, setShowPollModal] = useState(false)
+  const [isBlocked, setIsBlocked] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1028,6 +1043,12 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
     queryKey: ['quick-replies'],
     queryFn: () => apiFetch('/quick-replies'),
     staleTime: 60_000,
+  })
+
+  const { data: wsSettings } = useQuery<{ companyAddress?: string; razaoSocial?: string }>({
+    queryKey: ['workspace-settings'],
+    queryFn: () => apiFetch('/workspace/settings'),
+    staleTime: 1000 * 60 * 5,
   })
 
   // Envia "composing" para o WhatsApp quando o agente digita
@@ -1085,6 +1106,100 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
       setPendingFile(null); setCaption('')
     },
     onError: () => toast.error('Erro ao enviar mídia'),
+  })
+
+  const reactionMutation = useMutation({
+    mutationFn: ({ messageId, reaction }: { messageId: string; reaction: string }) =>
+      apiFetch(`/conversations/${conversationId}/messages/${messageId}/reaction`, {
+        method: 'POST',
+        body: JSON.stringify({ reaction }),
+      }),
+    onSuccess: () => {
+      setReactingMsgId(null)
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+    },
+    onError: () => toast.error('Erro ao enviar reação'),
+  })
+
+  const deleteMsgMutation = useMutation({
+    mutationFn: (messageId: string) =>
+      apiFetch(`/conversations/${conversationId}/messages/${messageId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+      toast.success('Mensagem apagada')
+    },
+    onError: () => toast.error('Erro ao apagar mensagem'),
+  })
+
+  const editMsgMutation = useMutation({
+    mutationFn: ({ messageId, text }: { messageId: string; text: string }) =>
+      apiFetch(`/conversations/${conversationId}/messages/${messageId}`, {
+        method: 'PATCH', body: JSON.stringify({ text }),
+      }),
+    onSuccess: (_data, { messageId, text }) => {
+      setEditingMsg(null)
+      queryClient.setQueryData(['conversation', conversationId], (old: any) => {
+        if (!old?.messages) return old
+        return {
+          ...old,
+          messages: old.messages.map((m: any) =>
+            m.id === messageId ? { ...m, body: text, metadata: { ...(m.metadata ?? {}), edited: true } } : m,
+          ),
+        }
+      })
+    },
+    onError: () => toast.error('Erro ao editar mensagem'),
+  })
+
+  const blockMutation = useMutation({
+    mutationFn: (action: 'block' | 'unblock') =>
+      apiFetch(`/conversations/${conversationId}/block`, {
+        method: 'PATCH', body: JSON.stringify({ action }),
+      }),
+    onSuccess: (_data, action) => {
+      setIsBlocked(action === 'block')
+      toast.success(action === 'block' ? 'Contato bloqueado' : 'Contato desbloqueado')
+    },
+    onError: () => toast.error('Erro ao alterar bloqueio'),
+  })
+
+  const sendLocationMutation = useMutation({
+    mutationFn: (data: { latitude: number; longitude: number; name?: string; address?: string }) =>
+      apiFetch(`/conversations/${conversationId}/send/location`, {
+        method: 'POST', body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      setShowLocationModal(false)
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+      toast.success('Localização enviada')
+    },
+    onError: () => toast.error('Erro ao enviar localização'),
+  })
+
+  const sendContactMutation = useMutation({
+    mutationFn: (data: { fullName: string; phoneNumber: string; organization?: string }) =>
+      apiFetch(`/conversations/${conversationId}/send/contact`, {
+        method: 'POST', body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      setShowContactModal(false)
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+      toast.success('Contato enviado')
+    },
+    onError: () => toast.error('Erro ao enviar contato'),
+  })
+
+  const sendPollMutation = useMutation({
+    mutationFn: (data: { name: string; values: string[]; selectableCount?: number }) =>
+      apiFetch(`/conversations/${conversationId}/send/poll`, {
+        method: 'POST', body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      setShowPollModal(false)
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+      toast.success('Enquete enviada')
+    },
+    onError: () => toast.error('Erro ao enviar enquete'),
   })
 
   const statusMutation = useMutation({
@@ -1174,6 +1289,26 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
     ) {
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
+    }
+
+    if (event.type === 'message.updated' && (event.payload as any)?.conversationId === conversationId) {
+      const { messageId, reactions } = event.payload as any
+      queryClient.setQueryData(
+        ['conversation', conversationId],
+        (old: any) => {
+          if (!old?.messages) return old
+          return {
+            ...old,
+            messages: old.messages.map((m: any) =>
+              m.id === messageId ? { ...m, metadata: { ...(m.metadata ?? {}), reactions } } : m,
+            ),
+          }
+        },
+      )
+    }
+
+    if (event.type === 'message.deleted' && (event.payload as any)?.conversationId === conversationId) {
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
     }
 
     // Atualiza ícone de entrega diretamente no cache — sem refetch
@@ -1426,6 +1561,23 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                       <History className="h-3.5 w-3.5" />
                       <span className="font-medium">Histórico da conversa</span>
                     </button>
+                    {conv.channel.type === 'WHATSAPP' && !conv.isGroup && (
+                      <>
+                        <div className="h-px bg-border my-1" />
+                        <button
+                          onMouseDown={() => { blockMutation.mutate(isBlocked ? 'unblock' : 'block'); setShowMoreMenu(false) }}
+                          className={cn(
+                            'w-full flex items-center gap-2 px-3 py-2 text-xs text-left',
+                            isBlocked
+                              ? 'hover:bg-green-50 dark:hover:bg-green-900/20 text-green-600 dark:text-green-400'
+                              : 'hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400',
+                          )}
+                        >
+                          {isBlocked ? <ShieldOff className="h-3.5 w-3.5" /> : <Shield className="h-3.5 w-3.5" />}
+                          <span className="font-medium">{isBlocked ? 'Desbloquear contato' : 'Bloquear contato'}</span>
+                        </button>
+                      </>
+                    )}
                     {(isMyConv || isAdmin) && conv.assigneeId && (
                       <>
                         <div className="h-px bg-border my-1" />
@@ -1502,6 +1654,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           {isLoading && <div className="text-center text-sm text-muted-foreground py-8">Carregando...</div>}
 
           {useMemo(() => {
+            const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏']
             let lastSenderId = ''
             return groups.map((group) => (
             <div key={group.date}>
@@ -1634,6 +1787,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                         'absolute -top-3 z-30 flex items-center gap-0.5 rounded-full border bg-card shadow-md px-1 py-0.5',
                         'opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all',
                         'pointer-events-none group-hover:pointer-events-auto',
+                        reactingMsgId === msg.id && 'opacity-100 translate-y-0 pointer-events-auto',
                         isOut ? 'right-1' : 'left-1',
                       )}>
                         <button
@@ -1689,6 +1843,62 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                         >
                           <CalendarPlus className="h-3 w-3" />
                         </button>
+                        {/* Reação */}
+                        <div className="relative">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setReactingMsgId(v => v === msg.id ? null : msg.id) }}
+                            className="p-1 rounded-full text-muted-foreground hover:bg-accent hover:text-amber-500 transition-colors"
+                            title="Reagir"
+                          >
+                            <Smile className="h-3 w-3" />
+                          </button>
+                          {reactingMsgId === msg.id && (
+                            <>
+                              <div className="fixed inset-0 z-30" onClick={() => setReactingMsgId(null)} />
+                              <div
+                                className={cn(
+                                  'absolute bottom-full mb-1 z-40 flex items-center gap-0.5 rounded-full border bg-card shadow-xl px-1.5 py-1',
+                                  isOut ? 'right-0' : 'left-0',
+                                )}
+                              >
+                                {REACTION_EMOJIS.map(emoji => (
+                                  <button
+                                    key={emoji}
+                                    onClick={() => reactionMutation.mutate({ messageId: msg.id, reaction: emoji })}
+                                    className="text-base hover:scale-125 transition-transform p-0.5"
+                                    title={emoji}
+                                  >
+                                    {emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                        {/* Editar + Deletar mensagem (própria ou admin) */}
+                        {(msg.direction === 'OUTBOUND' && msg.fromUserId === myId) || isAdmin ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                const match = msg.body.match(/^\*.*?\*\n/)
+                                const prefix = match ? match[0] : ''
+                                const textWithoutPrefix = match ? msg.body.substring(prefix.length) : msg.body
+                                setEditingMsg({ id: msg.id, text: textWithoutPrefix, prefix })
+                              }}
+                              className="p-1 rounded-full text-muted-foreground hover:bg-accent hover:text-blue-500 transition-colors"
+                              title="Editar mensagem"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={() => { if (confirm('Apagar esta mensagem para todos?')) deleteMsgMutation.mutate(msg.id) }}
+                              className="p-1 rounded-full text-muted-foreground hover:bg-accent hover:text-red-500 transition-colors"
+                              title="Apagar para todos"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </>
+                        ) : null}
                       </div>
 
                       {/* Detecta mensagem de sistema (welcome/closing automáticos) */}
@@ -1733,13 +1943,65 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
 
                               {/* Hora + status */}
                               <div className={cn(
-                                'flex items-center justify-end gap-0.5 mt-0.5',
+                                'flex items-center justify-end gap-1 mt-0.5',
                                 isOut ? 'text-primary-foreground/70' : 'text-muted-foreground',
                               )}>
+                                {msg.metadata?.edited && (
+                                  <span className="text-[9px] italic opacity-70">editada</span>
+                                )}
                                 <span className="text-[10px] leading-none">{formatTime(msg.sentAt)}</span>
                                 {isOut && <DeliveryStatus status={msg.deliveryStatus} />}
                               </div>
                             </div>
+                            {/* Editor inline */}
+                            {editingMsg?.id === msg.id && (
+                              <div className="mt-1">
+                                <textarea
+                                  autoFocus
+                                  value={editingMsg.text}
+                                  onChange={e => setEditingMsg(v => v ? { ...v, text: e.target.value } : null)}
+                                  className="w-full rounded-md border bg-card px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+                                  rows={3}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                      e.preventDefault()
+                                      if (editingMsg.text.trim()) editMsgMutation.mutate({ messageId: msg.id, text: (editingMsg.prefix || '') + editingMsg.text.trim() })
+                                    }
+                                    if (e.key === 'Escape') setEditingMsg(null)
+                                  }}
+                                />
+                                <div className="flex justify-end gap-2 mt-1">
+                                  <button onClick={() => setEditingMsg(null)} className="text-xs text-muted-foreground hover:text-foreground">Cancelar</button>
+                                  <button
+                                    onClick={() => { if (editingMsg.text.trim()) editMsgMutation.mutate({ messageId: msg.id, text: (editingMsg.prefix || '') + editingMsg.text.trim() }) }}
+                                    disabled={editMsgMutation.isPending}
+                                    className="text-xs bg-primary text-primary-foreground px-2 py-0.5 rounded disabled:opacity-50"
+                                  >Salvar</button>
+                                </div>
+                              </div>
+                            )}
+                            {/* Reações */}
+                            {(() => {
+                              const rxns = msg.metadata?.reactions ?? []
+                              if (!rxns.length) return null
+                              const grouped = rxns.reduce<Record<string, number>>((acc, r) => {
+                                acc[r.emoji] = (acc[r.emoji] ?? 0) + 1
+                                return acc
+                              }, {})
+                              return (
+                                <div className={cn('flex gap-0.5 mt-0.5', isOut ? 'justify-end' : 'justify-start')}>
+                                  {Object.entries(grouped).map(([emoji, count]) => (
+                                    <span
+                                      key={emoji}
+                                      className="inline-flex items-center gap-0.5 rounded-full bg-card border shadow-sm px-1.5 py-0.5 text-sm leading-none"
+                                    >
+                                      {emoji}
+                                      {count > 1 && <span className="text-[10px] text-muted-foreground font-medium">{count}</span>}
+                                    </span>
+                                  ))}
+                                </div>
+                              )
+                            })()}
                           </>
                         )
                       })()}
@@ -1749,7 +2011,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
               })}
             </div>
           ))
-          }, [groups, isGroup, contactName])}
+          }, [groups, isGroup, contactName, reactingMsgId, myId, isAdmin, editingMsg, editMsgMutation.isPending])}
 
           {messages.length === 0 && !isLoading && (
             <div className="text-center text-sm text-muted-foreground py-8">Nenhuma mensagem ainda</div>
@@ -1849,6 +2111,30 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                         title="Anexar dos meus arquivos">
                         <FolderOpen className="h-4 w-4" />
                       </button>
+                      {conv.channel.type === 'WHATSAPP' && (
+                        <>
+                          <button
+                            onClick={() => setShowLocationModal(true)}
+                            className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-emerald-500 transition-colors"
+                            title="Enviar localização">
+                            <MapPin className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => setShowContactModal(true)}
+                            className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-blue-500 transition-colors"
+                            title="Enviar contato">
+                            <Contact className="h-4 w-4" />
+                          </button>
+                          {isGroup && (
+                            <button
+                              onClick={() => setShowPollModal(true)}
+                              className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-violet-500 transition-colors"
+                              title="Criar enquete (apenas grupos)">
+                              <BarChart2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </>
+                      )}
                     </>
                   }
                   bottomRightActions={
@@ -2000,6 +2286,337 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           onClose={() => setShowTimeline(false)}
         />
       )}
+
+      {/* Modal: Enviar Localização */}
+      {showLocationModal && (
+        <LocationModal
+          onClose={() => setShowLocationModal(false)}
+          onSend={(data) => sendLocationMutation.mutate(data)}
+          isPending={sendLocationMutation.isPending}
+          companyAddress={wsSettings?.companyAddress}
+          companyName={wsSettings?.razaoSocial}
+        />
+      )}
+
+      {/* Modal: Enviar Contato */}
+      {showContactModal && (
+        <ContactCardModal
+          onClose={() => setShowContactModal(false)}
+          onSend={(data) => sendContactMutation.mutate(data)}
+          isPending={sendContactMutation.isPending}
+        />
+      )}
+
+      {/* Modal: Criar Enquete */}
+      {showPollModal && (
+        <PollModal
+          onClose={() => setShowPollModal(false)}
+          onSend={(data) => sendPollMutation.mutate(data)}
+          isPending={sendPollMutation.isPending}
+        />
+      )}
     </>
+  )
+}
+
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState<T>(value)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(t)
+  }, [value, delay])
+  return debounced
+}
+
+// ── Modal: Localização ────────────────────────────────────────────────────────
+function LocationModal({ onClose, onSend, isPending, companyAddress, companyName }: {
+  onClose: () => void
+  onSend: (data: { latitude: number; longitude: number; name?: string; address?: string }) => void
+  isPending: boolean
+  companyAddress?: string
+  companyName?: string
+}) {
+  const [lat, setLat] = useState('')
+  const [lng, setLng] = useState('')
+  const [name, setName] = useState('')
+  const [address, setAddress] = useState('')
+  const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'error'>('idle')
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [onClose])
+
+  function useCurrentLocation() {
+    if (!navigator.geolocation) { setGpsStatus('error'); return }
+    setGpsStatus('loading')
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLat(pos.coords.latitude.toFixed(6))
+        setLng(pos.coords.longitude.toFixed(6))
+        setGpsStatus('idle')
+      },
+      () => setGpsStatus('error'),
+      { timeout: 10000 },
+    )
+  }
+
+  function useCompanyAddress() {
+    if (companyAddress) setAddress(companyAddress)
+    if (companyName) setName(companyName)
+  }
+
+  const canSend = lat.trim() && lng.trim() && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng))
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-card rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MapPin className="h-4 w-4 text-emerald-500" />
+            <h2 className="font-semibold text-sm">Enviar localização</h2>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground"><X className="h-4 w-4" /></button>
+        </div>
+
+        {/* GPS */}
+        <button
+          type="button"
+          onClick={useCurrentLocation}
+          disabled={gpsStatus === 'loading'}
+          className="w-full flex items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
+        >
+          <MapPin className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+          {gpsStatus === 'loading' ? 'Obtendo localização...' : 'Usar localização atual (GPS)'}
+        </button>
+        {gpsStatus === 'error' && (
+          <p className="text-xs text-destructive">Não foi possível obter localização. Verifique as permissões do navegador.</p>
+        )}
+
+        {/* Endereço da empresa */}
+        {companyAddress && (
+          <button
+            type="button"
+            onClick={useCompanyAddress}
+            className="w-full flex items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          >
+            <Contact className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+            <span className="truncate text-left">Usar endereço da empresa: {companyAddress}</span>
+          </button>
+        )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Latitude *</label>
+            <input value={lat} onChange={e => setLat(e.target.value)} placeholder="-23.5505"
+              className="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Longitude *</label>
+            <input value={lng} onChange={e => setLng(e.target.value)} placeholder="-46.6333"
+              className="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Nome do local</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Nossa loja"
+            className="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Endereço</label>
+          <input value={address} onChange={e => setAddress(e.target.value)} placeholder="Rua, número, cidade"
+            className="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 rounded-md text-sm hover:bg-accent">Cancelar</button>
+          <button
+            onClick={() => canSend && onSend({ latitude: parseFloat(lat), longitude: parseFloat(lng), name: name || undefined, address: address || undefined })}
+            disabled={!canSend || isPending}
+            className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+          >{isPending ? 'Enviando...' : 'Enviar'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: Contato (vCard) ────────────────────────────────────────────────────
+function ContactCardModal({ onClose, onSend, isPending }: {
+  onClose: () => void
+  onSend: (data: { fullName: string; phoneNumber: string; organization?: string }) => void
+  isPending: boolean
+}) {
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<{ id: string; name: string; phone: string; organization?: string } | null>(null)
+  const debouncedSearch = useDebounce(search, 300)
+
+  const { data, isFetching } = useQuery<{
+    items: Array<{ id: string; name: string | null; phone: string | null; company?: { name: string } | null }>
+  }>({
+    queryKey: ['contacts-search', debouncedSearch],
+    queryFn: () => apiFetch(`/contacts?q=${encodeURIComponent(debouncedSearch)}&excludeLid=true&limit=20`),
+    staleTime: 30_000,
+  })
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [onClose])
+
+  const contacts = (data?.items ?? []).filter(c => c.name && c.phone)
+
+  function handleSend() {
+    if (!selected) return
+    onSend({ fullName: selected.name, phoneNumber: selected.phone, organization: selected.organization })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-card rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Contact className="h-4 w-4 text-blue-500" />
+            <h2 className="font-semibold text-sm">Enviar contato</h2>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="relative">
+          <input
+            autoFocus
+            value={search}
+            onChange={e => { setSearch(e.target.value); setSelected(null) }}
+            placeholder="Buscar contato pelo nome ou telefone..."
+            className="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm pr-8 focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          {isFetching && (
+            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">...</span>
+          )}
+        </div>
+
+        {/* Lista de resultados */}
+        <div className="max-h-48 overflow-y-auto space-y-0.5 rounded-md border bg-muted/30">
+          {contacts.length === 0 && !isFetching && (
+            <p className="text-xs text-muted-foreground text-center py-4">
+              {search ? 'Nenhum contato encontrado' : 'Digite para buscar'}
+            </p>
+          )}
+          {contacts.map(c => {
+            const org = c.company?.name
+            const isSelected = selected?.id === c.id
+            const avatarUrl = (c.metadata as any)?.avatarUrl
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setSelected({ id: c.id, name: c.name!, phone: c.phone!, organization: org })}
+                className={cn(
+                  'w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-accent transition-colors text-sm',
+                  isSelected && 'bg-primary/10 text-primary',
+                )}
+              >
+                <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center text-xs font-medium shrink-0 overflow-hidden">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt={c.name!} className="h-full w-full object-cover" />
+                  ) : (
+                    initials(c.name!)
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium truncate">{c.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{c.phone}{org ? ` · ${org}` : ''}</p>
+                </div>
+                {isSelected && <span className="text-primary text-xs shrink-0">✓</span>}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 rounded-md text-sm hover:bg-accent">Cancelar</button>
+          <button
+            onClick={handleSend}
+            disabled={!selected || isPending}
+            className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+          >{isPending ? 'Enviando...' : 'Enviar'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: Enquete ────────────────────────────────────────────────────────────
+function PollModal({ onClose, onSend, isPending }: {
+  onClose: () => void
+  onSend: (data: { name: string; values: string[]; selectableCount?: number }) => void
+  isPending: boolean
+}) {
+  const [question, setQuestion] = useState('')
+  const [options, setOptions] = useState(['', ''])
+  const [multiSelect, setMultiSelect] = useState(false)
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [onClose])
+
+  const validOptions = options.filter(o => o.trim())
+  const canSend = question.trim() && validOptions.length >= 2
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-card rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-violet-500" />
+            <h2 className="font-semibold text-sm">Criar enquete</h2>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground"><X className="h-4 w-4" /></button>
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Pergunta *</label>
+          <input autoFocus value={question} onChange={e => setQuestion(e.target.value)} placeholder="Qual é sua preferência?"
+            className="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs text-muted-foreground block">Opções * (mín. 2)</label>
+          {options.map((opt, i) => (
+            <div key={i} className="flex gap-1">
+              <input
+                value={opt}
+                onChange={e => setOptions(v => v.map((o, j) => j === i ? e.target.value : o))}
+                placeholder={`Opção ${i + 1}`}
+                className="flex-1 rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              {options.length > 2 && (
+                <button onClick={() => setOptions(v => v.filter((_, j) => j !== i))}
+                  className="p-1.5 rounded hover:bg-accent text-muted-foreground">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ))}
+          {options.length < 12 && (
+            <button onClick={() => setOptions(v => [...v, ''])}
+              className="text-xs text-primary hover:underline">+ Adicionar opção</button>
+          )}
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={multiSelect} onChange={e => setMultiSelect(e.target.checked)}
+            className="rounded" />
+          <span className="text-xs text-muted-foreground">Permitir múltiplas respostas</span>
+        </label>
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 rounded-md text-sm hover:bg-accent">Cancelar</button>
+          <button
+            onClick={() => canSend && onSend({ name: question.trim(), values: validOptions, selectableCount: multiSelect ? validOptions.length : 1 })}
+            disabled={!canSend || isPending}
+            className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+          >{isPending ? 'Enviando...' : 'Enviar'}</button>
+        </div>
+      </div>
+    </div>
   )
 }

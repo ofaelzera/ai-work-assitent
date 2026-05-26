@@ -1,8 +1,9 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
-import { getChannelConfig, getSmtpConfig } from '../channels/channels.service.js'
+import { getChannelConfig, getSmtpConfig, getMetaConfig } from '../channels/channels.service.js'
 import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
+import { makeMetaClient } from '../channels/meta.client.js'
 import { sendEmail, moveImapMessage } from '../channels/email.client.js'
 import { dedupConversations } from './dedup.service.js'
 import { routeNewConversation } from './routing.service.js'
@@ -392,27 +393,30 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
 
-      // Para canais WhatsApp: envia read receipt + inscreve na presença do contato
-      if (conversation?.channel.type === 'WHATSAPP' && !cursor) {
+      // Para canais WhatsApp e Meta WhatsApp: envia read receipt
+      if ((conversation?.channel.type === 'WHATSAPP' || conversation?.channel.type === 'META_WHATSAPP') && !cursor) {
         try {
-          const { instanceName } = await getChannelConfig(conversation.channelId)
-          const waClient = await getClientForChannel(conversation.channelId)
           const remoteJid = conversation.externalId
-          // Evolution espera só o número (sem o sufixo @s.whatsapp.net / @g.us)
           const phoneNumber = remoteJid.replace(/@.+$/, '')
 
-          // IDs das mensagens inbound para enviar blue ticks ao remetente
           const unreadIds = messages
             .filter(m => m.direction === 'INBOUND' && m.externalId)
             .map(m => m.externalId!)
 
           if (unreadIds.length > 0) {
-            // markMessageAsRead usa o JID completo
-            await waClient.markMessageAsRead(instanceName, remoteJid, unreadIds).catch(() => {})
+            if (conversation.channel.type === 'WHATSAPP') {
+              const { instanceName } = await getChannelConfig(conversation.channelId)
+              const waClient = await getClientForChannel(conversation.channelId)
+              await waClient.markMessageAsRead(instanceName, remoteJid, unreadIds).catch(() => {})
+              await waClient.subscribePresence(instanceName, phoneNumber).catch(() => {})
+            } else if (conversation.channel.type === 'META_WHATSAPP') {
+              const metaCredentials = await getMetaConfig(conversation.channelId)
+              const metaClient = makeMetaClient(metaCredentials)
+              for (const msgId of unreadIds) {
+                await metaClient.markAsRead(msgId).catch(() => {})
+              }
+            }
           }
-
-          // subscribePresence usa só o número
-          await waClient.subscribePresence(instanceName, phoneNumber).catch(() => {})
         } catch {
           // Falhas aqui não devem quebrar o carregamento da conversa
         }
@@ -501,6 +505,15 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         const result = await waClient.sendText(instanceName, conversation.externalId, outboundText, quoted)
         externalId = result.key?.id
 
+      } else if (conversation.channel.type === 'META_WHATSAPP') {
+        // Meta Oficial WhatsApp
+        const metaCredentials = await getMetaConfig(conversation.channelId)
+        const metaClient = makeMetaClient(metaCredentials)
+        
+        const phone = conversation.externalId.replace('@s.whatsapp.net', '')
+        const result = await metaClient.sendWhatsAppText(phone, outboundText)
+        
+        externalId = result.messages?.[0]?.id
       } else if (conversation.channel.type === 'IMAP_SMTP') {
         // Email: envia via SMTP
         const toEmail = conversation.contact?.email ?? conversation.externalId
@@ -530,7 +543,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           body: outboundText,
           bodyHtml,
           sentAt: new Date(),
-          deliveryStatus: conversation.channel.type === 'WHATSAPP' ? 'PENDING' : null,
+          deliveryStatus: (conversation.channel.type === 'WHATSAPP' || conversation.channel.type === 'META_WHATSAPP') ? 'PENDING' : null,
           quotedMsgId: quotedMsgId ?? null,
           quotedBody: quotedBody ?? null,
           quotedSender: quotedSender ?? null,
@@ -664,6 +677,15 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           mediatype === 'document' ? filename : undefined,
         )
         externalId = result.key?.id
+      } else if (conversation.channel.type === 'META_WHATSAPP') {
+        const metaCredentials = await getMetaConfig(conversation.channelId)
+        const metaClient = makeMetaClient(metaCredentials)
+        
+        const mediaId = await metaClient.uploadMedia(buffer, mimetype, filename)
+        const phone = conversation.externalId.replace('@s.whatsapp.net', '')
+        const result = await metaClient.sendWhatsAppMedia(phone, mediatype as any, mediaId, caption, mediatype === 'document' ? filename : undefined)
+        
+        externalId = result.messages?.[0]?.id
       }
 
       const body = caption || `[${mediatype}]`
@@ -781,6 +803,15 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           mediatype === 'document' ? file.filename : undefined,
         )
         externalId = result.key?.id
+      } else if (conversation.channel.type === 'META_WHATSAPP') {
+        const metaCredentials = await getMetaConfig(conversation.channelId)
+        const metaClient = makeMetaClient(metaCredentials)
+        
+        const mediaId = await metaClient.uploadMedia(buffer, mime, file.filename)
+        const phone = conversation.externalId.replace('@s.whatsapp.net', '')
+        const result = await metaClient.sendWhatsAppMedia(phone, mediatype as any, mediaId, finalCaption, mediatype === 'document' ? file.filename : undefined)
+        
+        externalId = result.messages?.[0]?.id
       }
 
       const body = finalCaption || `[${mediatype}]`
@@ -981,6 +1012,380 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       return reply.send({ ok: true })
+    },
+  )
+
+  // ── Enviar reação a uma mensagem WhatsApp ───────────────────────────────────
+  app.post(
+    '/conversations/:id/messages/:messageId/reaction',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string(), messageId: z.string() }),
+        body: z.object({ reaction: z.string() }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId, sub: userId } = req.user
+      const { id, messageId } = req.params
+      const { reaction } = req.body
+
+      const message = await prisma.message.findFirst({
+        where: { id: messageId, workspaceId },
+        include: { conversation: { include: { channel: { select: { type: true } } } } }
+      })
+      if (!message) return reply.notFound('Mensagem não encontrada')
+
+      const conversation = message.conversation
+      if (conversation.channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+      if (!message.externalId) return reply.badRequest('Mensagem sem ID externo')
+
+      const { instanceName } = await getChannelConfig(conversation.channelId)
+      const waClient = await getClientForChannel(conversation.channelId)
+      await waClient.sendReaction(instanceName, conversation.externalId, message.externalId, reaction)
+
+      const existingMeta = (message.metadata ?? {}) as any
+      const existingReactions: any[] = existingMeta.reactions ?? []
+      const filtered = existingReactions.filter((r: any) => r.senderId !== userId)
+      const newReactions = reaction
+        ? [...filtered, { emoji: reaction, senderId: userId, fromMe: true }]
+        : filtered
+      await prisma.message.update({
+        where: { id: messageId },
+        data: { metadata: { ...existingMeta, reactions: newReactions } },
+      })
+      await eventBus.emitAndPersist(workspaceId, 'message.updated', { messageId, conversationId: conversation.id, reactions: newReactions })
+
+      return { ok: true }
+    },
+  )
+
+  // ── Deletar mensagem para todos ──────────────────────────────────────────────
+  app.delete(
+    '/conversations/:id/messages/:messageId',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string(), messageId: z.string() }) },
+    },
+    async (req: any, reply) => {
+      const { workspaceId, sub: userId, role } = req.user
+      const { id, messageId } = req.params
+
+      const message = await prisma.message.findFirst({
+        where: { id: messageId, workspaceId },
+        include: { conversation: { include: { channel: { select: { type: true } } } } }
+      })
+      if (!message) return reply.notFound('Mensagem não encontrada')
+
+      const conversation = message.conversation
+
+      if (role !== 'ADMIN' && message.fromUserId !== userId) {
+        return reply.forbidden('Sem permissão para deletar esta mensagem')
+      }
+
+      if (conversation.channel.type === 'WHATSAPP' && message.externalId) {
+        try {
+          const { instanceName } = await getChannelConfig(conversation.channelId)
+          const waClient = await getClientForChannel(conversation.channelId)
+          await waClient.deleteMessage(instanceName, conversation.externalId, message.externalId, message.direction === 'OUTBOUND')
+        } catch {
+          // Falha silenciosa — mensagem pode já ter sido deletada no WA
+        }
+      }
+
+      await prisma.message.update({
+        where: { id: messageId },
+        data: {
+          body: '🚫 Esta mensagem foi apagada.',
+          attachments: [],
+          metadata: { ...((message.metadata as any) ?? {}), deleted: true },
+        },
+      })
+
+      await eventBus.emitAndPersist(workspaceId, 'message.deleted', { messageId, conversationId: conversation.id })
+
+      return reply.code(204).send()
+    },
+  )
+
+  // ── Editar mensagem enviada ──────────────────────────────────────────────────
+  app.patch(
+    '/conversations/:id/messages/:messageId',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string(), messageId: z.string() }),
+        body: z.object({ text: z.string().min(1) }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId, sub: userId, role } = req.user
+      const { id, messageId } = req.params
+      const { text } = req.body
+
+      const message = await prisma.message.findFirst({
+        where: { id: messageId, workspaceId, direction: 'OUTBOUND' },
+        include: { conversation: { include: { channel: { select: { type: true } } } } }
+      })
+      if (!message) return reply.notFound()
+
+      const conversation = message.conversation
+      if (conversation.channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+      if (message.fromUserId !== userId && role !== 'ADMIN') return reply.forbidden()
+      if (!message.externalId) return reply.badRequest('Mensagem sem ID externo')
+
+      const { instanceName } = await getChannelConfig(conversation.channelId)
+      const waClient = await getClientForChannel(conversation.channelId)
+      await waClient.updateMessage(instanceName, conversation.externalId, message.externalId, text)
+
+      await prisma.message.update({
+        where: { id: messageId },
+        data: { body: text, metadata: { ...((message.metadata as any) ?? {}), edited: true } },
+      })
+
+      await eventBus.emitAndPersist(workspaceId, 'message.updated', { messageId, conversationId: conversation.id })
+      return { ok: true }
+    },
+  )
+
+  // ── Enviar localização ───────────────────────────────────────────────────────
+  app.post(
+    '/conversations/:id/send/location',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          latitude: z.number(),
+          longitude: z.number(),
+          name: z.string().optional(),
+          address: z.string().optional(),
+        }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId } = req.user
+      const { id } = req.params
+      const { latitude, longitude, name, address } = req.body
+
+      const conversation = await prisma.conversation.findUniqueOrThrow({
+        where: { id, workspaceId },
+        include: { channel: { select: { type: true } } },
+      })
+      if (conversation.channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+
+      const { instanceName } = await getChannelConfig(conversation.channelId)
+      const waClient = await getClientForChannel(conversation.channelId)
+      let result: any
+      try {
+        result = await waClient.sendLocation(instanceName, conversation.externalId, latitude, longitude, name, address)
+      } catch (err: any) {
+        logger.error({ err: err?.message, instanceName, remoteJid: conversation.externalId }, 'Erro sendLocation Evolution API')
+        return reply.internalServerError(err?.message ?? 'Erro ao enviar localização na Evolution API')
+      }
+
+      const body = `📍 ${name ?? `${latitude}, ${longitude}`}`
+      await prisma.message.create({
+        data: {
+          workspaceId,
+          conversationId: id,
+          direction: 'OUTBOUND',
+          fromUserId: req.user.sub,
+          externalId: (result as any)?.key?.id ?? undefined,
+          body,
+          sentAt: new Date(),
+          attachments: [{ kind: 'location', latitude, longitude, name, address }] as any,
+        },
+      })
+
+      await eventBus.emitAndPersist(workspaceId, 'message.received', { conversationId: id })
+      return reply.code(201).send({ ok: true })
+    },
+  )
+
+  // ── Enviar contato (vCard) ────────────────────────────────────────────────────
+  app.post(
+    '/conversations/:id/send/contact',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          fullName: z.string().min(1),
+          phoneNumber: z.string().min(1),
+          waid: z.string().optional(),
+          organization: z.string().optional(),
+        }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId } = req.user
+      const { id } = req.params
+      const { fullName, phoneNumber, waid, organization } = req.body
+
+      const conversation = await prisma.conversation.findUniqueOrThrow({
+        where: { id, workspaceId },
+        include: { channel: { select: { type: true } } },
+      })
+      if (conversation.channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+
+      const { instanceName } = await getChannelConfig(conversation.channelId)
+      const waClient = await getClientForChannel(conversation.channelId)
+      const result = await waClient.sendContact(instanceName, conversation.externalId, [{
+        fullName, phoneNumber, waid: waid ?? phoneNumber.replace(/\D/g, ''), organization,
+      }])
+
+      await prisma.message.create({
+        data: {
+          workspaceId,
+          conversationId: id,
+          direction: 'OUTBOUND',
+          fromUserId: req.user.sub,
+          externalId: (result as any)?.key?.id ?? undefined,
+          body: `👤 ${fullName} — ${phoneNumber}`,
+          sentAt: new Date(),
+          attachments: [{ kind: 'contact', fullName, phoneNumber, organization }] as any,
+        },
+      })
+
+      await eventBus.emitAndPersist(workspaceId, 'message.received', { conversationId: id })
+      return reply.code(201).send({ ok: true })
+    },
+  )
+
+  // ── Enviar enquete (poll) ────────────────────────────────────────────────────
+  app.post(
+    '/conversations/:id/send/poll',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          name: z.string().min(1),
+          values: z.array(z.string().min(1)).min(2).max(12),
+          selectableCount: z.number().int().min(1).default(1),
+        }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId } = req.user
+      const { id } = req.params
+      const { name, values, selectableCount } = req.body
+
+      const conversation = await prisma.conversation.findUniqueOrThrow({
+        where: { id, workspaceId },
+        include: { channel: { select: { type: true } } },
+      })
+      if (conversation.channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+      if (!conversation.isGroup) return reply.badRequest('Enquetes só funcionam em conversas de grupo')
+
+      const { instanceName } = await getChannelConfig(conversation.channelId)
+      const waClient = await getClientForChannel(conversation.channelId)
+      const result = await waClient.sendPoll(instanceName, conversation.externalId, name, values, selectableCount)
+
+      await prisma.message.create({
+        data: {
+          workspaceId,
+          conversationId: id,
+          direction: 'OUTBOUND',
+          fromUserId: req.user.sub,
+          externalId: (result as any)?.key?.id ?? undefined,
+          body: `📊 ${name}\n${(values as string[]).map((v: string, i: number) => `${i + 1}. ${v}`).join('\n')}`,
+          sentAt: new Date(),
+          attachments: [{ kind: 'poll', name, values, selectableCount }] as any,
+        },
+      })
+
+      await eventBus.emitAndPersist(workspaceId, 'message.received', { conversationId: id })
+      return reply.code(201).send({ ok: true })
+    },
+  )
+
+  // ── Bloquear/desbloquear contato ──────────────────────────────────────────────
+  app.patch(
+    '/conversations/:id/block',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ action: z.enum(['block', 'unblock']) }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId } = req.user
+      const { id } = req.params
+      const { action } = req.body
+
+      const conversation = await prisma.conversation.findUniqueOrThrow({
+        where: { id, workspaceId },
+        include: { channel: { select: { type: true } }, contact: { select: { phone: true } } },
+      })
+      if (conversation.channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+      const phone = conversation.externalId.replace('@s.whatsapp.net', '').replace('@g.us', '')
+      if (!phone) return reply.badRequest('Número não encontrado')
+
+      const { instanceName } = await getChannelConfig(conversation.channelId)
+      const waClient = await getClientForChannel(conversation.channelId)
+      await waClient.updateBlockStatus(instanceName, phone, action)
+
+      await eventBus.emitAndPersist(workspaceId, 'conversation.updated', { conversationId: id, blocked: action === 'block' })
+      return { ok: true, blocked: action === 'block' }
+    },
+  )
+
+  // ── Marcar mensagem como não lida ─────────────────────────────────────────────
+  app.post(
+    '/conversations/:id/messages/:messageId/mark-unread',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string(), messageId: z.string() }) },
+    },
+    async (req: any, reply) => {
+      const { workspaceId } = req.user
+      const { id, messageId } = req.params
+
+      const conversation = await prisma.conversation.findUniqueOrThrow({
+        where: { id, workspaceId },
+        include: { channel: { select: { type: true } } },
+      })
+      if (conversation.channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+
+      const message = await prisma.message.findFirst({ where: { id: messageId, conversationId: id } })
+      if (!message?.externalId) return reply.notFound()
+
+      const { instanceName } = await getChannelConfig(conversation.channelId)
+      const waClient = await getClientForChannel(conversation.channelId)
+      await waClient.markMessageAsUnread(
+        instanceName, conversation.externalId, message.externalId, message.direction === 'OUTBOUND',
+      )
+      return { ok: true }
+    },
+  )
+
+  // ── Arquivar/desarquivar conversa no WA ──────────────────────────────────────
+  app.patch(
+    '/conversations/:id/wa-archive',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ archive: z.boolean() }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId } = req.user
+      const { id } = req.params
+
+      const conversation = await prisma.conversation.findUniqueOrThrow({
+        where: { id, workspaceId },
+        include: { channel: { select: { type: true } } },
+      })
+      if (conversation.channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+
+      const { instanceName } = await getChannelConfig(conversation.channelId)
+      const waClient = await getClientForChannel(conversation.channelId)
+      await waClient.archiveChat(instanceName, conversation.externalId, req.body.archive)
+      return { ok: true }
     },
   )
 

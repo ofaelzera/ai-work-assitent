@@ -85,7 +85,34 @@ export function startIngestWhatsappWorker() {
       // — não são conteúdo de conversa, não devem aparecer como "[mídia]".
       const meta = isMetaMessage(message)
       if (meta) {
-        logger.debug({ remoteJid, externalMsgId, metaKind: meta.kind }, 'Meta-msg WA ignorada')
+        if (meta.kind === 'reaction' && meta.reactionTo) {
+          const targetMsg = await prisma.message.findFirst({
+            where: { externalId: meta.reactionTo, workspaceId },
+            select: { id: true, conversationId: true, metadata: true },
+          })
+          if (targetMsg) {
+            const fromMe = message.key?.fromMe ?? false
+            const senderJid = isGroup ? (message.key?.participant ?? remoteJid) : remoteJid
+            const senderId = fromMe ? `channel:${channelId}` : senderJid
+            const existingMeta = (targetMsg.metadata ?? {}) as any
+            const existingReactions: any[] = existingMeta.reactions ?? []
+            const filtered = existingReactions.filter((r: any) => r.senderId !== senderId)
+            const newReactions = meta.reactionEmoji
+              ? [...filtered, { emoji: meta.reactionEmoji, senderId, senderName: message.pushName ?? undefined, fromMe }]
+              : filtered
+            await prisma.message.update({
+              where: { id: targetMsg.id },
+              data: { metadata: { ...existingMeta, reactions: newReactions } },
+            })
+            logger.info({ messageId: targetMsg.id, reactions: newReactions }, 'Reação atualizada')
+            await eventBus.emitAndPersist(workspaceId, 'message.updated', {
+              messageId: targetMsg.id,
+              conversationId: targetMsg.conversationId,
+              reactions: newReactions,
+            })
+          }
+        }
+        logger.debug({ remoteJid, externalMsgId, metaKind: meta.kind }, 'Meta-msg WA processada')
         return
       }
       // Em grupos, Evolution às vezes manda `participantAlt` (PN real) + `participant` (LID).

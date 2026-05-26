@@ -10,6 +10,7 @@ import { useAuthStore } from '@/store/auth'
 
 interface MeProfile {
   id: string; name: string; email: string; role: string
+  googleId?: string | null
   settings?: { avatarUrl?: string | null } & Record<string, unknown> | null
 }
 interface UserSettings {
@@ -243,7 +244,7 @@ function PasswordForm() {
 }
 
 // ─── Google Calendar ─────────────────────────────────────────────────────────
-function GoogleAccounts() {
+function GoogleAccounts({ profile }: { profile: MeProfile }) {
   const qc = useQueryClient()
   const { data: accounts = [], isLoading } = useQuery<CalendarAccount[]>({
     queryKey: ['calendar-accounts'],
@@ -268,50 +269,83 @@ function GoogleAccounts() {
     onError: () => toast.error('Erro ao desconectar'),
   })
 
+  const isGoogleLoginLinked = !!profile.googleId
+
   return (
-    <div className="space-y-3">
-      {isLoading && <p className="text-xs text-muted-foreground">Carregando...</p>}
-
-      {!isLoading && accounts.length === 0 && (
-        <div className="rounded-lg bg-muted/30 p-4 text-center space-y-2">
-          <p className="text-xs text-muted-foreground">Nenhuma conta Google conectada ainda.</p>
-          <p className="text-[11px] text-muted-foreground/80">
-            Conecte sua conta pra criar eventos sincronizados em <strong>/calendar</strong> e habilitar
-            que agentes IA agendem direto no seu Google Calendar.
-          </p>
+    <div className="space-y-4">
+      {/* Status do login com Google */}
+      <div className="flex items-center justify-between rounded-lg border px-4 py-3 bg-muted/20">
+        <div className="flex items-center gap-3">
+          <div className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 ${isGoogleLoginLinked ? 'bg-green-100 dark:bg-green-900/30' : 'bg-muted'}`}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09Z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23Z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84Z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53Z" fill="#EA4335"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-sm font-medium">Login com Google</p>
+            <p className="text-[11px] text-muted-foreground">
+              {isGoogleLoginLinked
+                ? 'Conta vinculada — você pode entrar com o botão Google'
+                : 'Não vinculado — faça login com Google para vincular'}
+            </p>
+          </div>
         </div>
-      )}
+        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${isGoogleLoginLinked ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' : 'bg-muted text-muted-foreground'}`}>
+          {isGoogleLoginLinked ? 'Vinculado' : 'Não vinculado'}
+        </span>
+      </div>
 
-      {accounts.length > 0 && (
-        <div className="space-y-2">
-          {accounts.map((a) => (
-            <div key={a.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="h-8 w-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
-                  <CalendarIcon className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate capitalize">{a.provider}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    Conectada em {new Date(a.createdAt).toLocaleDateString('pt-BR')}
-                  </p>
-                </div>
+      {/* Contas de calendário */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Agenda (Google Calendar)</p>
+
+        {isLoading && <p className="text-xs text-muted-foreground">Carregando...</p>}
+
+        {!isLoading && accounts.length === 0 && (
+          <div className="rounded-lg bg-muted/30 p-4 text-center space-y-2">
+            <p className="text-xs text-muted-foreground">Nenhuma conta Google de agenda conectada.</p>
+            <p className="text-[11px] text-muted-foreground/80">
+              {isGoogleLoginLinked
+                ? 'Sua conta de login já tem acesso ao Calendar. Clique em "Conectar" abaixo para sincronizar.'
+                : 'Conecte sua conta para criar eventos sincronizados e habilitar agentes IA no Google Calendar.'}
+            </p>
+          </div>
+        )}
+
+        {accounts.map((a) => (
+          <div key={a.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="h-8 w-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+                <CalendarIcon className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
-              <button onClick={() => { if (confirm('Desconectar esta conta?')) remove.mutate(a.id) }}
-                disabled={remove.isPending}
-                className="flex items-center gap-1 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded px-2 py-1.5">
-                <Trash2 className="h-3 w-3" /> Desconectar
-              </button>
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate capitalize">{a.provider}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Conectada em {new Date(a.createdAt).toLocaleDateString('pt-BR')}
+                </p>
+              </div>
             </div>
-          ))}
-        </div>
-      )}
+            <button
+              onClick={() => { if (confirm('Desconectar esta conta?')) remove.mutate(a.id) }}
+              disabled={remove.isPending}
+              className="flex items-center gap-1 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded px-2 py-1.5"
+            >
+              <Trash2 className="h-3 w-3" /> Desconectar
+            </button>
+          </div>
+        ))}
 
-      <button onClick={connect}
-        className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/40 text-sm py-3 hover:bg-primary/5 transition-colors text-primary font-medium">
-        <Plug className="h-4 w-4" />
-        {accounts.length > 0 ? 'Conectar outra conta Google' : 'Conectar conta Google'}
-      </button>
+        <button
+          onClick={connect}
+          className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/40 text-sm py-3 hover:bg-primary/5 transition-colors text-primary font-medium"
+        >
+          <Plug className="h-4 w-4" />
+          {accounts.length > 0 ? 'Conectar outra conta Google' : 'Conectar conta Google'}
+        </button>
+      </div>
     </div>
   )
 }
@@ -443,11 +477,29 @@ export default function ProfilePage() {
   useEffect(() => { setMounted(true) }, [])
 
   const meAuth = useAuthStore((s) => s.user)
+  const qc = useQueryClient()
   const { data: profile, isLoading } = useQuery<MeProfile>({
     queryKey: ['me-profile'],
     queryFn: () => apiFetch('/users/me'),
     enabled: mounted && !!meAuth?.sub,
   })
+
+  // Handle Google Calendar OAuth redirect result
+  useEffect(() => {
+    if (!mounted) return
+    const params = new URLSearchParams(window.location.search)
+    const googleOk = params.get('google')
+    const googleErr = params.get('google_error')
+    if (googleOk === 'connected') {
+      toast.success('Google Calendar conectado!')
+      qc.invalidateQueries({ queryKey: ['calendar-accounts'] })
+      qc.invalidateQueries({ queryKey: ['me-profile'] })
+      window.history.replaceState({}, '', '/profile')
+    } else if (googleErr) {
+      toast.error(`Erro ao conectar Google: ${decodeURIComponent(googleErr)}`)
+      window.history.replaceState({}, '', '/profile')
+    }
+  }, [mounted])
 
   if (!mounted) {
     return (
@@ -483,9 +535,11 @@ export default function ProfilePage() {
           <PasswordForm />
         </Section>
 
-        <Section title="Google Calendar" icon={CalendarIcon}
-          description="Conecte sua conta Google pra sincronizar eventos da Agenda">
-          <GoogleAccounts />
+        <Section title="Google" icon={CalendarIcon}
+          description="Login com Google e sincronização da Agenda">
+          {isLoading || !profile
+            ? <p className="text-sm text-muted-foreground">Carregando...</p>
+            : <GoogleAccounts profile={profile} />}
         </Section>
 
         <Section title="Mensagens automáticas" icon={MessageSquare}

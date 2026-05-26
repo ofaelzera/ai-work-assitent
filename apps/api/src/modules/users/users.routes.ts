@@ -8,6 +8,7 @@ const USER_SELECT = {
   id: true,
   workspaceId: true,
   email: true,
+  googleId: true,
   name: true,
   role: true,
   customRoleId: true,
@@ -85,6 +86,7 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
         where: { id: req.user.sub },
         select: { id: true, passwordHash: true },
       })
+      if (!me.passwordHash) return reply.badRequest('Esta conta usa login com Google e não tem senha local')
       const ok = await verifyPassword(me.passwordHash, req.body.currentPassword)
       if (!ok) return reply.unauthorized('Senha atual incorreta')
       const passwordHash = await hashPassword(req.body.newPassword)

@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { X, Search, MessageSquare, Mail, Phone, UserPlus } from 'lucide-react'
+import { X, Search, MessageSquare, Mail, Phone, UserPlus, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { maskPhone } from '@/lib/masks'
 
@@ -43,6 +43,8 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
   const [manualPhone, setManualPhone] = useState('')
   const [manualEmail, setManualEmail] = useState('')
   const [step, setStep] = useState<'pick-contact' | 'compose'>('pick-contact')
+  const [waCheck, setWaCheck] = useState<'idle' | 'checking' | 'yes' | 'no'>('idle')
+  const waCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -80,6 +82,29 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
     })
     if (compatible) setSelectedChannelId(compatible.id)
   }, [selectedContact])
+
+  // Verifica se o número tem WhatsApp quando um canal WA é selecionado e há número digitado
+  useEffect(() => {
+    const digits = manualPhone.replace(/\D/g, '')
+    if (selectedChannel?.type !== 'WHATSAPP' || digits.length < 10) {
+      setWaCheck('idle')
+      return
+    }
+    setWaCheck('checking')
+    if (waCheckTimer.current) clearTimeout(waCheckTimer.current)
+    waCheckTimer.current = setTimeout(async () => {
+      try {
+        const result = await apiFetch<Array<{ exists: boolean; number: string }>>(
+          `/channels/${selectedChannelId}/check-numbers`,
+          { method: 'POST', body: JSON.stringify({ numbers: [digits] }) },
+        )
+        setWaCheck(result[0]?.exists ? 'yes' : 'no')
+      } catch {
+        setWaCheck('idle')
+      }
+    }, 800)
+    return () => { if (waCheckTimer.current) clearTimeout(waCheckTimer.current) }
+  }, [manualPhone, selectedChannelId, selectedChannel?.type])
 
   const sendMutation = useMutation({
     mutationFn: () => {
@@ -222,12 +247,29 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
                 {selectedChannel?.type === 'WHATSAPP' && (
                   <div className="mt-2">
                     <label className="text-xs text-muted-foreground block mb-1">Ou digite um número diretamente:</label>
-                    <input
-                      value={maskPhone(manualPhone)}
-                      onChange={e => setManualPhone(e.target.value.replace(/\D/g, ''))}
-                      placeholder="+55 (11) 99999-9999"
-                      className="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                    />
+                    <div className="relative">
+                      <input
+                        value={maskPhone(manualPhone)}
+                        onChange={e => { setManualPhone(e.target.value.replace(/\D/g, '')); setWaCheck('idle') }}
+                        placeholder="+55 (11) 99999-9999"
+                        className={cn(
+                          'w-full rounded-md border bg-transparent px-3 py-1.5 pr-8 text-sm focus:outline-none focus:ring-1 focus:ring-ring',
+                          waCheck === 'no' && 'border-amber-400',
+                          waCheck === 'yes' && 'border-green-400',
+                        )}
+                      />
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                        {waCheck === 'checking' && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                        {waCheck === 'yes' && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />}
+                        {waCheck === 'no' && <AlertCircle className="h-3.5 w-3.5 text-amber-500" />}
+                      </div>
+                    </div>
+                    {waCheck === 'no' && (
+                      <p className="text-[11px] text-amber-600 mt-1">Número não encontrado no WhatsApp</p>
+                    )}
+                    {waCheck === 'yes' && (
+                      <p className="text-[11px] text-green-600 mt-1">Número tem WhatsApp ativo</p>
+                    )}
                   </div>
                 )}
                 {selectedChannel && selectedChannel.type !== 'WHATSAPP' && (

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
@@ -12,10 +12,20 @@ import {
   Plus,
   Wifi,
   X,
-  Calendar as CalendarIcon,
   Clock,
   Trash2,
   MessageSquare,
+  MapPin,
+  Video,
+  Users,
+  User,
+  CheckCircle2,
+  HelpCircle,
+  XCircle,
+  MinusCircle,
+  Calendar as CalendarIcon,
+  AtSign,
+  Building2,
 } from 'lucide-react'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -23,7 +33,13 @@ import {
 interface CalendarAccount {
   id: string
   provider: string
-  email?: string
+  email?: string | null
+}
+
+interface Attendee {
+  email: string
+  name?: string | null
+  status?: string | null
 }
 
 interface CalendarEvent {
@@ -31,13 +47,36 @@ interface CalendarEvent {
   title: string
   startAt: string
   endAt: string
-  cardId?: string
+  description?: string | null
+  location?: string | null
+  meetLink?: string | null
+  attendees?: Attendee[] | null
+  allDay?: boolean
+  status?: string | null
+  organizer?: string | null
+  color?: string | null
+  calendarAccountId?: string | null
+  externalId?: string | null
+  cardId?: string | null
   contactId?: string | null
   conversationId?: string | null
-  calendarAccountId: string
-  externalId?: string
   contact?: { id: string; name: string | null; phone: string | null } | null
   conversation?: { id: string; subject: string | null; isGroup: boolean } | null
+}
+
+interface WorkspaceUser {
+  id: string
+  name: string | null
+  email: string
+  settings?: { avatarUrl?: string | null } | null
+}
+
+interface Contact {
+  id: string
+  name: string | null
+  email: string
+  phone: string | null
+  metadata?: { avatarUrl?: string | null } | null
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -48,6 +87,13 @@ const MONTH_NAMES = [
 ]
 
 const DAY_NAMES = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+
+// Google Calendar color palette (colorId → hex)
+const GOOGLE_COLORS: Record<string, string> = {
+  '1': '#a4bdfc', '2': '#7ae7bf', '3': '#dbadff', '4': '#ff887c',
+  '5': '#fbd75b', '6': '#ffb878', '7': '#46d6db', '8': '#e1e1e1',
+  '9': '#5484ed', '10': '#51b749', '11': '#dc2127',
+}
 
 function pad(n: number) {
   return String(n).padStart(2, '0')
@@ -67,37 +113,283 @@ function formatDateTime(iso: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-/** Returns the grid days for a monthly calendar view (42 cells, Mon-Sun would need adjustment — using Sun–Sat) */
 function buildCalendarGrid(year: number, month: number): Date[] {
   const firstDay = new Date(year, month, 1)
   const lastDay = new Date(year, month + 1, 0)
-
-  const startDow = firstDay.getDay() // 0=Sun
-  const endDow = lastDay.getDay()   // 0=Sun
-
+  const startDow = firstDay.getDay()
+  const endDow = lastDay.getDay()
   const days: Date[] = []
 
-  // Leading days from previous month
   for (let i = startDow - 1; i >= 0; i--) {
-    const d = new Date(year, month, -i)
-    days.push(d)
+    days.push(new Date(year, month, -i))
   }
-
-  // Current month days
   for (let d = 1; d <= lastDay.getDate(); d++) {
     days.push(new Date(year, month, d))
   }
-
-  // Trailing days to fill last row
-  const trailing = 6 - endDow
-  for (let i = 1; i <= trailing; i++) {
+  for (let i = 1; i <= 6 - endDow; i++) {
     days.push(new Date(year, month + 1, i))
   }
 
   return days
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
+function AttendeeStatusIcon({ status }: { status?: string | null }) {
+  switch (status) {
+    case 'accepted':
+      return <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+    case 'declined':
+      return <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+    case 'tentative':
+      return <MinusCircle className="h-3.5 w-3.5 text-yellow-500 shrink-0" />
+    default:
+      return <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+  }
+}
+
+// ─── AttendeeInput ────────────────────────────────────────────────────────────
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+interface AttendeePill {
+  email: string
+  name?: string | null
+  type: 'user' | 'contact' | 'manual'
+  contactId?: string
+}
+
+interface AttendeeInputProps {
+  value: AttendeePill[]
+  onChange: (v: AttendeePill[]) => void
+}
+
+function useDebounce<T>(val: T, ms: number): T {
+  const [deb, setDeb] = useState(val)
+  useEffect(() => {
+    const t = setTimeout(() => setDeb(val), ms)
+    return () => clearTimeout(t)
+  }, [val, ms])
+  return deb
+}
+
+function AttendeeInput({ value, onChange }: AttendeeInputProps) {
+  const [input, setInput] = useState('')
+  const [open, setOpen] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const debouncedQ = useDebounce(input.trim(), 250)
+
+  // Fetch workspace users (cached once)
+  const { data: users = [] } = useQuery<WorkspaceUser[]>({
+    queryKey: ['workspace-users'],
+    queryFn: () => apiFetch<WorkspaceUser[]>('/users'),
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // Search contacts with email only
+  const { data: contactsData } = useQuery<{ items: Contact[] }>({
+    queryKey: ['contacts-search-email', debouncedQ],
+    queryFn: () =>
+      apiFetch<{ items: Contact[] }>(
+        `/contacts?${debouncedQ ? `q=${encodeURIComponent(debouncedQ)}&` : ''}limit=8&excludeLid=true`,
+      ),
+    enabled: open,
+    staleTime: 30_000,
+    select: (d) => ({ items: d.items.filter((c) => !!c.email) }),
+  })
+
+  const contacts: Contact[] = contactsData?.items ?? []
+
+  const selectedEmails = new Set(value.map((a) => a.email.toLowerCase()))
+
+  const filteredUsers = debouncedQ
+    ? users.filter(
+        (u) =>
+          !selectedEmails.has(u.email.toLowerCase()) &&
+          (u.name?.toLowerCase().includes(debouncedQ.toLowerCase()) ||
+            u.email.toLowerCase().includes(debouncedQ.toLowerCase())),
+      )
+    : users.filter((u) => !selectedEmails.has(u.email.toLowerCase())).slice(0, 5)
+
+  const filteredContacts = contacts.filter(
+    (c) => !selectedEmails.has(c.email.toLowerCase()),
+  )
+
+  const canAddManual =
+    EMAIL_RE.test(input.trim()) && !selectedEmails.has(input.trim().toLowerCase())
+
+  const hasResults = filteredUsers.length > 0 || filteredContacts.length > 0 || canAddManual
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [])
+
+  function addPill(pill: AttendeePill) {
+    onChange([...value, pill])
+    setInput('')
+    setOpen(false)
+    inputRef.current?.focus()
+  }
+
+  function removePill(email: string) {
+    onChange(value.filter((a) => a.email !== email))
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if ((e.key === 'Enter' || e.key === ',') && input.trim()) {
+      e.preventDefault()
+      if (canAddManual) {
+        addPill({ email: input.trim(), type: 'manual' })
+      }
+    }
+    if (e.key === 'Backspace' && !input && value.length > 0) {
+      onChange(value.slice(0, -1))
+    }
+    if (e.key === 'Escape') {
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      {/* Pills + input */}
+      <div
+        onClick={() => { inputRef.current?.focus(); setOpen(true) }}
+        className={`min-h-[38px] flex flex-wrap gap-1.5 rounded-md border bg-background px-2 py-1.5 cursor-text transition-colors ${
+          focused ? 'ring-2 ring-primary border-primary' : ''
+        }`}
+      >
+        {value.map((a) => (
+          <span
+            key={a.email}
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+              a.type === 'user'
+                ? 'bg-primary/15 text-primary'
+                : a.type === 'contact'
+                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
+                : 'bg-muted text-muted-foreground'
+            }`}
+          >
+            {a.type === 'user' && <User className="h-2.5 w-2.5" />}
+            {a.type === 'contact' && <Building2 className="h-2.5 w-2.5" />}
+            {a.type === 'manual' && <AtSign className="h-2.5 w-2.5" />}
+            <span>{a.name ?? a.email}</span>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); removePill(a.email) }}
+              className="hover:text-destructive transition-colors"
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={(e) => { setInput(e.target.value); setOpen(true) }}
+          onFocus={() => { setFocused(true); setOpen(true) }}
+          onBlur={() => setFocused(false)}
+          onKeyDown={handleKeyDown}
+          placeholder={value.length === 0 ? 'Buscar ou digitar e-mail...' : ''}
+          className="flex-1 min-w-[140px] bg-transparent text-sm outline-none placeholder:text-muted-foreground py-0.5"
+        />
+      </div>
+
+      {/* Dropdown */}
+      {open && hasResults && (
+        <div className="absolute z-50 top-full mt-1 w-full rounded-md border bg-popover shadow-lg overflow-hidden">
+          {filteredUsers.length > 0 && (
+            <div>
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/50">
+                Usuários do sistema
+              </div>
+              {filteredUsers.map((u) => {
+                const av = u.settings?.avatarUrl
+                return (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); addPill({ email: u.email, name: u.name, type: 'user' }) }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+                  >
+                    <div className="h-7 w-7 rounded-full shrink-0 overflow-hidden bg-primary/20 text-primary flex items-center justify-center text-xs font-semibold">
+                      {av
+                        ? <img src={av} alt="" className="h-full w-full object-cover" />
+                        : (u.name ?? u.email)[0].toUpperCase()
+                      }
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{u.name ?? u.email}</p>
+                      {u.name && <p className="text-xs text-muted-foreground truncate">{u.email}</p>}
+                    </div>
+                    <User className="h-3 w-3 text-muted-foreground shrink-0" />
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {filteredContacts.length > 0 && (
+            <div>
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/50">
+                Contatos
+              </div>
+              {filteredContacts.map((c) => {
+                const av = (c.metadata as any)?.avatarUrl as string | undefined
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      addPill({ email: c.email, name: c.name, type: 'contact', contactId: c.id })
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+                  >
+                    <div className="h-7 w-7 rounded-full shrink-0 overflow-hidden bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 flex items-center justify-center text-xs font-semibold">
+                      {av
+                        ? <img src={av} alt="" className="h-full w-full object-cover" />
+                        : (c.name ?? c.email)[0].toUpperCase()
+                      }
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{c.name ?? c.email}</p>
+                      <p className="text-xs text-muted-foreground truncate">{c.email}</p>
+                    </div>
+                    <Building2 className="h-3 w-3 text-muted-foreground shrink-0" />
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {canAddManual && (
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                addPill({ email: input.trim(), type: 'manual' })
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left border-t"
+            >
+              <AtSign className="h-4 w-4 text-muted-foreground shrink-0" />
+              <span>Adicionar <strong>{input.trim()}</strong></span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── NewEventModal ─────────────────────────────────────────────────────────────
 
 interface NewEventModalProps {
   open: boolean
@@ -113,12 +405,21 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
   const [startTime, setStartTime] = useState('09:00')
   const [endTime, setEndTime] = useState('10:00')
   const [description, setDescription] = useState('')
+  const [location, setLocation] = useState('')
+  const [attendees, setAttendees] = useState<AttendeePill[]>([])
+  const [createMeetLink, setCreateMeetLink] = useState(false)
+  const [allDay, setAllDay] = useState(false)
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
 
   const mutation = useMutation({
     mutationFn: async () => {
-      const startAt = new Date(`${date}T${startTime}:00`).toISOString()
-      const endAt = new Date(`${date}T${endTime}:00`).toISOString()
+      const startAt = allDay
+        ? new Date(`${date}T00:00:00`).toISOString()
+        : new Date(`${date}T${startTime}:00`).toISOString()
+      const endAt = allDay
+        ? new Date(`${date}T23:59:59`).toISOString()
+        : new Date(`${date}T${endTime}:00`).toISOString()
+
       return apiFetch('/calendar/events', {
         method: 'POST',
         body: JSON.stringify({
@@ -127,6 +428,12 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
           startAt,
           endAt,
           description: description || undefined,
+          location: location || undefined,
+          attendees: attendees.length > 0
+            ? attendees.map((a) => ({ email: a.email, name: a.name ?? undefined }))
+            : undefined,
+          createMeetLink: createMeetLink || undefined,
+          allDay,
         }),
       })
     },
@@ -136,6 +443,10 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
       onClose()
       setTitle('')
       setDescription('')
+      setLocation('')
+      setAttendees([])
+      setCreateMeetLink(false)
+      setAllDay(false)
     },
     onError: (err: Error) => {
       toast.error(err.message ?? 'Erro ao criar evento')
@@ -147,7 +458,7 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-card border rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+      <div className="relative bg-card border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Novo evento</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
@@ -156,6 +467,7 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
         </div>
 
         <div className="space-y-3">
+          {/* Title */}
           <div>
             <label className="text-sm font-medium">Título</label>
             <input
@@ -167,6 +479,21 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
             />
           </div>
 
+          {/* All-day toggle */}
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="allDay"
+              checked={allDay}
+              onChange={(e) => setAllDay(e.target.checked)}
+              className="h-4 w-4 rounded border"
+            />
+            <label htmlFor="allDay" className="text-sm font-medium cursor-pointer">
+              Dia inteiro
+            </label>
+          </div>
+
+          {/* Date */}
           <div>
             <label className="text-sm font-medium">Data</label>
             <input
@@ -177,35 +504,83 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-sm font-medium">Início</label>
-              <input
-                type="time"
-                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-              />
+          {/* Time */}
+          {!allDay && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium">Início</label>
+                <input
+                  type="time"
+                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Fim</label>
+                <input
+                  type="time"
+                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                />
+              </div>
             </div>
-            <div>
-              <label className="text-sm font-medium">Fim</label>
-              <input
-                type="time"
-                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-              />
-            </div>
+          )}
+
+          {/* Location */}
+          <div>
+            <label className="text-sm font-medium flex items-center gap-1.5">
+              <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+              Local (opcional)
+            </label>
+            <input
+              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Endereço ou link do local"
+            />
           </div>
 
-          {accounts.length > 1 && (
+          {/* Attendees */}
+          <div>
+            <label className="text-sm font-medium flex items-center gap-1.5 mb-1">
+              <Users className="h-3.5 w-3.5 text-muted-foreground" />
+              Participantes (opcional)
+            </label>
+            <AttendeeInput value={attendees} onChange={setAttendees} />
+            <p className="text-xs text-muted-foreground mt-1">
+              Digite para buscar usuários ou contatos. Pressione Enter para adicionar um e-mail externo.
+            </p>
+          </div>
+
+          {/* Google Meet */}
+          {accountId && (
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="createMeetLink"
+                checked={createMeetLink}
+                onChange={(e) => setCreateMeetLink(e.target.checked)}
+                className="h-4 w-4 rounded border"
+              />
+              <label htmlFor="createMeetLink" className="text-sm font-medium cursor-pointer flex items-center gap-1.5">
+                <Video className="h-3.5 w-3.5 text-muted-foreground" />
+                Criar link do Google Meet
+              </label>
+            </div>
+          )}
+
+          {/* Account selector */}
+          {accounts.length > 0 && (
             <div>
-              <label className="text-sm font-medium">Conta</label>
+              <label className="text-sm font-medium">Conta Google</label>
               <select
                 className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 value={accountId}
                 onChange={(e) => setAccountId(e.target.value)}
               >
+                <option value="">Somente local (sem sincronizar)</option>
                 {accounts.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.email ?? a.provider}
@@ -215,6 +590,7 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
             </div>
           )}
 
+          {/* Description */}
           <div>
             <label className="text-sm font-medium">Descrição (opcional)</label>
             <textarea
@@ -247,10 +623,24 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
   )
 }
 
+// ─── EventDetailSheet ────────────────────────────────────────────────────────
+
 interface EventDetailSheetProps {
   event: CalendarEvent | null
   onClose: () => void
   onDeleted: () => void
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  confirmed: 'Confirmado',
+  tentative: 'Tentativo',
+  cancelled: 'Cancelado',
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  confirmed: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
+  tentative: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400',
+  cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 line-through',
 }
 
 function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) {
@@ -268,37 +658,131 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
 
   if (!event) return null
 
+  const colorHex = event.color ? GOOGLE_COLORS[event.color] : null
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative bg-card border-l shadow-xl w-full max-w-sm h-full flex flex-col p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold">Detalhes do evento</h2>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+      <div className="relative bg-card border-l shadow-xl w-full max-w-sm h-full flex flex-col">
+        {/* Color bar */}
+        {colorHex && (
+          <div className="h-1.5 w-full shrink-0" style={{ backgroundColor: colorHex }} />
+        )}
 
-        <div className="flex-1 space-y-4">
-          <div className="space-y-1">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Título</p>
-            <p className="text-base font-semibold">{event.title}</p>
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {/* Header */}
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1.5 flex-1">
+              <h2 className="text-lg font-semibold leading-tight">{event.title}</h2>
+              {event.status && (
+                <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[event.status] ?? 'bg-muted text-muted-foreground'}`}>
+                  {STATUS_LABELS[event.status] ?? event.status}
+                </span>
+              )}
+            </div>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground shrink-0 mt-0.5">
+              <X className="h-4 w-4" />
+            </button>
           </div>
 
+          {/* Date/Time */}
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium flex items-center gap-1">
               <Clock className="h-3 w-3" /> Horário
             </p>
-            <p className="text-sm">{formatDateTime(event.startAt)}</p>
-            <p className="text-sm text-muted-foreground">até {formatTime(event.endAt)}</p>
+            {event.allDay ? (
+              <p className="text-sm font-medium">
+                <CalendarIcon className="h-3.5 w-3.5 inline mr-1 text-muted-foreground" />
+                {new Date(event.startAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })} — dia inteiro
+              </p>
+            ) : (
+              <>
+                <p className="text-sm">{formatDateTime(event.startAt)}</p>
+                <p className="text-sm text-muted-foreground">até {formatTime(event.endAt)}</p>
+              </>
+            )}
           </div>
 
+          {/* Location */}
+          {event.location && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium flex items-center gap-1">
+                <MapPin className="h-3 w-3" /> Local
+              </p>
+              <p className="text-sm break-words">{event.location}</p>
+            </div>
+          )}
+
+          {/* Google Meet link */}
+          {event.meetLink && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium flex items-center gap-1">
+                <Video className="h-3 w-3" /> Videochamada
+              </p>
+              <a
+                href={event.meetLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-md bg-green-600 text-white px-3 py-1.5 text-sm font-medium hover:bg-green-700 transition-colors"
+              >
+                <Video className="h-3.5 w-3.5" />
+                Entrar na reunião
+              </a>
+            </div>
+          )}
+
+          {/* Organizer */}
+          {event.organizer && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium flex items-center gap-1">
+                <User className="h-3 w-3" /> Organizador
+              </p>
+              <p className="text-sm">{event.organizer}</p>
+            </div>
+          )}
+
+          {/* Attendees */}
+          {event.attendees && event.attendees.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium flex items-center gap-1">
+                <Users className="h-3 w-3" /> Participantes ({event.attendees.length})
+              </p>
+              <ul className="space-y-1.5">
+                {event.attendees.map((a, i) => (
+                  <li key={i} className="flex items-center gap-2 text-sm">
+                    <AttendeeStatusIcon status={a.status} />
+                    <span className="truncate">
+                      {a.name ? (
+                        <>
+                          <span className="font-medium">{a.name}</span>
+                          <span className="text-muted-foreground ml-1">({a.email})</span>
+                        </>
+                      ) : (
+                        a.email
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Description */}
+          {event.description && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Descrição</p>
+              <p className="text-sm whitespace-pre-wrap break-words text-muted-foreground">{event.description}</p>
+            </div>
+          )}
+
+          {/* Linked conversation */}
           {event.conversationId && (
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Origem</p>
               <Link
                 href={`/inbox/${event.conversationId}`}
-                className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 hover:underline">
+                className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 hover:underline"
+              >
                 <MessageSquare className="h-3.5 w-3.5" />
                 {event.contact?.name ?? event.contact?.phone ?? 'Conversa vinculada'}
               </Link>
@@ -306,7 +790,8 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
           )}
         </div>
 
-        <div className="pt-4 border-t">
+        {/* Footer */}
+        <div className="p-6 pt-0 border-t shrink-0">
           <button
             onClick={() => deleteMutation.mutate()}
             disabled={deleteMutation.isPending}
@@ -487,6 +972,7 @@ export default function CalendarPage() {
           <button
             onClick={() => syncMutation.mutate()}
             disabled={syncMutation.isPending}
+            title="Sincronização automática a cada 15 min"
             className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent transition-colors"
           >
             <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
@@ -550,17 +1036,31 @@ export default function CalendarPage() {
 
                   {/* Events */}
                   <div className="space-y-0.5">
-                    {shown.map((ev) => (
-                      <button
-                        key={ev.id}
-                        onClick={(e) => { e.stopPropagation(); setSelectedEvent(ev) }}
-                        className="w-full text-left rounded px-1 py-0.5 bg-primary/10 text-primary hover:bg-primary/20 transition-colors text-xs truncate block"
-                        title={ev.title}
-                      >
-                        <span className="text-muted-foreground mr-1">{formatTime(ev.startAt)}</span>
-                        {ev.title}
-                      </button>
-                    ))}
+                    {shown.map((ev) => {
+                      const colorHex = ev.color ? GOOGLE_COLORS[ev.color] : null
+                      return (
+                        <button
+                          key={ev.id}
+                          onClick={(e) => { e.stopPropagation(); setSelectedEvent(ev) }}
+                          className="w-full text-left rounded px-1 py-0.5 text-xs truncate block transition-colors hover:opacity-80"
+                          style={colorHex
+                            ? { backgroundColor: `${colorHex}33`, color: colorHex.replace('#', '').length === 6 ? undefined : colorHex }
+                            : undefined}
+                          title={ev.title}
+                        >
+                          <span
+                            className={!colorHex ? 'bg-primary/10 text-primary' : ''}
+                            style={!colorHex ? undefined : { color: colorHex }}
+                          >
+                            <span className="text-muted-foreground mr-1">
+                              {ev.allDay ? '◆' : formatTime(ev.startAt)}
+                            </span>
+                            {ev.title}
+                            {ev.meetLink && <Video className="h-2.5 w-2.5 inline ml-1 opacity-60" />}
+                          </span>
+                        </button>
+                      )
+                    })}
                     {overflow > 0 && (
                       <p className="text-xs text-muted-foreground pl-1">+{overflow} mais</p>
                     )}

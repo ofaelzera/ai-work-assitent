@@ -331,6 +331,170 @@ export function makeEvolutionClient(baseUrl: string, apiKey: string) {
         `/group/inviteInfo/${instanceName}?inviteCode=${encodeURIComponent(inviteCode)}`,
       )
     },
+
+    // ── Instances ───────────────────────────────────────────────────────────
+    restartInstance(instanceName: string) {
+      return req<void>('PUT', `/instance/restart/${instanceName}`)
+    },
+
+    // ── Chat Controller ─────────────────────────────────────────────────────
+    /** Verifica se os números têm WhatsApp ativo. */
+    checkIsWhatsApp(instanceName: string, numbers: string[]) {
+      return req<Array<{ exists: boolean; jid: string; number: string }>>(
+        'POST',
+        `/chat/whatsappNumbers/${instanceName}`,
+        { numbers },
+      )
+    },
+
+    /** Envia reação a uma mensagem. reaction="" remove a reação. */
+    sendReaction(instanceName: string, remoteJid: string, messageId: string, reaction: string) {
+      return req<unknown>('POST', `/message/sendReaction/${instanceName}`, {
+        key: { remoteJid, fromMe: false, id: messageId },
+        reaction,
+      })
+    },
+
+    /** Deleta mensagem para todos. */
+    deleteMessage(instanceName: string, remoteJid: string, messageId: string, fromMe: boolean) {
+      return req<unknown>('DELETE', `/chat/deleteMessageForEveryone/${instanceName}`, {
+        id: messageId,
+        fromMe,
+        remoteJid,
+      })
+    },
+
+    // ── Profile Settings ────────────────────────────────────────────────────
+    updateProfileName(instanceName: string, name: string) {
+      return req<unknown>('POST', `/profile/updateProfileName/${instanceName}`, { name })
+    },
+
+    updateProfileStatus(instanceName: string, status: string) {
+      return req<unknown>('POST', `/profile/updateProfileStatus/${instanceName}`, { status })
+    },
+
+    updateProfilePicture(instanceName: string, picture: string) {
+      return req<unknown>('PUT', `/profile/updateProfilePicture/${instanceName}`, { picture })
+    },
+
+    removeProfilePicture(instanceName: string) {
+      return req<unknown>('DELETE', `/profile/removeProfilePicture/${instanceName}`)
+    },
+
+    fetchProfile(instanceName: string, number?: string) {
+      return req<{ name?: string; status?: string; profilePictureUrl?: string; isBusiness?: boolean }>(
+        'POST', `/profile/fetchProfile/${instanceName}`,
+        number ? { number } : {},
+      )
+    },
+
+    fetchBusinessProfile(instanceName: string, number?: string) {
+      return req<unknown>('POST', `/profile/fetchBusinessProfile/${instanceName}`, number ? { number } : {})
+    },
+
+    fetchPrivacySettings(instanceName: string) {
+      return req<{
+        readreceipts?: string; profile?: string; status?: string
+        online?: string; last?: string; groupadd?: string
+      }>('GET', `/profile/fetchPrivacySettings/${instanceName}`)
+    },
+
+    updatePrivacySettings(instanceName: string, settings: {
+      readreceipts?: string; profile?: string; status?: string
+      online?: string; last?: string; groupadd?: string
+    }) {
+      return req<unknown>('PUT', `/profile/updatePrivacySettings/${instanceName}`, settings)
+    },
+
+    // ── Instance ──────────────────────────────────────────────────────────────
+    setPresence(instanceName: string, presence: 'available' | 'unavailable') {
+      return req<unknown>('POST', `/instance/setPresence/${instanceName}`, { presence })
+    },
+
+    // ── Send Message (extra types) ────────────────────────────────────────────
+    sendLocation(instanceName: string, remoteJid: string, lat: number, lng: number, name?: string, address?: string) {
+      return req<{ key?: { id: string } }>('POST', `/message/sendLocation/${instanceName}`, {
+        number: remoteJid,
+        latitude: lat,
+        longitude: lng,
+        name: name ?? '',
+        address: address ?? '',
+      })
+    },
+
+    sendContact(instanceName: string, remoteJid: string, contacts: Array<{
+      fullName: string; waid: string; phoneNumber: string; organization?: string
+    }>) {
+      return req<{ key?: { id: string } }>('POST', `/message/sendContact/${instanceName}`, {
+        number: remoteJid,
+        contact: contacts.map(c => ({
+          fullName: c.fullName,
+          wuid: c.waid,
+          phoneNumber: c.phoneNumber,
+          organization: c.organization ?? '',
+        })),
+      })
+    },
+
+    sendPoll(instanceName: string, remoteJid: string, name: string, values: string[], selectableCount = 1) {
+      return req<{ key?: { id: string } }>('POST', `/message/sendPoll/${instanceName}`, {
+        number: remoteJid,
+        pollMessage: { name, selectableCount, values },
+      })
+    },
+
+    sendList(instanceName: string, remoteJid: string, payload: {
+      title: string; description: string; footerText?: string; buttonText: string
+      sections: Array<{ title: string; rows: Array<{ title: string; description?: string; rowId: string }> }>
+    }) {
+      return req<{ key?: { id: string } }>('POST', `/message/sendList/${instanceName}`, {
+        number: remoteJid,
+        listMessage: payload,
+      })
+    },
+
+    sendButtons(instanceName: string, remoteJid: string, payload: {
+      title?: string; description: string; footer?: string
+      buttons: Array<{ type: 'reply'; displayText: string; id: string }>
+    }) {
+      return req<{ key?: { id: string } }>('POST', `/message/sendButtons/${instanceName}`, {
+        number: remoteJid,
+        buttonsMessage: payload,
+      })
+    },
+
+    // ── Chat Controller (extras) ──────────────────────────────────────────────
+    updateMessage(instanceName: string, remoteJid: string, messageId: string, text: string) {
+      return req<unknown>('POST', `/chat/updateMessage/${instanceName}`, {
+        number: remoteJid,
+        key: { id: messageId, remoteJid, fromMe: true },
+        text,
+      })
+    },
+
+    updateBlockStatus(instanceName: string, number: string, status: 'block' | 'unblock') {
+      return req<unknown>('PUT', `/chat/updateBlockStatus/${instanceName}`, { number, status })
+    },
+
+    markMessageAsUnread(instanceName: string, remoteJid: string, messageId: string, fromMe: boolean) {
+      return req<unknown>('PUT', `/chat/markMessageAsUnread/${instanceName}`, {
+        readMessages: [{ id: messageId, remoteJid, fromMe }],
+      })
+    },
+
+    archiveChat(instanceName: string, remoteJid: string, archive: boolean) {
+      return req<unknown>('PUT', `/chat/archiveChat/${instanceName}`, {
+        chat: remoteJid,
+        archive,
+      })
+    },
+
+    findContacts(instanceName: string, where?: { id?: string; pushName?: string }) {
+      return req<Array<{ id: string; pushName?: string; profilePictureUrl?: string }>>(
+        'POST', `/chat/findContacts/${instanceName}`,
+        { where: where ?? {} },
+      )
+    },
   }
 }
 

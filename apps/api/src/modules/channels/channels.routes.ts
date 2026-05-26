@@ -10,8 +10,10 @@ import {
   deleteChannel,
   getChannelConfig,
   adoptExistingInstance,
+  createMetaChannel,
 } from './channels.service.js'
 import { syncWhatsAppChannel, syncWhatsAppAvatars, syncImapChannel } from './sync.service.js'
+import { handleMetaEvent } from './meta.handler.js'
 import { testSmtpConnection, createImapFolder, listImapFolders } from './email.client.js'
 import { getSmtpConfig } from './channels.service.js'
 import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
@@ -62,6 +64,45 @@ export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
     },
   )
+
+  app.post(
+    '/channels/meta',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        body: z.object({
+          label: z.string().min(1),
+          type: z.enum(['META_WHATSAPP', 'META_INSTAGRAM', 'META_MESSENGER']),
+          systemUserToken: z.string().min(1),
+          phoneNumberId: z.string().optional(),
+          pageId: z.string().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { label, type, ...credentials } = req.body
+      const channel = await createMetaChannel(req.user.workspaceId, label, type, credentials as any)
+      return reply.code(201).send(channel)
+    },
+  )
+
+  app.get('/webhooks/meta', async (req: any, reply) => {
+    const mode = req.query['hub.mode']
+    const token = req.query['hub.verify_token']
+    const challenge = req.query['hub.challenge']
+
+    if (mode === 'subscribe' && token === env.META_WEBHOOK_VERIFY_TOKEN) {
+      return reply.code(200).send(challenge)
+    }
+    return reply.code(403).send()
+  })
+
+  app.post('/webhooks/meta', async (req: any, reply) => {
+    reply.code(200).send('EVENT_RECEIVED')
+    handleMetaEvent(req.body).catch((err) => {
+      req.log.error({ err }, 'Erro ao processar webhook da Meta')
+    })
+  })
 
   app.get('/channels/:id/qr', { onRequest: [app.authenticate] }, async (req: any) => {
     return getChannelQr(req.params.id)
@@ -244,6 +285,188 @@ export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
       const settings = (channel.settings as Record<string, unknown> | null) ?? {}
       const cached = Array.isArray(settings.imapFolders) ? (settings.imapFolders as string[]) : null
       return { folders: cached ?? [] }
+    },
+  )
+
+  // ── Reiniciar instância WhatsApp ──────────────────────────────────────────
+  app.post('/channels/:id/restart', { onRequest: [app.authenticate] }, async (req: any, reply) => {
+    const channel = await prisma.channel.findFirst({
+      where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+    })
+    if (!channel) return reply.notFound()
+    if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+    const { instanceName } = await getChannelConfig(req.params.id)
+    const client = await getClientForChannel(req.params.id)
+    await client.restartInstance(instanceName)
+    return { ok: true }
+  })
+
+  // ── Verificar se número tem WhatsApp ──────────────────────────────────────
+  app.post(
+    '/channels/:id/check-numbers',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ numbers: z.array(z.string().min(1)).min(1).max(20) }),
+      },
+    },
+    async (req: any, reply) => {
+      const channel = await prisma.channel.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+      })
+      if (!channel) return reply.notFound()
+      if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+      const { instanceName } = await getChannelConfig(req.params.id)
+      const client = await getClientForChannel(req.params.id)
+      return client.checkIsWhatsApp(instanceName, req.body.numbers)
+    },
+  )
+
+  // ── Perfil do canal WhatsApp ──────────────────────────────────────────────
+  app.get('/channels/:id/profile', { onRequest: [app.authenticate] }, async (req: any, reply) => {
+    const channel = await prisma.channel.findFirst({
+      where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+    })
+    if (!channel) return reply.notFound()
+    if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+    const { instanceName } = await getChannelConfig(req.params.id)
+    const client = await getClientForChannel(req.params.id)
+    // getInstance já retorna profileName e profilePictureUrl
+    const instances = await client.getInstance(instanceName) as unknown as any[]
+    const inst = Array.isArray(instances) ? instances[0] : instances
+    return {
+      name: (inst as any)?.profileName ?? (inst as any)?.instance?.profileName ?? null,
+      picture: (inst as any)?.profilePictureUrl ?? (inst as any)?.instance?.profilePictureUrl ?? null,
+    }
+  })
+
+  app.patch(
+    '/channels/:id/profile',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          name: z.string().min(1).max(25).optional(),
+          status: z.string().max(139).optional(),
+        }),
+      },
+    },
+    async (req: any, reply) => {
+      const channel = await prisma.channel.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+      })
+      if (!channel) return reply.notFound()
+      if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+      const { instanceName } = await getChannelConfig(req.params.id)
+      const client = await getClientForChannel(req.params.id)
+      const { name, status } = req.body
+      if (name) await client.updateProfileName(instanceName, name)
+      if (status !== undefined) await client.updateProfileStatus(instanceName, status)
+      // Atualiza o ownerProfileName armazenado nas settings do canal
+      if (name) {
+        const current = (channel.settings as Record<string, unknown> | null) ?? {}
+        await prisma.channel.update({
+          where: { id: req.params.id },
+          data: { settings: { ...current, ownerProfileName: name } },
+        })
+      }
+      return { ok: true }
+    },
+  )
+
+  app.post('/channels/:id/profile/picture', { onRequest: [app.authenticate] }, async (req: any, reply) => {
+    const channel = await prisma.channel.findFirst({
+      where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+    })
+    if (!channel) return reply.notFound()
+    if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+    const { instanceName } = await getChannelConfig(req.params.id)
+    const client = await getClientForChannel(req.params.id)
+    const data = await req.file()
+    if (!data) return reply.badRequest('Arquivo obrigatório')
+    const chunks: Buffer[] = []
+    for await (const chunk of data.file) chunks.push(chunk)
+    const base64 = Buffer.concat(chunks).toString('base64')
+    const mime: string = data.mimetype || 'image/jpeg'
+    await client.updateProfilePicture(instanceName, `data:${mime};base64,${base64}`)
+    return { ok: true }
+  })
+
+  app.delete('/channels/:id/profile/picture', { onRequest: [app.authenticate] }, async (req: any, reply) => {
+    const channel = await prisma.channel.findFirst({
+      where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+    })
+    if (!channel) return reply.notFound()
+    if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+    const { instanceName } = await getChannelConfig(req.params.id)
+    const client = await getClientForChannel(req.params.id)
+    await client.removeProfilePicture(instanceName)
+    return { ok: true }
+  })
+
+  // ── Privacy settings ──────────────────────────────────────────────────────
+  app.get('/channels/:id/privacy', { onRequest: [app.authenticate] }, async (req: any, reply) => {
+    const channel = await prisma.channel.findFirst({
+      where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+    })
+    if (!channel) return reply.notFound()
+    if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+    const { instanceName } = await getChannelConfig(req.params.id)
+    const client = await getClientForChannel(req.params.id)
+    return client.fetchPrivacySettings(instanceName)
+  })
+
+  app.patch(
+    '/channels/:id/privacy',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          readreceipts: z.enum(['all', 'none']).optional(),
+          profile: z.enum(['all', 'contacts', 'contact_blacklist', 'none']).optional(),
+          status: z.enum(['all', 'contacts', 'contact_blacklist', 'none']).optional(),
+          online: z.enum(['all', 'match_last_seen']).optional(),
+          last: z.enum(['all', 'contacts', 'contact_blacklist', 'none']).optional(),
+          groupadd: z.enum(['all', 'contacts', 'contact_blacklist']).optional(),
+        }),
+      },
+    },
+    async (req: any, reply) => {
+      const channel = await prisma.channel.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+      })
+      if (!channel) return reply.notFound()
+      if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+      const { instanceName } = await getChannelConfig(req.params.id)
+      const client = await getClientForChannel(req.params.id)
+      await client.updatePrivacySettings(instanceName, req.body)
+      return { ok: true }
+    },
+  )
+
+  // ── Presença da instância ──────────────────────────────────────────────────
+  app.patch(
+    '/channels/:id/presence',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ presence: z.enum(['available', 'unavailable']) }),
+      },
+    },
+    async (req: any, reply) => {
+      const channel = await prisma.channel.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+      })
+      if (!channel) return reply.notFound()
+      if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
+      const { instanceName } = await getChannelConfig(req.params.id)
+      const client = await getClientForChannel(req.params.id)
+      await client.setPresence(instanceName, req.body.presence)
+      return { ok: true }
     },
   )
 

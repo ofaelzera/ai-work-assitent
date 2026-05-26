@@ -5,6 +5,7 @@ import { makeEvolutionClient } from './evolution.client.js'
 import { testSmtpConnection, type SmtpConfig } from './email.client.js'
 import { env } from '../../config/env.js'
 import { selectBestServer, getClientForChannel, getServerCredentials } from '../evolution-servers/evolution-servers.service.js'
+import { MetaCredentials, makeMetaClient } from './meta.client.js'
 
 export async function listChannels(workspaceId: string) {
   return prisma.channel.findMany({
@@ -176,6 +177,11 @@ export async function syncChannelStatus(channelId: string) {
     return { status, error: result.error }
   }
 
+  // Canal Meta — considera sempre conectado (webhook driven)
+  if (channel.type.startsWith('META_')) {
+    return { status: 'CONNECTED', type: channel.type }
+  }
+
   // Canal WhatsApp — consulta Evolution API
   try {
     const client = await getClientForChannel(channelId)
@@ -275,6 +281,19 @@ export async function createSmtpChannel(workspaceId: string, label: string, cfg:
   })
 }
 
+export async function createMetaChannel(workspaceId: string, label: string, type: 'META_WHATSAPP' | 'META_INSTAGRAM' | 'META_MESSENGER', credentials: MetaCredentials) {
+  const { ciphertext, iv, authTag } = encryptJson(credentials)
+  return prisma.channel.create({
+    data: {
+      workspaceId,
+      type,
+      label,
+      status: 'CONNECTED', // Meta não tem websocket constante, o token define se tá on
+      config: { ciphertext: ciphertext.toString('base64'), iv: iv.toString('base64'), authTag: authTag.toString('base64') },
+    },
+  })
+}
+
 export async function getChannelConfig(channelId: string): Promise<{ instanceName: string }> {
   const channel = await prisma.channel.findUniqueOrThrow({ where: { id: channelId } })
   const cfg = channel.config as { ciphertext: string; iv: string; authTag: string }
@@ -289,6 +308,16 @@ export async function getSmtpConfig(channelId: string): Promise<SmtpConfig> {
   const channel = await prisma.channel.findUniqueOrThrow({ where: { id: channelId } })
   const cfg = channel.config as { ciphertext: string; iv: string; authTag: string }
   return decryptJson<SmtpConfig>(
+    Buffer.from(cfg.ciphertext, 'base64'),
+    Buffer.from(cfg.iv, 'base64'),
+    Buffer.from(cfg.authTag, 'base64'),
+  )
+}
+
+export async function getMetaConfig(channelId: string): Promise<MetaCredentials> {
+  const channel = await prisma.channel.findUniqueOrThrow({ where: { id: channelId } })
+  const cfg = channel.config as { ciphertext: string; iv: string; authTag: string }
+  return decryptJson<MetaCredentials>(
     Buffer.from(cfg.ciphertext, 'base64'),
     Buffer.from(cfg.iv, 'base64'),
     Buffer.from(cfg.authTag, 'base64'),

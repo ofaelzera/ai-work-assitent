@@ -44,7 +44,8 @@ model User {
   id           String    @id @default(cuid())
   workspaceId  String
   email        String    @unique
-  passwordHash String
+  googleId     String?   @unique
+  passwordHash String?
   name         String
   role         Role      @default(MEMBER)
   customRoleId String?
@@ -548,6 +549,7 @@ model CalendarAccount {
   workspaceId String
   userId      String
   provider    String   @default("google")
+  email       String?  // email da conta Google
   tokens      Json // cifrado
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -566,6 +568,13 @@ model CalendarEvent {
   externalId        String? // nullable: ID no Google Calendar quando sincronizado
   title             String
   description       String?  @db.Text
+  location          String?  @db.Text
+  meetLink          String?  // link de videoconferência (Google Meet, Teams, Zoom)
+  attendees         Json?    // [{ email, name, status }]
+  allDay            Boolean  @default(false)
+  status            String?  // confirmed | tentative | cancelled
+  organizer         String?  // email do organizador
+  color             String?  // colorId do Google Calendar
   startAt           DateTime
   endAt             DateTime
   cardId            String?
@@ -737,6 +746,9 @@ enum ChannelType {
   GMAIL
   IMAP_SMTP
   INTERNAL // chat interno entre usuários do workspace (1:1 e grupos)
+  META_WHATSAPP
+  META_INSTAGRAM
+  META_MESSENGER
 }
 
 enum ConversationType {

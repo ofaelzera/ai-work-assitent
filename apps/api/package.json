@@ -24,6 +24,7 @@
     "@google/generative-ai": "^0.24.1",
     "@prisma/client": "^5.16.1",
     "argon2": "^0.40.3",
+    "axios": "^1.16.1",
     "bullmq": "^5.12.7",
     "fastify": "^4.28.1",
     "fastify-type-provider-zod": "^2.0.0",

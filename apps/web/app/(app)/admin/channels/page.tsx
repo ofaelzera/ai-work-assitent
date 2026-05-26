@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { RefreshCw, Trash2, QrCode, X, Download, UserCircle, Plus, CheckCircle2, AlertCircle, Clock, Zap, PenLine, ChevronDown, ChevronUp, Bell, Settings2 } from 'lucide-react'
+import { RefreshCw, Trash2, QrCode, X, Download, UserCircle, Plus, CheckCircle2, AlertCircle, Clock, Zap, PenLine, ChevronDown, ChevronUp, Bell, Settings2, Power, User2 } from 'lucide-react'
 import { useAuthStore } from '@/store/auth'
 import { cn } from '@/lib/utils'
 import MessageTemplateField from '@/components/MessageTemplateField'
@@ -69,12 +69,21 @@ function TelegramIcon({ size = 24 }: { size?: number }) {
 const AVAILABLE_INTEGRATIONS = [
   {
     key: 'whatsapp',
-    name: 'WhatsApp',
-    description: 'Via Evolution API. Envie e receba mensagens do WhatsApp.',
+    name: 'WhatsApp (Evolution)',
+    description: 'Via Evolution API. Envie e receba mensagens usando QR Code.',
     Icon: WhatsAppIcon,
     color: 'bg-green-50 border-green-200 dark:bg-green-950/20 dark:border-green-900',
     badge: 'Disponível',
     badgeColor: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
+  },
+  {
+    key: 'meta',
+    name: 'WhatsApp (Meta Oficial)',
+    description: 'Conexão via Cloud API Oficial da Meta.',
+    Icon: WhatsAppIcon,
+    color: 'bg-blue-50 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900',
+    badge: 'Novo',
+    badgeColor: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400',
   },
   {
     key: 'smtp',
@@ -418,6 +427,69 @@ function SmtpModal({ onClose, onSave, isPending }: { onClose: () => void; onSave
   )
 }
 
+// ─── Modal Meta WhatsApp ───────────────────────────────────────────────────────
+function MetaModal({ onClose, onSave, isPending }: { onClose: () => void; onSave: (data: any) => void; isPending: boolean }) {
+  const [form, setForm] = useState({
+    label: '', type: 'META_WHATSAPP', systemUserToken: '', phoneNumberId: '', pageId: '',
+  })
+  const handleChange = (field: string, value: string) => setForm(f => ({ ...f, [field]: value }))
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [onClose])
+
+  const canSubmit = form.label && form.systemUserToken && form.phoneNumberId
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-card rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
+          <div className="flex items-center gap-3">
+            <WhatsAppIcon size={32} />
+            <div>
+              <h2 className="font-semibold">WhatsApp (Meta Oficial)</h2>
+              <p className="text-xs text-muted-foreground">Conecte a Cloud API Oficial</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground"><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          <SmtpField label="Nome do canal *" field="label" placeholder="Ex: Atendimento Oficial" value={form.label} onChange={handleChange} />
+          <SmtpField label="System User Token *" field="systemUserToken" placeholder="EAA..." type="password" value={form.systemUserToken} onChange={handleChange} />
+          <SmtpField label="Phone Number ID *" field="phoneNumberId" placeholder="123456789012345" value={form.phoneNumberId} onChange={handleChange} />
+          <SmtpField label="WhatsApp Business Account ID (opcional)" field="pageId" placeholder="WABA ID" value={form.pageId} onChange={handleChange} />
+
+          <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 rounded-lg p-3 text-xs text-blue-800 dark:text-blue-300 space-y-1">
+            <p className="font-semibold">Webhook da Meta</p>
+            <p>Configure o webhook no painel de desenvolvedores com a URL:</p>
+            <code className="block bg-white dark:bg-black/30 px-2 py-1 mt-1 rounded select-all font-mono">
+              {typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/meta` : '...'}
+            </code>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 px-6 py-4 border-t shrink-0">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm hover:bg-accent">Cancelar</button>
+          <button
+            onClick={() => onSave(form)}
+            disabled={!canSubmit || isPending}
+            className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+          >
+            {isPending ? (
+              <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Conectando...</>
+            ) : (
+              <><CheckCircle2 className="h-3.5 w-3.5" /> Conectar Oficial</>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Toggle booleano simples ──────────────────────────────────────────────────
 function Toggle({ value, onChange, label, description }: {
   value: boolean; onChange: (v: boolean) => void; label: string; description?: string
@@ -633,9 +705,244 @@ function ChannelRulesPanel({ channelId, channelType }: { channelId: string; chan
   )
 }
 
+// ─── Painel de perfil WhatsApp ─────────────────────────────────────────────────
+function ChannelProfilePanel({ channelId }: { channelId: string }) {
+  const queryClient = useQueryClient()
+  const [name, setName] = useState('')
+  const [status, setStatus] = useState('')
+  const picInputRef = useRef<HTMLInputElement>(null)
+
+  const { data: profile, isLoading } = useQuery<{ name: string | null; picture: string | null }>({
+    queryKey: ['channel-profile', channelId],
+    queryFn: () => apiFetch(`/channels/${channelId}/profile`),
+  })
+
+  useEffect(() => {
+    if (profile) {
+      setName(profile.name ?? '')
+    }
+  }, [profile])
+
+  const saveMutation = useMutation({
+    mutationFn: (body: { name?: string; status?: string }) =>
+      apiFetch(`/channels/${channelId}/profile`, { method: 'PATCH', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['channel-profile', channelId] })
+      toast.success('Perfil atualizado')
+    },
+    onError: () => toast.error('Erro ao atualizar perfil'),
+  })
+
+  const picMutation = useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData(); form.append('file', file)
+      return apiFetch(`/channels/${channelId}/profile/picture`, { method: 'POST', body: form })
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['channel-profile', channelId] }); toast.success('Foto atualizada') },
+    onError: () => toast.error('Erro ao atualizar foto'),
+  })
+
+  const removePicMutation = useMutation({
+    mutationFn: () => apiFetch(`/channels/${channelId}/profile/picture`, { method: 'DELETE' }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['channel-profile', channelId] }); toast.success('Foto removida') },
+    onError: () => toast.error('Erro ao remover foto'),
+  })
+
+  return (
+    <div className="border-t px-4 py-4 space-y-4 bg-muted/20">
+      <p className="text-sm font-semibold flex items-center gap-1.5">
+        <User2 className="h-4 w-4 text-muted-foreground" />
+        Perfil do número
+      </p>
+
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Carregando...</p>
+      ) : (
+        <>
+          {/* Foto */}
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              {profile?.picture ? (
+                <img src={profile.picture} alt="foto" className="h-14 w-14 rounded-full object-cover border" />
+              ) : (
+                <div className="h-14 w-14 rounded-full bg-muted flex items-center justify-center border">
+                  <User2 className="h-6 w-6 text-muted-foreground" />
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <input ref={picInputRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) picMutation.mutate(f); e.target.value = '' }} />
+              <button
+                onClick={() => picInputRef.current?.click()}
+                disabled={picMutation.isPending}
+                className="px-2.5 py-1 rounded-md border text-xs hover:bg-accent disabled:opacity-50"
+              >
+                {picMutation.isPending ? 'Enviando...' : 'Trocar foto'}
+              </button>
+              {profile?.picture && (
+                <button
+                  onClick={() => removePicMutation.mutate()}
+                  disabled={removePicMutation.isPending}
+                  className="px-2.5 py-1 rounded-md border text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50"
+                >
+                  Remover foto
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Nome */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Nome do perfil</label>
+            <div className="flex gap-2">
+              <input
+                value={name}
+                onChange={e => setName(e.target.value)}
+                maxLength={25}
+                placeholder="Nome visível no WhatsApp"
+                className="flex-1 rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+              <button
+                onClick={() => saveMutation.mutate({ name })}
+                disabled={!name.trim() || saveMutation.isPending}
+                className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+              >
+                Salvar
+              </button>
+            </div>
+          </div>
+
+          {/* Status / About */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status (About)</label>
+            <div className="flex gap-2">
+              <input
+                value={status}
+                onChange={e => setStatus(e.target.value)}
+                maxLength={139}
+                placeholder="Ex: Atendimento de seg a sex, 9h–18h"
+                className="flex-1 rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+              <button
+                onClick={() => saveMutation.mutate({ status })}
+                disabled={status === undefined || saveMutation.isPending}
+                className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+              >
+                Salvar
+              </button>
+            </div>
+          </div>
+          {/* Privacidade */}
+          <PrivacyPanel channelId={channelId} />
+
+          {/* Presença */}
+          <PresenceToggle channelId={channelId} />
+        </>
+      )}
+    </div>
+  )
+}
+
+const PRIVACY_LABELS: Record<string, string> = {
+  all: 'Todos',
+  contacts: 'Meus contatos',
+  contact_blacklist: 'Contatos exceto...',
+  none: 'Ninguém',
+  match_last_seen: 'Igual ao "visto por último"',
+}
+
+function PrivacyPanel({ channelId }: { channelId: string }) {
+  const [privacy, setPrivacy] = useState<Record<string, string>>({})
+  const [dirty, setDirty] = useState(false)
+
+  const { isLoading } = useQuery<Record<string, string>>({
+    queryKey: ['channel-privacy', channelId],
+    queryFn: () => apiFetch(`/channels/${channelId}/privacy`),
+    onSuccess: (d: Record<string, string>) => { setPrivacy(d ?? {}); setDirty(false) },
+  } as any)
+
+  const saveMutation = useMutation({
+    mutationFn: () => apiFetch(`/channels/${channelId}/privacy`, { method: 'PATCH', body: JSON.stringify(privacy) }),
+    onSuccess: () => { setDirty(false); toast.success('Privacidade atualizada') },
+    onError: () => toast.error('Erro ao salvar'),
+  })
+
+  const fields: Array<{ key: string; label: string; opts: string[] }> = [
+    { key: 'last', label: 'Visto por último', opts: ['all', 'contacts', 'contact_blacklist', 'none'] },
+    { key: 'online', label: 'Online', opts: ['all', 'match_last_seen'] },
+    { key: 'profile', label: 'Foto de perfil', opts: ['all', 'contacts', 'contact_blacklist', 'none'] },
+    { key: 'status', label: 'Recado (Status)', opts: ['all', 'contacts', 'contact_blacklist', 'none'] },
+    { key: 'readreceipts', label: 'Confirmação de leitura', opts: ['all', 'none'] },
+    { key: 'groupadd', label: 'Adicionar a grupos', opts: ['all', 'contacts', 'contact_blacklist'] },
+  ]
+
+  if (isLoading) return null
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Privacidade</p>
+      <div className="space-y-2">
+        {fields.map(f => (
+          <div key={f.key} className="flex items-center justify-between gap-3">
+            <span className="text-xs text-muted-foreground">{f.label}</span>
+            <select
+              value={privacy[f.key] ?? ''}
+              onChange={e => { setPrivacy(v => ({ ...v, [f.key]: e.target.value })); setDirty(true) }}
+              className="rounded-md border bg-transparent px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {!privacy[f.key] && <option value="">—</option>}
+              {f.opts.map(o => (
+                <option key={o} value={o}>{PRIVACY_LABELS[o] ?? o}</option>
+              ))}
+            </select>
+          </div>
+        ))}
+      </div>
+      {dirty && (
+        <button
+          onClick={() => saveMutation.mutate()}
+          disabled={saveMutation.isPending}
+          className="w-full py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+        >
+          {saveMutation.isPending ? 'Salvando...' : 'Salvar privacidade'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function PresenceToggle({ channelId }: { channelId: string }) {
+  const [available, setAvailable] = useState(true)
+
+  const mutation = useMutation({
+    mutationFn: (presence: 'available' | 'unavailable') =>
+      apiFetch(`/channels/${channelId}/presence`, { method: 'PATCH', body: JSON.stringify({ presence }) }),
+    onSuccess: (_d, p) => { setAvailable(p === 'available'); toast.success(p === 'available' ? 'Instância marcada como online' : 'Instância marcada como offline') },
+    onError: () => toast.error('Erro ao alterar presença'),
+  })
+
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-xs text-muted-foreground">Presença da instância</span>
+      <button
+        onClick={() => mutation.mutate(available ? 'unavailable' : 'available')}
+        disabled={mutation.isPending}
+        className={cn(
+          'px-3 py-1 rounded-full text-xs font-medium border transition-colors disabled:opacity-50',
+          available
+            ? 'bg-green-100 text-green-700 border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700'
+            : 'bg-muted text-muted-foreground',
+        )}
+      >
+        {available ? '🟢 Online' : '⚫ Offline'}
+      </button>
+    </div>
+  )
+}
+
 // ─── Card de canal conectado ──────────────────────────────────────────────────
 function ConnectedChannelCard({
-  ch, onQr, onSync, onAvatars, onStatus, onDelete, onUpdateWebhook, syncPending, avatarPending, statusPending, webhookPending,
+  ch, onQr, onSync, onAvatars, onStatus, onDelete, onUpdateWebhook, onRestart, syncPending, avatarPending, statusPending, webhookPending, restartPending,
 }: {
   ch: Channel
   onQr: () => void
@@ -644,15 +951,19 @@ function ConnectedChannelCard({
   onStatus: () => void
   onDelete: () => void
   onUpdateWebhook: () => void
+  onRestart: () => void
   syncPending: boolean
   avatarPending: boolean
   statusPending: boolean
   webhookPending: boolean
+  restartPending: boolean
 }) {
   const isWa = ch.type === 'WHATSAPP'
+  const isMetaWa = ch.type === 'META_WHATSAPP'
   const isEmail = ch.type === 'IMAP_SMTP' || ch.type === 'GMAIL'
   const [showSignature, setShowSignature] = useState(false)
   const [showRules, setShowRules] = useState(false)
+  const [showProfile, setShowProfile] = useState(false)
   const [signature, setSignature] = useState('')
   const [savingSignature, setSavingSignature] = useState(false)
 
@@ -683,12 +994,12 @@ function ConnectedChannelCard({
       {/* ── Linha principal ── */}
       <div className="p-4 flex items-center gap-4">
         <div className="shrink-0">
-          {isWa ? <WhatsAppIcon size={36} /> : <EmailIcon size={36} />}
+          {(isWa || isMetaWa) ? <WhatsAppIcon size={36} /> : <EmailIcon size={36} />}
         </div>
 
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-sm truncate">{ch.label}</p>
-          <p className="text-xs text-muted-foreground">{isWa ? 'WhatsApp via Evolution' : 'Email via SMTP/IMAP'}</p>
+          <p className="text-xs text-muted-foreground">{isWa ? 'WhatsApp via Evolution' : isMetaWa ? 'WhatsApp Meta Oficial' : 'Email via SMTP/IMAP'}</p>
           <div className="flex items-center gap-1.5 mt-1">
             <span className={cn('h-1.5 w-1.5 rounded-full', statusConfig.dot)} />
             <span className={cn('text-xs font-medium', statusConfig.color)}>{statusConfig.label}</span>
@@ -714,6 +1025,13 @@ function ConnectedChannelCard({
                   <button onClick={onUpdateWebhook} disabled={webhookPending} className="p-2 rounded-lg hover:bg-accent text-muted-foreground disabled:opacity-50" title="Ativar status de entrega (✓✓)">
                     <Bell className={cn('h-4 w-4', webhookPending && 'animate-pulse')} />
                   </button>
+                  <button
+                    onClick={() => { setShowProfile(v => !v); setShowRules(false); setShowSignature(false) }}
+                    className={cn('p-2 rounded-lg hover:bg-accent transition-colors', showProfile ? 'text-primary bg-primary/5' : 'text-muted-foreground')}
+                    title="Configurar perfil do número"
+                  >
+                    <User2 className="h-4 w-4" />
+                  </button>
                 </>
               )}
               {isEmail && (
@@ -727,8 +1045,18 @@ function ConnectedChannelCard({
               )}
             </>
           )}
+          {isWa && (
+            <button
+              onClick={onRestart}
+              disabled={restartPending}
+              className="p-2 rounded-lg hover:bg-accent text-muted-foreground disabled:opacity-50"
+              title="Reiniciar instância"
+            >
+              <Power className={cn('h-4 w-4', restartPending && 'animate-pulse')} />
+            </button>
+          )}
           <button
-            onClick={() => { setShowRules(v => !v); setShowSignature(false) }}
+            onClick={() => { setShowRules(v => !v); setShowSignature(false); setShowProfile(false) }}
             className={cn('p-2 rounded-lg hover:bg-accent transition-colors', showRules ? 'text-primary bg-primary/5' : 'text-muted-foreground')}
             title="Configurar regras"
           >
@@ -777,6 +1105,10 @@ function ConnectedChannelCard({
             </button>
           </div>
         </div>
+      )}
+      {/* ── Painel de perfil WhatsApp ── */}
+      {showProfile && isWa && (
+        <ChannelProfilePanel channelId={ch.id} />
       )}
       {/* ── Painel de regras ── */}
       {showRules && (
@@ -852,7 +1184,7 @@ function ImportHistoryModal({
 export default function ChannelsPage() {
   const queryClient = useQueryClient()
   const confirm = useConfirm()
-  const [modal, setModal] = useState<null | 'whatsapp' | 'smtp'>(null)
+  const [modal, setModal] = useState<null | 'whatsapp' | 'smtp' | 'meta'>(null)
   const [smtp, setSmtp] = useState<any>(null)
   const [qr, setQr] = useState<{ channelId: string; data: QrData } | null>(null)
   // Quando QR resolve pra CONNECTED, abre prompt de importar histórico
@@ -946,6 +1278,16 @@ export default function ChannelsPage() {
     onError: (e: any) => toast.error(e?.message ?? 'Erro: verifique as credenciais SMTP'),
   })
 
+  const createMeta = useMutation({
+    mutationFn: (data: any) => apiFetch<Channel>('/channels/meta', { method: 'POST', body: JSON.stringify(data) }),
+    onSuccess: (ch) => {
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      setModal(null)
+      toast.success(`Canal Meta "${ch.label}" conectado!`)
+    },
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao conectar Meta Oficial'),
+  })
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiFetch(`/channels/${id}`, { method: 'DELETE' }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['channels'] }); toast.success('Canal removido') },
@@ -975,6 +1317,12 @@ export default function ChannelsPage() {
     mutationFn: (id: string) => apiFetch<{ ok: boolean; instanceName: string }>(`/channels/${id}/update-webhook`, { method: 'POST' }),
     onSuccess: (data) => toast.success(`Webhook atualizado para "${data.instanceName}"`),
     onError: (e: any) => toast.error(e?.message ?? 'Erro ao atualizar webhook'),
+  })
+
+  const restartMutation = useMutation({
+    mutationFn: (id: string) => apiFetch<{ ok: boolean }>(`/channels/${id}/restart`, { method: 'POST' }),
+    onSuccess: () => toast.success('Instância reiniciada'),
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao reiniciar instância'),
   })
 
   const loadQr = async (channelId: string) => {
@@ -1014,6 +1362,7 @@ export default function ChannelsPage() {
               onSync={() => syncMutation.mutate(ch.id)}
               onAvatars={() => avatarMutation.mutate(ch.id)}
               onStatus={() => statusMutation.mutate(ch.id)}
+              onRestart={() => restartMutation.mutate(ch.id)}
               onDelete={async () => {
                 const ok = await confirm({
                   type: 'danger',
@@ -1031,6 +1380,7 @@ export default function ChannelsPage() {
               avatarPending={avatarMutation.isPending}
               statusPending={statusMutation.isPending}
               webhookPending={webhookMutation.isPending && webhookMutation.variables === ch.id}
+              restartPending={restartMutation.isPending && restartMutation.variables === ch.id}
             />
           ))}
         </div>
@@ -1085,6 +1435,13 @@ export default function ChannelsPage() {
           adoptWa.mutate({ label, evolutionServerId, instanceName })
         }
         isPending={createWa.isPending || adoptWa.isPending}
+      />
+    )}
+    {modal === 'meta' && (
+      <MetaModal
+        onClose={() => setModal(null)}
+        onSave={(data) => createMeta.mutate(data)}
+        isPending={createMeta.isPending}
       />
     )}
     {modal === 'smtp' && (

@@ -23,6 +23,8 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().optional(),
+  GOOGLE_AUTH_REDIRECT_URI: z.string().optional(),
+  WEB_URL: z.string().optional(),
 
   GEMINI_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
@@ -31,6 +33,7 @@ const envSchema = z.object({
   OPENROUTER_SITE_URL: z.string().optional(),
 
   STORAGE_PATH: z.string().default('./storage'),
+  META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)

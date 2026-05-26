@@ -1,7 +1,8 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
+import jwt from 'jsonwebtoken'
 import { prisma } from '../../lib/prisma.js'
-import { encryptJson, decryptJson } from '../../lib/crypto.js'
+import { encryptJson } from '../../lib/crypto.js'
 import { eventBus } from '../../lib/eventBus.js'
 import { env } from '../../config/env.js'
 import {
@@ -9,18 +10,13 @@ import {
   googleCalendarFetch,
   type GoogleTokens,
 } from './google.service.js'
+import { syncCalendarAccount } from '../../workers/calendarSync.worker.js'
 
-// ─── Types locais (encryption blob é só usado dentro deste módulo agora) ──────
+// ─── Types locais ─────────────────────────────────────────────────────────────
 
-interface EncryptedBlob {
-  ciphertext: { type: 'Buffer'; data: number[] } | number[]
-  iv: { type: 'Buffer'; data: number[] } | number[]
-  authTag: { type: 'Buffer'; data: number[] } | number[]
-}
-
-function toBuffer(val: EncryptedBlob['ciphertext']): Buffer {
-  if (Array.isArray(val)) return Buffer.from(val)
-  return Buffer.from((val as { type: 'Buffer'; data: number[] }).data)
+interface CalendarStatePayload {
+  sub: string
+  workspaceId: string
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -30,56 +26,81 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get('/calendar/accounts', { onRequest: [app.authenticate] }, async (req) => {
     const accounts = await prisma.calendarAccount.findMany({
       where: { workspaceId: req.user.workspaceId, userId: req.user.sub },
-      select: { id: true, provider: true, createdAt: true, updatedAt: true },
+      select: { id: true, provider: true, email: true, createdAt: true, updatedAt: true },
       orderBy: { createdAt: 'asc' },
     })
     return accounts
   })
 
-  // GET /calendar/auth — returns OAuth consent screen URL
-  app.get('/calendar/auth', { onRequest: [app.authenticate] }, async () => {
+  // GET /calendar/auth — returns OAuth consent screen URL with a state token
+  app.get('/calendar/auth', { onRequest: [app.authenticate] }, async (req) => {
+    const state = jwt.sign(
+      { sub: req.user.sub, workspaceId: req.user.workspaceId },
+      env.JWT_ACCESS_SECRET,
+      { expiresIn: '10m' },
+    )
+
     const params = new URLSearchParams({
       client_id: env.GOOGLE_CLIENT_ID ?? '',
       redirect_uri: env.GOOGLE_REDIRECT_URI ?? '',
       response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/calendar',
+      scope: 'https://www.googleapis.com/auth/calendar email profile',
       access_type: 'offline',
       prompt: 'consent',
+      state,
     })
     const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
     return { url }
   })
 
-  // GET /calendar/callback?code= — handles OAuth callback, saves encrypted tokens
+  // GET /calendar/callback — handles OAuth redirect from Google (NO auth middleware)
   app.get(
     '/calendar/callback',
     {
-      onRequest: [app.authenticate],
       schema: {
-        querystring: z.object({ code: z.string() }),
+        querystring: z.object({
+          code: z.string().optional(),
+          state: z.string().optional(),
+          error: z.string().optional(),
+        }),
       },
     },
     async (req, reply) => {
-      const { code } = req.query
+      const webUrl = env.WEB_URL ?? 'http://localhost:3000'
 
-      const res = await fetch('https://oauth2.googleapis.com/token', {
+      if (req.query.error || !req.query.code || !req.query.state) {
+        return reply.redirect(`${webUrl}/profile?google_error=denied`)
+      }
+
+      let userId: string
+      let workspaceId: string
+      try {
+        const payload = jwt.verify(req.query.state, env.JWT_ACCESS_SECRET) as CalendarStatePayload
+        userId = payload.sub
+        workspaceId = payload.workspaceId
+      } catch {
+        return reply.redirect(`${webUrl}/profile?google_error=state_invalid`)
+      }
+
+      // Exchange authorization code for tokens
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
           client_id: env.GOOGLE_CLIENT_ID ?? '',
           client_secret: env.GOOGLE_CLIENT_SECRET ?? '',
           redirect_uri: env.GOOGLE_REDIRECT_URI ?? '',
-          code,
+          code: req.query.code,
           grant_type: 'authorization_code',
         }),
       })
 
-      if (!res.ok) {
-        const err = await res.text()
-        return reply.badRequest(`Google OAuth error: ${err}`)
+      if (!tokenRes.ok) {
+        req.log.error({ status: tokenRes.status }, 'Google Calendar token exchange failed')
+        return reply.redirect(`${webUrl}/profile?google_error=token`)
       }
 
-      const data = (await res.json()) as any
+      const data = (await tokenRes.json()) as any
 
       const tokens: GoogleTokens = {
         access_token: data.access_token,
@@ -88,20 +109,29 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
         token_type: data.token_type ?? 'Bearer',
       }
 
+      // Fetch email for the CalendarAccount label
+      let calendarEmail: string | null = null
+      try {
+        const uiRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${data.access_token}` },
+        })
+        if (uiRes.ok) {
+          const ui = (await uiRes.json()) as any
+          calendarEmail = ui.email ?? null
+        }
+      } catch {}
+
       const encrypted = encryptJson(tokens)
 
-      const account = await prisma.calendarAccount.upsert({
+      await prisma.calendarAccount.upsert({
         where: {
-          workspaceId_userId_provider: {
-            workspaceId: req.user.workspaceId,
-            userId: req.user.sub,
-            provider: 'google',
-          },
+          workspaceId_userId_provider: { workspaceId, userId, provider: 'google' },
         },
         create: {
-          workspaceId: req.user.workspaceId,
-          userId: req.user.sub,
+          workspaceId,
+          userId,
           provider: 'google',
+          email: calendarEmail,
           tokens: {
             ciphertext: Array.from(encrypted.ciphertext),
             iv: Array.from(encrypted.iv),
@@ -109,18 +139,18 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
           },
         },
         update: {
+          email: calendarEmail,
           tokens: {
             ciphertext: Array.from(encrypted.ciphertext),
             iv: Array.from(encrypted.iv),
             authTag: Array.from(encrypted.authTag),
           },
         },
-        select: { id: true, provider: true, createdAt: true },
       })
 
-      eventBus.emit('calendar:connected', { accountId: account.id })
+      eventBus.emit('calendar:connected', { userId, workspaceId })
 
-      return reply.code(201).send(account)
+      return reply.redirect(`${webUrl}/profile?google=connected`)
     },
   )
 
@@ -164,7 +194,6 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
       const { from, to, accountId, contactId, conversationId } = req.query
       const ownerId = req.user.sub
 
-      // Eventos do usuário: locais (sem conta) + sincronizados das suas contas
       const accounts = await prisma.calendarAccount.findMany({
         where: {
           workspaceId: req.user.workspaceId,
@@ -175,13 +204,11 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
       })
       const accountIds = accounts.map((a) => a.id)
 
-      // Visibilidade: eventos do próprio usuário (locais ou sincronizados pelas suas contas)
-      // Se filtro accountId foi passado, restringe a essa conta (não inclui locais)
       const visibilityFilter = accountId
         ? { calendarAccountId: accountId }
         : { OR: [
-            { ownerId, calendarAccountId: null },                          // locais do usuário
-            ...(accountIds.length > 0 ? [{ calendarAccountId: { in: accountIds } }] : []), // do Google
+            { ownerId, calendarAccountId: null },
+            ...(accountIds.length > 0 ? [{ calendarAccountId: { in: accountIds } }] : []),
           ] }
 
       const events = await prisma.calendarEvent.findMany({
@@ -204,7 +231,7 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
-  // POST /calendar/sync — fetch next 30 days from Google and upsert into DB
+  // POST /calendar/sync — manual trigger (auto-sync runs via worker every 15 min)
   app.post(
     '/calendar/sync',
     {
@@ -226,70 +253,14 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
 
       if (accounts.length === 0) return reply.notFound('No calendar accounts found')
 
-      const now = new Date()
-      const timeMin = now.toISOString()
-      const timeMax = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
-
       let total = 0
-
       for (const account of accounts) {
-        const accessToken = await getValidToken(account)
-
-        const params = new URLSearchParams({
-          timeMin,
-          timeMax,
-          singleEvents: 'true',
-          orderBy: 'startTime',
-          maxResults: '250',
-        })
-
-        const res = await googleCalendarFetch(
-          accessToken,
-          `/calendars/primary/events?${params.toString()}`,
-        )
-
-        if (!res.ok) {
-          const err = await res.text()
-          throw new Error(`Google Calendar list error: ${err}`)
-        }
-
-        const data = (await res.json()) as any
-        const items: any[] = data.items ?? []
-
-        for (const item of items) {
-          if (!item.id || !item.summary) continue
-
-          const startAt = item.start?.dateTime ?? item.start?.date
-          const endAt = item.end?.dateTime ?? item.end?.date
-
-          if (!startAt || !endAt) continue
-
-          await prisma.calendarEvent.upsert({
-            where: {
-              calendarAccountId_externalId: {
-                calendarAccountId: account.id,
-                externalId: item.id,
-              },
-            },
-            create: {
-              workspaceId: req.user.workspaceId,
-              ownerId: account.userId,           // dono = dono da conta Google
-              calendarAccountId: account.id,
-              externalId: item.id,
-              title: item.summary ?? '(sem título)',
-              description: item.description ?? null,
-              startAt: new Date(startAt),
-              endAt: new Date(endAt),
-            },
-            update: {
-              title: item.summary ?? '(sem título)',
-              description: item.description ?? null,
-              startAt: new Date(startAt),
-              endAt: new Date(endAt),
-            },
-          })
-
-          total++
+        try {
+          const count = await syncCalendarAccount(account)
+          total += count
+        } catch (err) {
+          req.log.error({ err, accountId: account.id }, 'Manual sync error')
+          throw err
         }
       }
 
@@ -299,18 +270,25 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
-  // POST /calendar/events — cria evento local; se accountId vier, sincroniza com Google
+  // POST /calendar/events — create local event; optionally sync with Google
   app.post(
     '/calendar/events',
     {
       onRequest: [app.authenticate],
       schema: {
         body: z.object({
-          accountId: z.string().optional(),  // opcional: sem ela, fica só local
+          accountId: z.string().optional(),
           title: z.string().min(1),
           startAt: z.string().datetime(),
           endAt: z.string().datetime(),
           description: z.string().optional(),
+          location: z.string().optional(),
+          attendees: z.array(z.object({
+            email: z.string().email(),
+            name: z.string().optional(),
+          })).optional(),
+          createMeetLink: z.boolean().optional(),
+          allDay: z.boolean().optional(),
           cardId: z.string().optional(),
           contactId: z.string().optional(),
           conversationId: z.string().optional(),
@@ -319,12 +297,17 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { accountId, title, startAt, endAt, description, cardId, contactId, conversationId, messageId } = req.body
+      const {
+        accountId, title, startAt, endAt, description, location,
+        attendees, createMeetLink, allDay,
+        cardId, contactId, conversationId, messageId,
+      } = req.body
       const ownerId = req.user.sub
 
-      // Se foi pedido sync com Google, valida conta e dispara
       let externalId: string | null = null
       let validAccountId: string | null = null
+      let resolvedMeetLink: string | null = null
+
       if (accountId) {
         const account = await prisma.calendarAccount.findFirst({
           where: { id: accountId, workspaceId: req.user.workspaceId, userId: ownerId },
@@ -332,30 +315,51 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
         if (!account) return reply.notFound('Conta de calendário não encontrada')
 
         const accessToken = await getValidToken(account)
+
         const fullDescription = conversationId
           ? `${description ?? ''}\n\n— Origem: ${req.protocol}://${req.hostname}/inbox/${conversationId}`.trim()
           : description
 
-        const res = await googleCalendarFetch(accessToken, '/calendars/primary/events', {
+        const googleBody: Record<string, unknown> = {
+          summary: title,
+          description: fullDescription,
+          location: location ?? undefined,
+          start: allDay ? { date: startAt.split('T')[0] } : { dateTime: startAt },
+          end: allDay ? { date: endAt.split('T')[0] } : { dateTime: endAt },
+        }
+
+        if (attendees && attendees.length > 0) {
+          googleBody.attendees = attendees.map((a) => ({ email: a.email, displayName: a.name }))
+        }
+
+        if (createMeetLink) {
+          googleBody.conferenceData = {
+            createRequest: {
+              requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              conferenceSolutionKey: { type: 'hangoutsMeet' },
+            },
+          }
+        }
+
+        const qs = createMeetLink ? '?conferenceDataVersion=1' : ''
+        const res = await googleCalendarFetch(accessToken, `/calendars/primary/events${qs}`, {
           method: 'POST',
-          body: JSON.stringify({
-            summary: title,
-            description: fullDescription,
-            start: { dateTime: startAt },
-            end: { dateTime: endAt },
-          }),
+          body: JSON.stringify(googleBody),
         })
 
         if (!res.ok) {
           const err = await res.text()
           return reply.internalServerError(`Google Calendar create error: ${err}`)
         }
+
         const created = (await res.json()) as any
         externalId = created.id
         validAccountId = account.id
+        resolvedMeetLink = created.hangoutLink
+          ?? created.conferenceData?.entryPoints?.find((e: any) => e.entryPointType === 'video')?.uri
+          ?? null
       }
 
-      // Salva no banco (local sempre, com ou sem Google)
       const event = await prisma.calendarEvent.create({
         data: {
           workspaceId: req.user.workspaceId,
@@ -364,6 +368,10 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
           externalId,
           title,
           description: description ?? null,
+          location: location ?? null,
+          meetLink: resolvedMeetLink,
+          attendees: attendees ?? undefined,
+          allDay: allDay ?? false,
           startAt: new Date(startAt),
           endAt: new Date(endAt),
           ...(cardId && { cardId }),
@@ -394,12 +402,10 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
 
       if (!event) return reply.notFound('Calendar event not found')
 
-      // Verifica ownership: dono do evento OU dono da conta Google sincronizada
       const isOwner = event.ownerId === req.user.sub
         || (event.calendarAccount && event.calendarAccount.userId === req.user.sub)
       if (!isOwner) return reply.forbidden('Not authorized')
 
-      // Se está sincronizado com Google, tenta deletar de lá também
       if (event.calendarAccount && event.externalId) {
         try {
           const accessToken = await getValidToken(event.calendarAccount)
@@ -408,13 +414,11 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
             `/calendars/primary/events/${event.externalId}`,
             { method: 'DELETE' },
           )
-          // 404/410 = já removido remotamente — ok
           if (!res.ok && res.status !== 404 && res.status !== 410) {
             const err = await res.text()
             return reply.internalServerError(`Google Calendar delete error: ${err}`)
           }
         } catch (err) {
-          // Se falhar no Google, ainda assim deletamos localmente — log e segue
           req.log.warn({ err, eventId: event.id }, 'Falha ao deletar evento no Google, removendo só local')
         }
       }
