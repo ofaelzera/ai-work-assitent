@@ -2,13 +2,21 @@ import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import { Providers } from './providers'
+import { getServerApiUrl } from '@/lib/runtime-config'
 
 const inter = Inter({ subsets: ['latin'] })
+
+// URL pública que o browser deve usar pra falar com a API.
+// Em runtime (sem rebuild): defina PUBLIC_API_URL no .env do server.
+// Se vazio, o browser cai em window.location.origin (mesmo host do proxy reverso).
+function getPublicApiUrl(): string {
+  return process.env.PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? ''
+}
 
 // Função para buscar configurações públicas de White-Label
 async function getSystemSettings() {
   try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333'}/system-settings/public`, {
+    const res = await fetch(`${getServerApiUrl()}/system-settings/public`, {
       cache: 'no-store',
     })
     if (!res.ok) return null
@@ -36,8 +44,17 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     '--secondary': settings.secondaryColor,
   } as React.CSSProperties : {}
 
+  const publicApiUrl = getPublicApiUrl()
+
   return (
     <html lang="pt-BR" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.__APP_CONFIG__=${JSON.stringify({ apiUrl: publicApiUrl })};`,
+          }}
+        />
+      </head>
       <body className={inter.className} style={customStyle} suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>

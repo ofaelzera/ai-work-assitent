@@ -1,4 +1,5 @@
 import { apiFetch } from './api'
+import { getApiUrl } from './runtime-config'
 
 export interface ChatUser {
   id: string
@@ -85,8 +86,7 @@ export function sendMedia(roomId: string, file: File, caption: string) {
 }
 
 export function chatAttachmentUrl(messageId: string): string {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
-  return `${base}/chat/messages/${messageId}/media`
+  return `${getApiUrl()}/chat/messages/${messageId}/media`
 }
 
 export function markRead(roomId: string, uptoMessageId?: string) {

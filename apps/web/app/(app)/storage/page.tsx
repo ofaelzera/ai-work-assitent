@@ -14,8 +14,7 @@ import EditFolderModal from '@/components/EditFolderModal'
 import EditFileModal from '@/components/EditFileModal'
 import MoveToFolderModal from '@/components/MoveToFolderModal'
 import { useConfirm } from '@/components/ui/confirm-dialog'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
+import { getApiUrl } from '@/lib/runtime-config'
 
 interface Folder {
   id: string
@@ -183,7 +182,7 @@ export default function StoragePage() {
       fd.append('visibility', 'PRIVATE')
       fd.append('file', file)
       try {
-        const r = await fetch(`${API_URL}/storage/files`, {
+        const r = await fetch(`${getApiUrl()}/storage/files`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${getAccessToken()}` },
           body: fd,
@@ -219,7 +218,7 @@ export default function StoragePage() {
   })
 
   const handleDownload = async (file: StorageFile) => {
-    const r = await fetch(`${API_URL}/storage/attachments/${file.id}`, {
+    const r = await fetch(`${getApiUrl()}/storage/attachments/${file.id}`, {
       headers: { Authorization: `Bearer ${getAccessToken()}` },
     })
     if (!r.ok) { toast.error('Não foi possível baixar'); return }

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Bot, CheckCircle2, Database, Settings2, User } from 'lucide-react'
+import { getApiUrl } from '@/lib/runtime-config'
 
 const steps = [
   { id: 1, title: 'Bem-vindo', icon: Bot },
@@ -37,7 +38,7 @@ export default function SetupPage() {
   const handleTestDb = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333'}/setup/test-db`, {
+      const res = await fetch(`${getApiUrl()}/setup/test-db`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ databaseUrl: formData.databaseUrl })
@@ -64,7 +65,7 @@ export default function SetupPage() {
 
     setLoading(true)
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333'}/setup/install`, {
+      const res = await fetch(`${getApiUrl()}/setup/install`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)

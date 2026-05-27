@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
+import { getApiUrl } from './runtime-config'
 
 let accessToken: string | null = null
 
@@ -27,7 +27,7 @@ export async function apiFetch<T>(path: string, options: FetchOptions = {}): Pro
     headers['Authorization'] = `Bearer ${accessToken}`
   }
 
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`${getApiUrl()}${path}`, {
     ...rest,
     headers,
     credentials: 'include',
@@ -35,7 +35,7 @@ export async function apiFetch<T>(path: string, options: FetchOptions = {}): Pro
 
   if (res.status === 401 && !skipAuth) {
     // Tentar refresh
-    const refreshed = await fetch(`${API_URL}/auth/refresh`, {
+    const refreshed = await fetch(`${getApiUrl()}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
     })
@@ -43,7 +43,7 @@ export async function apiFetch<T>(path: string, options: FetchOptions = {}): Pro
       const data = await refreshed.json()
       setAccessToken(data.accessToken)
       headers['Authorization'] = `Bearer ${data.accessToken}`
-      const retry = await fetch(`${API_URL}${path}`, { ...rest, headers, credentials: 'include' })
+      const retry = await fetch(`${getApiUrl()}${path}`, { ...rest, headers, credentials: 'include' })
       if (!retry.ok) throw new ApiError(retry.status, await retry.text())
       return retry.json() as Promise<T>
     }

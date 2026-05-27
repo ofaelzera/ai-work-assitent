@@ -2,8 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { getAccessToken, setAccessToken } from './api'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
+import { getApiUrl } from './runtime-config'
 
 interface SSEEvent {
   type: string
@@ -17,7 +16,7 @@ interface SSEEvent {
  */
 async function refreshAccessToken(): Promise<string | null> {
   try {
-    const res = await fetch(`${API_URL}/auth/refresh`, {
+    const res = await fetch(`${getApiUrl()}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
     })
@@ -56,7 +55,7 @@ function dispatch(event: SSEEvent) {
 function openConnection(token: string) {
   if (sharedEs || connecting) return
   connecting = true
-  const es = new EventSource(`${API_URL}/sse?token=${encodeURIComponent(token)}`)
+  const es = new EventSource(`${getApiUrl()}/sse?token=${encodeURIComponent(token)}`)
   sharedEs = es
 
   es.onopen = () => { retries = 0; connecting = false }

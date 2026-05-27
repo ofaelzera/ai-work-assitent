@@ -29,8 +29,7 @@ import { ConversationTimelineModal } from '@/components/ConversationTimelineModa
 import { useAuthStore } from '@/store/auth'
 import { ChatInput } from '@/components/ChatInput'
 import { GroupPanel } from './GroupPanel'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
+import { getApiUrl } from '@/lib/runtime-config'
 
 // ─── Cores por remetente ──────────────────────────────────────────────────────
 const SENDER_COLORS = [
@@ -138,7 +137,7 @@ function useMediaBlob(msgId: string, enabled: boolean) {
   useEffect(() => {
     if (!enabled) return
     let objectUrl: string
-    fetch(`${API_URL}/messages/${msgId}/media`, {
+    fetch(`${getApiUrl()}/messages/${msgId}/media`, {
       headers: { Authorization: `Bearer ${getAccessToken()}` },
     })
       .then(async (r) => {
@@ -258,7 +257,7 @@ function DocumentBubble({ msgId, filename, mimetype }: { msgId: string; filename
   const isPdf = mimetype === 'application/pdf' || filename?.toLowerCase().endsWith('.pdf')
   const handleDownload = async () => {
     try {
-      const r = await fetch(`${API_URL}/messages/${msgId}/media`, { headers: { Authorization: `Bearer ${getAccessToken()}` } })
+      const r = await fetch(`${getApiUrl()}/messages/${msgId}/media`, { headers: { Authorization: `Bearer ${getAccessToken()}` } })
       if (r.status === 410) { toast.error('Mídia expirada'); return }
       if (!r.ok) throw new Error()
       const blob = await r.blob()

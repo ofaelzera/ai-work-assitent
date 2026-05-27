@@ -25,8 +25,7 @@ import { UserAvatar } from './UserAvatar'
 import { usePresenceMap } from './usePresenceMap'
 import LibraryPickerModal from '@/components/LibraryPickerModal'
 import { ChatInput } from '@/components/ChatInput'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
+import { getApiUrl } from '@/lib/runtime-config'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -49,7 +48,7 @@ function useChatMediaBlob(msgId: string, enabled: boolean) {
     if (!enabled) return
     let objectUrl: string
     let aborted = false
-    fetch(`${API_URL}/chat/messages/${msgId}/media`, {
+    fetch(`${getApiUrl()}/chat/messages/${msgId}/media`, {
       headers: { Authorization: `Bearer ${getAccessToken()}` },
     })
       .then(async (r) => {
@@ -482,7 +481,7 @@ function AttachmentInline({
 
   function openDoc() {
     const token = getAccessToken()
-    fetch(`${API_URL}/chat/messages/${msgId}/media`, {
+    fetch(`${getApiUrl()}/chat/messages/${msgId}/media`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.blob())

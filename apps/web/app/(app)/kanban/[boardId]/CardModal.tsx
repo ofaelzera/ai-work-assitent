@@ -10,7 +10,7 @@ import {
   Paperclip, Download, FileText, Image as ImageIcon, Music, Video,
 } from 'lucide-react'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333'
+import { getApiUrl } from '@/lib/runtime-config'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { usePermission } from '@/lib/usePermission'
@@ -246,7 +246,7 @@ function useAttachmentBlobUrl(attachmentId: string, mimeType: string, enabled: b
   useEffect(() => {
     if (!enabled) return
     let objectUrl: string
-    fetch(`${API_URL}/storage/attachments/${attachmentId}`, {
+    fetch(`${getApiUrl()}/storage/attachments/${attachmentId}`, {
       headers: { Authorization: `Bearer ${getAccessToken()}` },
     })
       .then(async r => {
@@ -271,7 +271,7 @@ function AttachmentItem({ att }: { att: Attachment }) {
   const Icon = isImage ? ImageIcon : isAudio ? Music : isVideo ? Video : FileText
 
   const handleDownload = async () => {
-    const r = await fetch(`${API_URL}/storage/attachments/${att.id}`, {
+    const r = await fetch(`${getApiUrl()}/storage/attachments/${att.id}`, {
       headers: { Authorization: `Bearer ${getAccessToken()}` },
     })
     if (!r.ok) { toast.error('Não foi possível baixar o arquivo'); return }
