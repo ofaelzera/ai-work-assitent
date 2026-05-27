@@ -8,9 +8,9 @@ import fastifySensible from '@fastify/sensible'
 import fastifyMultipart from '@fastify/multipart'
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod'
 import { env } from './config/env.js'
-import { isSetupCompleted } from './lib/setup-status.js'
 import { logger } from './lib/logger.js'
 import { redis } from './lib/redis.js'
+import { prisma } from './lib/prisma.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes.js'
 import { channelsRoutes } from './modules/channels/channels.routes.js'
@@ -35,7 +35,6 @@ import { evolutionServersRoutes } from './modules/evolution-servers/evolution-se
 import { teamsRoutes } from './modules/teams/teams.routes.js'
 import { routingRulesRoutes } from './modules/routing/rules.routes.js'
 import { flowsRoutes } from './modules/flows/flows.routes.js'
-import { setupRoutes } from './modules/setup/setup.routes.js'
 import { systemSettingsRoutes } from './modules/system-settings/system-settings.routes.js'
 import type { JwtPayload } from '@aiwa/shared'
 
@@ -57,8 +56,6 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 export async function buildApp() {
   const app = Fastify({ logger })
 
-  const IS_SETUP_COMPLETED = await isSetupCompleted()
-
   // Serialization / Validation com Zod
   app.setValidatorCompiler(validatorCompiler)
   app.setSerializerCompiler(serializerCompiler)
@@ -71,6 +68,7 @@ export async function buildApp() {
 
   // Plugins de segurança
   await app.register(fastifyHelmet, { contentSecurityPolicy: false })
+
   // CORS: em dev libera tudo; em produção aceita WEB_URL + CORS_ALLOWED_ORIGINS
   // (lista separada por vírgula). Sem env definido em prod, recusa tudo.
   const corsAllowedOrigins = [
@@ -89,20 +87,16 @@ export async function buildApp() {
       : true,
     credentials: true,
   })
-  
-  // Condicional para Redis no Rate Limit
-  const rateLimitOptions: any = {
+
+  // Rate limit usando Redis (Redis é obrigatório agora)
+  await app.register(fastifyRateLimit, {
     max: 200,
     timeWindow: '1 minute',
-  }
-  if (IS_SETUP_COMPLETED) {
-    rateLimitOptions.redis = redis
-  }
-  await app.register(fastifyRateLimit, rateLimitOptions)
+    redis,
+  })
 
   // Auth
   await app.register(fastifyCookie)
-  
   await app.register(fastifyJwt, { secret: env.JWT_ACCESS_SECRET })
 
   app.decorate('authenticate', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -113,132 +107,122 @@ export async function buildApp() {
     }
   })
 
-  // Healthcheck
-  app.get('/health', async () => ({ status: 'ok', ts: Date.now(), setup_completed: IS_SETUP_COMPLETED }))
-
-  // Interceptor de Setup
-  app.addHook('onRequest', async (req, reply) => {
-    if (IS_SETUP_COMPLETED) return
-
-    if (req.method === 'OPTIONS') return
-
-    const url = req.url
-    // Permite rotas necessárias para o setup funcionar
-    if (url.startsWith('/setup') || url.startsWith('/system-settings/public') || url === '/health') {
-      return
+  // Healthcheck — checa DB e Redis. Retorna 503 se algum estiver fora.
+  app.get('/health', async (_req, reply) => {
+    const checks: Record<string, 'ok' | string> = {}
+    try {
+      await prisma.$queryRaw`SELECT 1`
+      checks.db = 'ok'
+    } catch (err: any) {
+      checks.db = err?.message ?? 'error'
     }
-
-    // Bloqueia todo o resto
-    return reply.status(503).send({
-      statusCode: 503,
-      error: 'Service Unavailable',
-      message: 'Sistema aguardando instalação inicial',
-      setup_required: true
-    })
+    try {
+      const pong = await redis.ping()
+      checks.redis = pong === 'PONG' ? 'ok' : pong
+    } catch (err: any) {
+      checks.redis = err?.message ?? 'error'
+    }
+    const allOk = checks.db === 'ok' && checks.redis === 'ok'
+    return reply
+      .status(allOk ? 200 : 503)
+      .send({ status: allOk ? 'ok' : 'degraded', ts: Date.now(), checks })
   })
 
-  // Rotas de Setup e Config
-  await app.register(setupRoutes, { prefix: '/setup' })
-  
-  if (IS_SETUP_COMPLETED) {
-    await app.register(systemSettingsRoutes, { prefix: '/system-settings' })
-    
-    // SSE — aceita token via query string
-    app.get('/sse', async (req: FastifyRequest<{ Querystring: { token?: string } }>, reply) => {
-      const token = (req.query as any).token as string | undefined
-      if (!token) return reply.unauthorized('Token obrigatório')
+  // Rotas de Config
+  await app.register(systemSettingsRoutes, { prefix: '/system-settings' })
 
-      let decoded: { sub: string; workspaceId: string } | null = null
-      try {
-        decoded = app.jwt.verify(token) as any
-      } catch {
-        return reply.unauthorized('Token inválido')
+  // SSE — aceita token via query string
+  app.get('/sse', async (req: FastifyRequest<{ Querystring: { token?: string } }>, reply) => {
+    const token = (req.query as any).token as string | undefined
+    if (!token) return reply.unauthorized('Token obrigatório')
+
+    let decoded: { sub: string; workspaceId: string } | null = null
+    try {
+      decoded = app.jwt.verify(token) as any
+    } catch {
+      return reply.unauthorized('Token inválido')
+    }
+
+    // CORS manual — reply.raw bypassa os hooks do @fastify/cors
+    const origin = req.headers.origin
+    if (origin) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', origin)
+      reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
+    }
+    reply.raw.setHeader('Content-Type', 'text/event-stream')
+    reply.raw.setHeader('Cache-Control', 'no-cache')
+    reply.raw.setHeader('Connection', 'keep-alive')
+    reply.raw.setHeader('X-Accel-Buffering', 'no') // evita buffer em proxies (nginx)
+    reply.raw.flushHeaders()
+
+    const { eventBus } = await import('./lib/eventBus.js')
+    const { trackOnline, trackOffline, isOnline } = await import('./lib/presence.js')
+    const handler = (event: { type: string; payload: unknown }) => {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`)
+    }
+
+    eventBus.on('*', handler)
+
+    // Marca usuário como online enquanto a conexão SSE estiver ativa
+    const userId = decoded?.sub ?? null
+    const workspaceId = decoded?.workspaceId ?? null
+    if (userId) {
+      trackOnline(userId)
+      if (workspaceId) {
+        eventBus.emit('*', {
+          workspaceId,
+          type: 'chat.presence',
+          payload: { userId, status: 'online' },
+        })
       }
+    }
 
-      // CORS manual — reply.raw bypassa os hooks do @fastify/cors
-      const origin = req.headers.origin
-      if (origin) {
-        reply.raw.setHeader('Access-Control-Allow-Origin', origin)
-        reply.raw.setHeader('Access-Control-Allow-Credentials', 'true')
-      }
-      reply.raw.setHeader('Content-Type', 'text/event-stream')
-      reply.raw.setHeader('Cache-Control', 'no-cache')
-      reply.raw.setHeader('Connection', 'keep-alive')
-      reply.raw.setHeader('X-Accel-Buffering', 'no') // evita buffer em proxies (nginx)
-      reply.raw.flushHeaders()
-
-      const { eventBus } = await import('./lib/eventBus.js')
-      const { trackOnline, trackOffline, isOnline } = await import('./lib/presence.js')
-      const handler = (event: { type: string; payload: unknown }) => {
-        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`)
-      }
-
-      eventBus.on('*', handler)
-
-      // Marca usuário como online enquanto a conexão SSE estiver ativa
-      const userId = decoded?.sub ?? null
-      const workspaceId = decoded?.workspaceId ?? null
+    req.raw.on('close', () => {
+      eventBus.off('*', handler)
       if (userId) {
-        trackOnline(userId)
+        trackOffline(userId)
         if (workspaceId) {
-          eventBus.emit('*', {
-            workspaceId,
-            type: 'chat.presence',
-            payload: { userId, status: 'online' },
-          })
+          setTimeout(() => {
+            if (!isOnline(userId)) {
+              eventBus.emit('*', {
+                workspaceId,
+                type: 'chat.presence',
+                payload: { userId, status: 'offline' },
+              })
+            }
+          }, 2_000)
         }
       }
-
-      req.raw.on('close', () => {
-        eventBus.off('*', handler)
-        if (userId) {
-          trackOffline(userId)
-          if (workspaceId) {
-            setTimeout(() => {
-              if (!isOnline(userId)) {
-                eventBus.emit('*', {
-                  workspaceId,
-                  type: 'chat.presence',
-                  payload: { userId, status: 'offline' },
-                })
-              }
-            }, 2_000)
-          }
-        }
-      })
-
-      await new Promise<void>((resolve) => req.raw.on('close', resolve))
     })
 
-    // Rotas do Domínio
-    await app.register(authRoutes)
-    await app.register(dashboardRoutes)
-    await app.register(channelsRoutes)
-    await app.register(webhookRoutes)
-    await app.register(conversationsRoutes)
-    await app.register(kanbanRoutes)
-    await app.register(contactsRoutes)
-    await app.register(companiesRoutes)
-    await app.register(aiRoutes)
-    await app.register(tasksRoutes)
-    await app.register(vaultRoutes)
-    await app.register(calendarRoutes)
-    await app.register(eventsRoutes)
-    await app.register(usersRoutes)
-    await app.register(workspaceRoutes)
-    await app.register(rolesRoutes)
-    await app.register(storageRoutes)
-    await app.register(reportsRoutes)
-    await app.register(chatRoutes)
-    await app.register(quickRepliesRoutes)
-    await app.register(evolutionServersRoutes)
-    await app.register(teamsRoutes)
-    await app.register(routingRulesRoutes)
-    await app.register(flowsRoutes)
-  } else {
-    // Registra public configs mesmo em setup mode para a UI
-    await app.register(systemSettingsRoutes, { prefix: '/system-settings' })
-  }
+    await new Promise<void>((resolve) => req.raw.on('close', resolve))
+  })
+
+  // Rotas do Domínio
+  await app.register(authRoutes)
+  await app.register(dashboardRoutes)
+  await app.register(channelsRoutes)
+  await app.register(webhookRoutes)
+  await app.register(conversationsRoutes)
+  await app.register(kanbanRoutes)
+  await app.register(contactsRoutes)
+  await app.register(companiesRoutes)
+  await app.register(aiRoutes)
+  await app.register(tasksRoutes)
+  await app.register(vaultRoutes)
+  await app.register(calendarRoutes)
+  await app.register(eventsRoutes)
+  await app.register(usersRoutes)
+  await app.register(workspaceRoutes)
+  await app.register(rolesRoutes)
+  await app.register(storageRoutes)
+  await app.register(reportsRoutes)
+  await app.register(chatRoutes)
+  await app.register(quickRepliesRoutes)
+  await app.register(evolutionServersRoutes)
+  await app.register(teamsRoutes)
+  await app.register(routingRulesRoutes)
+  await app.register(flowsRoutes)
 
   return app
 }

@@ -7,10 +7,10 @@ import { getServerApiUrl } from '@/lib/runtime-config'
 const inter = Inter({ subsets: ['latin'] })
 
 // URL pública que o browser deve usar pra falar com a API.
-// Em runtime (sem rebuild): defina PUBLIC_API_URL no .env do server.
-// Se vazio, o browser cai em window.location.origin (mesmo host do proxy reverso).
+// Lida em runtime do .env. Se vazia, browser cai em window.location.origin
+// (mesmo host do proxy reverso).
 function getPublicApiUrl(): string {
-  return process.env.PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? ''
+  return process.env.PUBLIC_API_URL ?? ''
 }
 
 // Função para buscar configurações públicas de White-Label

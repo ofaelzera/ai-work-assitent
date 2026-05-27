@@ -1,2 +1,0 @@
--- AlterTable
-ALTER TABLE `Message` MODIFY `body` MEDIUMTEXT NOT NULL;

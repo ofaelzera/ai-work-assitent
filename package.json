@@ -6,6 +6,11 @@
     "dev:api": "pnpm --filter api dev",
     "dev:web": "pnpm --filter web dev",
     "build": "pnpm -r build",
+    "install:all": "pnpm install && pnpm --filter api db:push && pnpm --filter api db:seed && pnpm build",
+    "start": "pm2 start ecosystem.config.cjs",
+    "stop": "pm2 stop ecosystem.config.cjs",
+    "restart": "pm2 restart ecosystem.config.cjs",
+    "logs": "pm2 logs",
     "lint": "pnpm -r lint",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\" --ignore-path .gitignore"
   },

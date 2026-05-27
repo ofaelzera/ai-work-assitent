@@ -9,3 +9,5 @@ build
 # Ignorar conteúdo do storage mas manter a pasta rastreada
 apps/api/storage/*
 !apps/api/storage/.gitkeep
+logs/*
+!logs/.gitkeep

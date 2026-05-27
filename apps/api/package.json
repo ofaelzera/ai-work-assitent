@@ -7,11 +7,10 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "db:migrate": "dotenv -e ../../.env -- prisma migrate dev",
-    "db:deploy": "dotenv -e ../../.env -- prisma migrate deploy",
     "db:push": "dotenv -e ../../.env -- prisma db push",
-    "db:studio": "dotenv -e ../../.env -- prisma studio",
-    "db:seed": "tsx src/lib/seed.ts"
+    "db:seed": "dotenv -e ../../.env -- tsx src/lib/seed.ts",
+    "db:reset": "dotenv -e ../../.env -- prisma db push --force-reset --accept-data-loss && pnpm db:seed",
+    "db:studio": "dotenv -e ../../.env -- prisma studio"
   },
   "dependencies": {
     "@aiwa/shared": "workspace:*",

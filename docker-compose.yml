@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-aiwa}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-aiwa_assistant}
       MYSQL_USER: ${MYSQL_USER:-aiwa}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiwapassword}
     ports:

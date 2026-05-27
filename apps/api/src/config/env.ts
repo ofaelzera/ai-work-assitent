@@ -69,7 +69,3 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data
-
-// Flag de setup agora vem do DB (checada em runtime). server.ts faz a checagem
-// no boot e passa o resultado pra buildApp. Veja lib/setup-status.ts.
-

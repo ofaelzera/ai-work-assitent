@@ -1,13 +1,12 @@
 import { buildApp } from './app.js'
 import { env } from './config/env.js'
-import { isSetupCompleted } from './lib/setup-status.js'
 import { prisma } from './lib/prisma.js'
 import { redis } from './lib/redis.js'
 import { logger } from './lib/logger.js'
 import { startWorkers } from './workers/index.js'
 import { startEvolutionSocket, stopEvolutionSocket } from './modules/channels/evolution.socket.js'
 import { seedDefaultServerFromEnv } from './modules/evolution-servers/evolution-servers.service.js'
-import { startImapPollers, stopAllImapPollers } from './modules/channels/imap.poller.js'
+import { stopAllImapPollers } from './modules/channels/imap.poller.js'
 import { syncWhatsAppChannel } from './modules/channels/sync.service.js'
 
 /**
@@ -43,31 +42,24 @@ async function syncAllWhatsAppChannelsOnBoot(): Promise<void> {
 
 async function main() {
   const app = await buildApp()
-  const setupDone = await isSetupCompleted()
 
   try {
-    if (setupDone) {
-      startWorkers()
-    }
+    startWorkers()
     await app.listen({ port: env.PORT, host: env.HOST })
     console.log(`🚀 API rodando em http://${env.HOST}:${env.PORT}`)
 
-    if (setupDone) {
-      // Migra servidor do .env para o banco se ainda não houver nenhum cadastrado
-      await seedDefaultServerFromEnv()
+    // Migra servidor do .env para o banco se ainda não houver nenhum cadastrado
+    await seedDefaultServerFromEnv()
 
-      // Conecta ao Evolution via Socket.IO (um socket por servidor cadastrado)
-      startEvolutionSocket()
+    // Conecta ao Evolution via Socket.IO (um socket por servidor cadastrado)
+    startEvolutionSocket()
 
-      // Polling IMAP desativado temporariamente (módulo de email em pausa)
-      // await startImapPollers()
+    // Polling IMAP desativado temporariamente (módulo de email em pausa)
+    // await startImapPollers()
 
-      // Sincroniza WhatsApp em background — não bloqueia o boot
-      // Aguarda 3s para a conexão Socket.IO estabilizar antes de sincronizar
-      setTimeout(() => void syncAllWhatsAppChannelsOnBoot(), 3_000)
-    } else {
-      console.log('⚠️  Sistema em MODO SETUP. Acesse o painel web para realizar a instalação.')
-    }
+    // Sincroniza WhatsApp em background — não bloqueia o boot
+    // Aguarda 3s para a conexão Socket.IO estabilizar antes de sincronizar
+    setTimeout(() => void syncAllWhatsAppChannelsOnBoot(), 3_000)
   } catch (err) {
     app.log.error(err)
     process.exit(1)

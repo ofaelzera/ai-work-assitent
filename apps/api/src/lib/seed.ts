@@ -11,6 +11,20 @@ async function main() {
     create: { id: 'default-workspace', name: 'Meu Workspace' },
   })
 
+  // SystemSettings padrão (white-label) — evita 404/erro quando a UI consulta
+  // /system-settings/public em um banco recém-criado.
+  await prisma.systemSettings.upsert({
+    where: { id: 'default' },
+    update: {},
+    create: {
+      id: 'default',
+      systemTitle: 'AI Work Assistant',
+      companyName: 'Minha Empresa',
+      primaryColor: '#6366f1',
+      secondaryColor: '#4f46e5',
+    },
+  })
+
   const passwordHash = await argon2.hash('admin123456', {
     type: argon2.argon2id,
     memoryCost: 19456,

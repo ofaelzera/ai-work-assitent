@@ -5,20 +5,37 @@ module.exports = {
       script: 'pnpm',
       args: '--filter api start',
       cwd: './',
+      instances: 1,
+      exec_mode: 'fork',
+      max_memory_restart: '1G',
+      autorestart: true,
+      watch: false,
       env: {
         NODE_ENV: 'production',
-        PORT: 3333
-      }
+      },
+      out_file: './logs/aiwa-api.out.log',
+      error_file: './logs/aiwa-api.err.log',
+      time: true,
+      merge_logs: true,
     },
     {
       name: 'aiwa-web',
       script: 'pnpm',
       args: '--filter web start',
       cwd: './',
+      instances: 1,
+      exec_mode: 'fork',
+      max_memory_restart: '1G',
+      autorestart: true,
+      watch: false,
       env: {
         NODE_ENV: 'production',
-        PORT: 3000
-      }
-    }
-  ]
-};
+        PORT: 3000,
+      },
+      out_file: './logs/aiwa-web.out.log',
+      error_file: './logs/aiwa-web.err.log',
+      time: true,
+      merge_logs: true,
+    },
+  ],
+}
