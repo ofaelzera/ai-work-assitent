@@ -1,5 +1,6 @@
 import { buildApp } from './app.js'
-import { env, IS_SETUP_COMPLETED } from './config/env.js'
+import { env } from './config/env.js'
+import { isSetupCompleted } from './lib/setup-status.js'
 import { prisma } from './lib/prisma.js'
 import { redis } from './lib/redis.js'
 import { logger } from './lib/logger.js'
@@ -42,15 +43,16 @@ async function syncAllWhatsAppChannelsOnBoot(): Promise<void> {
 
 async function main() {
   const app = await buildApp()
+  const setupDone = await isSetupCompleted()
 
   try {
-    if (IS_SETUP_COMPLETED) {
+    if (setupDone) {
       startWorkers()
     }
     await app.listen({ port: env.PORT, host: env.HOST })
     console.log(`🚀 API rodando em http://${env.HOST}:${env.PORT}`)
 
-    if (IS_SETUP_COMPLETED) {
+    if (setupDone) {
       // Migra servidor do .env para o banco se ainda não houver nenhum cadastrado
       await seedDefaultServerFromEnv()
 

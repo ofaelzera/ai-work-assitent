@@ -14,15 +14,15 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3333),
   HOST: z.string().default('0.0.0.0'),
 
-  DATABASE_URL: z.string().url().optional(),
-  REDIS_URL: z.string().url().optional(),
+  DATABASE_URL: z.string().url(),
+  REDIS_URL: z.string().url(),
 
-  JWT_ACCESS_SECRET: z.string().min(32).optional(),
-  JWT_REFRESH_SECRET: z.string().min(32).optional(),
+  JWT_ACCESS_SECRET: z.string().min(32),
+  JWT_REFRESH_SECRET: z.string().min(32),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
 
-  VAULT_MASTER_KEY: z.string().length(64).optional(),
+  VAULT_MASTER_KEY: z.string().length(64),
 
   EVOLUTION_SERVER_URL: z.string().url().optional(),
   EVOLUTION_API_KEY: z.string().optional(),
@@ -55,7 +55,6 @@ if (!parsed.success) {
 
 export const env = parsed.data
 
-// Flag global para indicar modo de setup. Se falso, o interceptor do server redireciona rotas.
-export const IS_SETUP_COMPLETED = Boolean(
-  env.DATABASE_URL && env.REDIS_URL && env.JWT_ACCESS_SECRET && env.VAULT_MASTER_KEY
-)
+// Flag de setup agora vem do DB (checada em runtime). server.ts faz a checagem
+// no boot e passa o resultado pra buildApp. Veja lib/setup-status.ts.
+

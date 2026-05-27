@@ -7,7 +7,8 @@ import fastifyRateLimit from '@fastify/rate-limit'
 import fastifySensible from '@fastify/sensible'
 import fastifyMultipart from '@fastify/multipart'
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod'
-import { env, IS_SETUP_COMPLETED } from './config/env.js'
+import { env } from './config/env.js'
+import { isSetupCompleted } from './lib/setup-status.js'
 import { logger } from './lib/logger.js'
 import { redis } from './lib/redis.js'
 import { authRoutes } from './modules/auth/auth.routes.js'
@@ -56,6 +57,8 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 export async function buildApp() {
   const app = Fastify({ logger })
 
+  const IS_SETUP_COMPLETED = await isSetupCompleted()
+
   // Serialization / Validation com Zod
   app.setValidatorCompiler(validatorCompiler)
   app.setSerializerCompiler(serializerCompiler)
@@ -86,12 +89,7 @@ export async function buildApp() {
   // Auth
   await app.register(fastifyCookie)
   
-  if (IS_SETUP_COMPLETED) {
-    await app.register(fastifyJwt, { secret: env.JWT_ACCESS_SECRET! })
-  } else {
-    // Dummy JWT configuration if setup is not completed
-    await app.register(fastifyJwt, { secret: 'dummy-secret-for-setup-mode-only' })
-  }
+  await app.register(fastifyJwt, { secret: env.JWT_ACCESS_SECRET })
 
   app.decorate('authenticate', async (req: FastifyRequest, reply: FastifyReply) => {
     try {
