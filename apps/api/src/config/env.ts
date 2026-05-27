@@ -1,4 +1,13 @@
 import { z } from 'zod'
+import { config } from 'dotenv'
+import path from 'path'
+import url from 'url'
+
+const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
+
+// Carrega o .env da raiz do projeto (onde o setup salva) e faz fallback para o local
+config({ path: path.resolve(__dirname, '../../../../../.env') })
+config()
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
