@@ -71,8 +71,22 @@ export async function buildApp() {
 
   // Plugins de segurança
   await app.register(fastifyHelmet, { contentSecurityPolicy: false })
+  // CORS: em dev libera tudo; em produção aceita WEB_URL + CORS_ALLOWED_ORIGINS
+  // (lista separada por vírgula). Sem env definido em prod, recusa tudo.
+  const corsAllowedOrigins = [
+    env.WEB_URL,
+    ...(process.env.CORS_ALLOWED_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean) ?? []),
+  ].filter(Boolean) as string[]
+
   await app.register(fastifyCors, {
-    origin: env.NODE_ENV === 'production' ? false : true,
+    origin: env.NODE_ENV === 'production'
+      ? (origin, cb) => {
+          // Permite requests sem origem (curl, server-to-server, healthchecks)
+          if (!origin) return cb(null, true)
+          if (corsAllowedOrigins.includes(origin)) return cb(null, true)
+          cb(new Error('Origem não permitida pelo CORS'), false)
+        }
+      : true,
     credentials: true,
   })
   
