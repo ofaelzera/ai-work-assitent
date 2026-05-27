@@ -1,20 +1,52 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { exec } from 'node:child_process'
+import path from 'node:path'
 import util from 'node:util'
+import url from 'node:url'
 import * as argon2 from 'argon2'
 import { prisma } from '../../lib/prisma.js'
 import { markSetupCompleted } from '../../lib/setup-status.js'
 
 const execPromise = util.promisify(exec)
+const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
+
+// Roda `prisma migrate deploy` tentando várias formas (PM2 às vezes não tem
+// pnpm no PATH). cwd = apps/api pra achar prisma/schema.prisma.
+async function runMigrations(): Promise<{ ok: true } | { ok: false; error: string }> {
+  // dist/modules/setup → apps/api
+  const apiDir = path.resolve(__dirname, '../../..')
+  const env = { ...process.env, PATH: process.env.PATH ?? '' }
+  const attempts = [
+    'npx --yes prisma migrate deploy',
+    'pnpm exec prisma migrate deploy',
+    'node ./node_modules/prisma/build/index.js migrate deploy',
+    'pnpm --filter api prisma migrate deploy',
+  ]
+  let lastError = ''
+  for (const cmd of attempts) {
+    try {
+      await execPromise(cmd, { cwd: apiDir, env, timeout: 120_000 })
+      return { ok: true }
+    } catch (err: any) {
+      lastError = err?.stderr || err?.message || String(err)
+    }
+  }
+  return { ok: false, error: lastError }
+}
 
 export async function setupRoutes(app: FastifyInstance) {
   app.get('/status', async () => {
-    const admin = await prisma.user.findFirst({
-      where: { role: 'ADMIN' },
-      select: { id: true },
-    })
-    return { setup_completed: Boolean(admin) }
+    try {
+      const admin = await prisma.user.findFirst({
+        where: { role: 'ADMIN' },
+        select: { id: true },
+      })
+      return { setup_completed: Boolean(admin) }
+    } catch {
+      // Tabela não existe ainda = migrations não rodaram = setup pendente
+      return { setup_completed: false }
+    }
   })
 
   app.post('/install', async (req, reply) => {
@@ -30,24 +62,27 @@ export async function setupRoutes(app: FastifyInstance) {
 
     const data = bodySchema.parse(req.body)
 
-    // Bloqueia reexecução: se já existe admin, recusa
-    const existingAdmin = await prisma.user.findFirst({
-      where: { role: 'ADMIN' },
-      select: { id: true },
-    })
-    if (existingAdmin) {
-      return reply.status(409).send({
-        success: false,
-        error: 'Setup já foi executado. Já existe um administrador cadastrado.',
-      })
-    }
-
     try {
-      // 1. Garantir migrations aplicadas (no-op se já estiverem)
-      try {
-        await execPromise('pnpm --filter api prisma migrate deploy')
-      } catch (err: any) {
-        app.log.warn({ err: err?.message }, 'migrate deploy falhou — seguindo (pode já estar aplicado)')
+      // 1. Rodar migrations PRIMEIRO (antes de qualquer query Prisma)
+      const migrate = await runMigrations()
+      if (!migrate.ok) {
+        app.log.error({ stderr: migrate.error }, 'migrate deploy falhou')
+        return reply.status(500).send({
+          success: false,
+          error: `Falha ao aplicar migrations: ${migrate.error.slice(0, 500)}. Rode manualmente no servidor: cd apps/api && npx prisma migrate deploy`,
+        })
+      }
+
+      // 2. Reexecução: se já existe admin, recusa
+      const existingAdmin = await prisma.user.findFirst({
+        where: { role: 'ADMIN' },
+        select: { id: true },
+      })
+      if (existingAdmin) {
+        return reply.status(409).send({
+          success: false,
+          error: 'Setup já foi executado. Já existe um administrador cadastrado.',
+        })
       }
 
       // 2. Criar workspace default
