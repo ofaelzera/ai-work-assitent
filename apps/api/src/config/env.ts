@@ -1,13 +1,27 @@
 import { z } from 'zod'
 import { config } from 'dotenv'
-import path from 'path'
-import url from 'url'
+import fs from 'node:fs'
+import path from 'node:path'
+import url from 'node:url'
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
 
-// Carrega o .env da raiz do projeto (onde o setup salva) e faz fallback para o local
-config({ path: path.resolve(__dirname, '../../../../../.env') })
-config()
+// Carrega o .env da raiz do monorepo. Tenta caminhos candidatos pra funcionar
+// tanto rodando do código fonte (tsx → src/config/env.ts) quanto do compilado
+// (node → dist/config/env.js), e independente do cwd em que o PM2 subiu.
+const candidates = [
+  path.resolve(__dirname, '../../../../.env'),     // dist/config → root (4 up)
+  path.resolve(__dirname, '../../../.env'),        // src/config  → root (3 up via tsx)
+  path.resolve(process.cwd(), '../../.env'),       // cwd=apps/api → root
+  path.resolve(process.cwd(), '.env'),             // cwd=root
+]
+
+const loadedFrom = candidates.find(p => fs.existsSync(p))
+if (loadedFrom) {
+  config({ path: loadedFrom })
+} else {
+  config() // último fallback: dotenv default
+}
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -50,6 +64,7 @@ const parsed = envSchema.safeParse(process.env)
 if (!parsed.success) {
   console.error('❌ Variáveis de ambiente inválidas:')
   console.error(parsed.error.flatten().fieldErrors)
+  console.error('   .env carregado de:', loadedFrom ?? '(nenhum encontrado — usando dotenv default / process.env)')
   process.exit(1)
 }
 
