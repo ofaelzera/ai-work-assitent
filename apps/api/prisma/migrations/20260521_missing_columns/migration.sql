@@ -1,8 +1,6 @@
--- Colunas presentes no schema.prisma mas ausentes no banco após reset.
--- Channel.signature, Message.deliveryStatus, Message.quotedMsgId/Body/Sender
-
-ALTER TABLE `Channel`
-  ADD COLUMN `signature` LONGTEXT NULL;
+-- Colunas presentes no schema.prisma mas ausentes em algumas instalações.
+-- Channel.signature foi movido pra 20260520133050_workspace_settings (era
+-- duplicata aqui, gerava erro em installs do zero).
 
 ALTER TABLE `Message`
   ADD COLUMN `deliveryStatus` VARCHAR(191) NULL,
