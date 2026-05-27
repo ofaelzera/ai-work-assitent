@@ -755,6 +755,41 @@ model EventLog {
   @@index([workspaceId, targetType, targetId, createdAt])
 }
 
+// ─── System Settings (White-Label) ───────────────────────────────────────────
+model SystemSettings {
+  id                     String   @id @default("default")
+  systemTitle            String   @default("AI Work Assistant")
+  companyName            String   @default("My Company")
+  logoUrl                String?  @db.LongText
+  faviconUrl             String?  @db.LongText
+  primaryColor           String   @default("#6366f1")
+  secondaryColor         String   @default("#4f46e5")
+  institutionalTexts     Json?    // { welcomeTitle, welcomeDescription, footerText }
+  contactInfo            Json?    // { email, phone, address }
+  externalLinks          Json?    // { website, helpCenter, terms, privacy }
+  domainUrl              String?
+  
+  // API Keys que saíram do .env
+  evolutionServerUrl     String?
+  evolutionApiKey        String?
+  evolutionWebhookUrl    String?
+  evolutionWebhookSecret String?
+  metaWebhookVerifyToken String?
+  googleClientId         String?
+  googleClientSecret     String?
+  googleRedirectUri      String?
+  googleAuthRedirectUri  String?
+  webUrl                 String?
+  geminiApiKey           String?
+  openaiApiKey           String?
+  anthropicApiKey        String?
+  openrouterApiKey       String?
+  openrouterSiteUrl      String?
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
 // ─── Enums ───────────────────────────────────────────────────────────────────
 enum Role {
   ADMIN

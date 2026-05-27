@@ -23,7 +23,7 @@ export async function verifyPassword(hash: string, password: string): Promise<bo
 
 function issueTokens(app: FastifyInstance, payload: { sub: string; workspaceId: string; role: Role }) {
   const accessToken = app.jwt.sign(payload, { expiresIn: env.JWT_ACCESS_EXPIRES_IN })
-  const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET, {
+  const refreshToken = jwt.sign(payload, env.JWT_REFRESH_SECRET || 'dummy', {
     expiresIn: env.JWT_REFRESH_EXPIRES_IN as jwt.SignOptions['expiresIn'],
   })
   return { accessToken, refreshToken }
@@ -142,7 +142,7 @@ export async function refreshAccessToken(
 ): Promise<{ accessToken: string }> {
   let payload: { sub: string; workspaceId: string; role: Role }
   try {
-    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as typeof payload
+    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET || 'dummy') as typeof payload
   } catch {
     throw app.httpErrors.unauthorized('Refresh token inválido')
   }

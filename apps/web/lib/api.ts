@@ -57,11 +57,18 @@ export async function apiFetch<T>(path: string, options: FetchOptions = {}): Pro
     const text = await res.text()
     // Extrai campo "message" do JSON de erro do Fastify/Zod e preserva o body completo
     let message = text
-    let body: unknown = undefined
+    let body: any = undefined
     try {
       const json = JSON.parse(text)
       message = json.message ?? json.error ?? text
       body = json
+      
+      // Interceptação de Setup Required
+      if (res.status === 503 && json.setup_required) {
+        if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/setup')) {
+          window.location.href = '/setup'
+        }
+      }
     } catch {}
     throw new ApiError(res.status, message, body)
   }

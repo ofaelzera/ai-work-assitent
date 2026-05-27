@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -24,15 +24,21 @@ function GoogleIcon() {
 
 /**
  * Form de login real. Carregado via dynamic({ ssr: false }) pra evitar
- * hydration mismatch causado por extensões de browser (1Password, LastPass,
- * tradutor, Grammarly, etc.) que injetam DOM dentro do form/inputs antes
- * do React hidratar.
+ * hydration mismatch.
  */
 export default function LoginForm() {
   const router = useRouter()
   const { setUser } = useAuthStore()
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
+  const [settings, setSettings] = useState<any>(null)
+
+  useEffect(() => {
+    // Busca configurações de White-Label
+    apiFetch<any>('/system-settings/public', { skipAuth: true })
+      .then(setSettings)
+      .catch(() => {})
+  }, [])
 
   const {
     register,
@@ -67,22 +73,28 @@ export default function LoginForm() {
     }
   }
 
+  const title = settings?.systemTitle || 'AI Work Assistant'
+
   return (
     <div translate="no" className="relative min-h-screen flex items-center justify-center bg-background p-4 overflow-hidden">
 
-      {/* Decorative Background Elements (Mesh Gradient feel) */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/20 blur-[120px] animate-pulse pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/20 blur-[120px] animate-pulse delay-1000 pointer-events-none" />
+      {/* Decorative Background Elements */}
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-[var(--primary)]/20 blur-[120px] animate-pulse pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-[var(--secondary)]/20 blur-[120px] animate-pulse delay-1000 pointer-events-none" />
 
       {/* Main Login Card */}
       <div className="relative w-full max-w-md animate-slide-up">
         <div className="glass-card rounded-2xl p-8 space-y-8">
 
           <div className="text-center space-y-2">
-            <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 mb-2">
-              <Bot className="h-6 w-6 text-primary" />
-            </div>
-            <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Work Assistant</h1>
+            {settings?.logoUrl ? (
+              <img src={settings.logoUrl} alt={title} className="h-12 w-auto mx-auto mb-4" />
+            ) : (
+              <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 mb-2">
+                <Bot className="h-6 w-6 text-primary" />
+              </div>
+            )}
+            <h1 className="text-3xl font-bold tracking-tight text-foreground">{title}</h1>
             <p className="text-sm text-muted-foreground">Entre na sua conta para continuar</p>
           </div>
 
@@ -147,10 +159,6 @@ export default function LoginForm() {
               {loading ? 'Entrando...' : 'Entrar'}
             </button>
           </form>
-
-          <p className="text-center text-xs text-muted-foreground/80 pt-2 border-t border-border/50">
-            Conta padrão (dev): admin@aiwa.local / admin123456
-          </p>
         </div>
       </div>
     </div>

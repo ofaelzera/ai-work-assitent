@@ -36,7 +36,7 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get('/calendar/auth', { onRequest: [app.authenticate] }, async (req) => {
     const state = jwt.sign(
       { sub: req.user.sub, workspaceId: req.user.workspaceId },
-      env.JWT_ACCESS_SECRET,
+      env.JWT_ACCESS_SECRET || 'dummy',
       { expiresIn: '10m' },
     )
 
@@ -75,7 +75,7 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
       let userId: string
       let workspaceId: string
       try {
-        const payload = jwt.verify(req.query.state, env.JWT_ACCESS_SECRET) as CalendarStatePayload
+        const payload = jwt.verify(req.query.state, env.JWT_ACCESS_SECRET || 'dummy') as CalendarStatePayload
         userId = payload.sub
         workspaceId = payload.workspaceId
       } catch {
