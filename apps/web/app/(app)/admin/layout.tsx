@@ -24,6 +24,7 @@ const PATH_PERMS: Array<{ prefix: string; perm: string }> = [
   { prefix: '/admin/settings',          perm: 'admin.settings' },
   { prefix: '/admin/quick-replies',     perm: 'admin.settings' },
   { prefix: '/admin/evolution-servers', perm: 'admin.settings' },
+  { prefix: '/admin/branding',          perm: 'admin.settings' },
 ]
 
 /** Perms que destravam acesso a alguma sub-página de /admin/*. */

@@ -65,6 +65,7 @@ const adminItems: Array<{ href: string; label: string; perm: string }> = [
   { href: '/admin/flows',           label: 'Fluxos',               perm: 'flows.manage' },
   { href: '/admin/quick-replies',     label: 'Respostas Rápidas',   perm: 'admin.settings' },
   { href: '/admin/evolution-servers', label: 'Servidores Evolution', perm: 'admin.settings' },
+  { href: '/admin/branding',          label: 'Marca & White-label',  perm: 'admin.settings' },
   { href: '/admin/settings',          label: 'Configurações',        perm: 'admin.settings' },
 ]
 
