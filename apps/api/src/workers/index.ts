@@ -5,6 +5,7 @@ import { startDailyDigestWorker } from './dailyDigest.worker.js'
 import { startAgentRunWorker } from './agentRun.worker.js'
 import { startAgentDispatcher } from './agentDispatcher.worker.js'
 import { startCalendarSyncWorker } from './calendarSync.worker.js'
+import { startFlowExecutorWorker } from './flowExecutor.worker.js'
 import { syncAllCronAgents } from '../modules/ai/cronSync.js'
 import { logger } from '../lib/logger.js'
 
@@ -16,6 +17,7 @@ export function startWorkers() {
     startDailyDigestWorker(),
     startAgentRunWorker(),
     startCalendarSyncWorker(),
+    startFlowExecutorWorker(),
   ]
   // Dispatcher é só listeners no eventBus, não retorna Worker
   startAgentDispatcher()

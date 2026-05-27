@@ -108,6 +108,50 @@ Responda em JSON: { "summary": "texto", "bullets": ["item1", "item2"] }`,
     }
   }
 
+  // ── Times padrão (setores) ────────────────────────────────────────────────
+  // Cria um time "Geral" como fallback e modelos de Suporte/Vendas/Financeiro.
+  // Quem não tem nenhum time hoje cai no Geral e o admin vai customizando.
+  const defaultTeams = [
+    { name: 'Geral',      slug: 'geral',      color: '#6366f1', icon: 'inbox',         description: 'Fila padrão para conversas sem setor definido.' },
+    { name: 'Suporte',    slug: 'suporte',    color: '#0ea5e9', icon: 'headphones',    description: 'Atendimento de dúvidas técnicas e pós-venda.' },
+    { name: 'Vendas',     slug: 'vendas',     color: '#10b981', icon: 'shopping-cart', description: 'Novos negócios e oportunidades comerciais.' },
+    { name: 'Financeiro', slug: 'financeiro', color: '#f59e0b', icon: 'wallet',        description: 'Cobranças, pagamentos e questões financeiras.' },
+  ]
+
+  for (const t of defaultTeams) {
+    const existing = await prisma.team.findFirst({
+      where: { workspaceId: workspace.id, slug: t.slug },
+    })
+    if (!existing) {
+      const team = await prisma.team.create({
+        data: { workspaceId: workspace.id, ...t, distributionMode: 'all' },
+      })
+      // Admin entra como LEADER em todos por padrão
+      await prisma.teamMembership.create({
+        data: { teamId: team.id, userId: user.id, role: 'LEADER', isActive: true },
+      })
+      console.log(`✅ Time criado: ${team.name}`)
+    }
+  }
+
+  // Garante que todos os usuários do workspace estão no time "Geral"
+  const generalTeam = await prisma.team.findFirst({
+    where: { workspaceId: workspace.id, slug: 'geral' },
+  })
+  if (generalTeam) {
+    const allUsers = await prisma.user.findMany({
+      where: { workspaceId: workspace.id, deletedAt: null },
+      select: { id: true },
+    })
+    for (const u of allUsers) {
+      await prisma.teamMembership.upsert({
+        where: { teamId_userId: { teamId: generalTeam.id, userId: u.id } },
+        update: {},
+        create: { teamId: generalTeam.id, userId: u.id, role: 'AGENT', isActive: true },
+      })
+    }
+  }
+
   console.log(`\n✅ Seed concluído!`)
   console.log(`   Workspace: ${workspace.name} (${workspace.id})`)
   console.log(`   Admin: ${user.email} / senha: admin123456`)

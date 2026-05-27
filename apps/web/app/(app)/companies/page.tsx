@@ -88,9 +88,6 @@ interface CompanyFormData {
   website?: string | null
   address?: string | null
   notes?: string | null
-  distributionMode?: 'all' | 'fixed' | 'round_robin' | null
-  defaultAssigneeId?: string | null
-  roundRobinUserIds?: string[]
 }
 
 interface CompanyDetail extends Company {
@@ -101,9 +98,6 @@ interface CompanyDetail extends Company {
   website: string | null
   address: string | null
   notes: string | null
-  distributionMode: 'all' | 'fixed' | 'round_robin' | null
-  defaultAssigneeId: string | null
-  roundRobinUserIds: string[] | null
 }
 
 function CompanyFormModal({ company, onClose, onSave, isPending }: {
@@ -130,9 +124,6 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
   const [website, setWebsite] = useState('')
   const [address, setAddress] = useState('')
   const [notes, setNotes] = useState('')
-  const [distributionMode, setDistributionMode] = useState<'all' | 'fixed' | 'round_robin' | null>(null)
-  const [defaultAssigneeId, setDefaultAssigneeId] = useState<string | null>(null)
-  const [roundRobinUserIds, setRoundRobinUserIds] = useState<string[]>([])
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const logoInputRef = useRef<HTMLInputElement>(null)
   const [contactSearch, setContactSearch] = useState('')
@@ -146,9 +137,6 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
       setWebsite(detail.website ?? '')
       setAddress(detail.address ?? '')
       setNotes(detail.notes ?? '')
-      setDistributionMode(detail.distributionMode ?? null)
-      setDefaultAssigneeId(detail.defaultAssigneeId ?? null)
-      setRoundRobinUserIds(detail.roundRobinUserIds ?? [])
       setLogoUrl(detail.logoUrl ?? null)
     }
   }, [detail])
@@ -433,108 +421,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
             </div>
           )}
 
-          {/* ── Atendimento ── */}
-          {company && (
-            <div className="border-t px-5 py-4 space-y-3">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-                <UserCog className="h-3.5 w-3.5" />
-                Regras de atendimento
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                Define para quem caem as conversas de clientes desta empresa. Sobrescreve o padrão do canal/workspace.
-              </p>
 
-              <div className="space-y-2">
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    checked={distributionMode === null}
-                    onChange={() => setDistributionMode(null)}
-                    className="mt-0.5"
-                  />
-                  <div>
-                    <p className="text-sm font-medium">Herdar do canal</p>
-                    <p className="text-xs text-muted-foreground">Usa a regra padrão definida no canal/workspace.</p>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    checked={distributionMode === 'all'}
-                    onChange={() => setDistributionMode('all')}
-                    className="mt-0.5"
-                  />
-                  <div>
-                    <p className="text-sm font-medium">Cair na fila para todos</p>
-                    <p className="text-xs text-muted-foreground">Qualquer atendente pode assumir.</p>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    checked={distributionMode === 'fixed'}
-                    onChange={() => setDistributionMode('fixed')}
-                    className="mt-0.5"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Sempre para um usuário</p>
-                    <p className="text-xs text-muted-foreground mb-2">As conversas caem diretamente para o atendente abaixo.</p>
-                    {distributionMode === 'fixed' && (
-                      <select
-                        value={defaultAssigneeId ?? ''}
-                        onChange={e => setDefaultAssigneeId(e.target.value || null)}
-                        className="w-full rounded-lg border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                      >
-                        <option value="">— Selecione um atendente —</option>
-                        {users.map(u => (
-                          <option key={u.id} value={u.id}>{u.name ?? u.email}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    checked={distributionMode === 'round_robin'}
-                    onChange={() => setDistributionMode('round_robin')}
-                    className="mt-0.5"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Distribuir entre atendentes específicos</p>
-                    <p className="text-xs text-muted-foreground mb-2">Round-robin entre os marcados abaixo.</p>
-                    {distributionMode === 'round_robin' && (
-                      <div className="space-y-1 max-h-40 overflow-y-auto rounded-md border p-2">
-                        {users.length === 0 && (
-                          <p className="text-xs text-muted-foreground p-1">Nenhum usuário disponível.</p>
-                        )}
-                        {users.map(u => {
-                          const checked = roundRobinUserIds.includes(u.id)
-                          return (
-                            <label key={u.id} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-accent cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => {
-                                  setRoundRobinUserIds(prev =>
-                                    checked ? prev.filter(id => id !== u.id) : [...prev, u.id]
-                                  )
-                                }}
-                              />
-                              <span className="text-sm">{u.name ?? u.email}</span>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </label>
-              </div>
-            </div>
-          )}
 
           {/* ── Observações ── */}
           {company && (
@@ -749,9 +636,6 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
                 payload.website = website || null
                 payload.address = address || null
                 payload.notes = notes || null
-                payload.distributionMode = distributionMode
-                payload.defaultAssigneeId = distributionMode === 'fixed' ? defaultAssigneeId : null
-                payload.roundRobinUserIds = distributionMode === 'round_robin' ? roundRobinUserIds : []
               }
               onSave(payload)
             }}

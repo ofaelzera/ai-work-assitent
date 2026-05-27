@@ -262,6 +262,8 @@ export function startIngestWhatsappWorker() {
           workspaceId,
           channelId,
           contactId: contact?.id ?? null,
+          isGroup,
+          messageBody: body ?? null,
           autoAssign: false,
         })
 
@@ -297,6 +299,7 @@ export function startIngestWhatsappWorker() {
             unreadCount: 1,
             archived: shouldArchive,
             lastQueuedAt: sentAt,
+            ...(route.teamId && { teamId: route.teamId }),
             ...(route.eligibleAssigneeIds && { eligibleAssigneeIds: route.eligibleAssigneeIds }),
           },
         }).catch(async () => {
@@ -313,19 +316,31 @@ export function startIngestWhatsappWorker() {
           'Novo ticket criado (na fila)',
         )
 
-        // ── Welcome message do canal ──────────────────────────────────────
-        // Dispara só em ticket NOVO. Não em grupos, arquivadas ou se a 1ª msg foi nossa.
-        const welcomeTpl = typeof channelSettings.welcomeMessage === 'string'
-          ? channelSettings.welcomeMessage
-          : ''
+        // ── Flow automático (se houver) ────────────────────────────────────
+        // Quando o canal/regra indica um flow inicial, ele substitui o welcome
+        // estático: o flow é responsável por mandar mensagens, perguntas, etc.
         const fromMe: boolean = message.key?.fromMe ?? false
-        if (welcomeTpl && !isGroup && !shouldArchive && !fromMe) {
-          void sendSystemMessage({
+        if (route.flowId && !isGroup && !shouldArchive && !fromMe) {
+          const { flowQueue } = await import('./flowExecutor.worker.js')
+          await flowQueue.add('start', {
+            kind: 'start',
+            workspaceId,
+            flowId: route.flowId,
             conversationId: conversation.id,
-            template: welcomeTpl,
-            kind: 'channel-welcome',
-            userId: null,
           })
+        } else {
+          // ── Welcome message do canal (comportamento legado) ───────────────
+          const welcomeTpl = typeof channelSettings.welcomeMessage === 'string'
+            ? channelSettings.welcomeMessage
+            : ''
+          if (welcomeTpl && !isGroup && !shouldArchive && !fromMe) {
+            void sendSystemMessage({
+              conversationId: conversation.id,
+              template: welcomeTpl,
+              kind: 'channel-welcome',
+              userId: null,
+            })
+          }
         }
       } else {
         // Se a conversa está arquivada, a mensagem é salva silenciosamente:
@@ -403,6 +418,20 @@ export function startIngestWhatsappWorker() {
         body: msg.body ?? '',
         direction: 'INBOUND',
       })
+
+      // Se a conv tem flow em WAITING_INPUT, enfileira pra processar a resposta
+      const waitingExec = await prisma.flowExecution.findFirst({
+        where: { conversationId: conversation.id, status: 'WAITING_INPUT' },
+        select: { id: true },
+      })
+      if (waitingExec && body) {
+        const { flowQueue } = await import('./flowExecutor.worker.js')
+        await flowQueue.add('message', {
+          kind: 'message',
+          conversationId: conversation.id,
+          messageBody: body,
+        })
+      }
 
       // Enfileira triage de IA para mensagens inbound — pula em conversas arquivadas
       // (não queremos gastar tokens em chats que o usuário marcou como "ignorar")

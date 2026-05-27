@@ -54,6 +54,7 @@ interface Conversation {
     company?: { id: string; name: string; color: string } | null
   } | null
   company?: { id: string; name: string; color: string } | null // vínculo direto (grupos)
+  team?: { id: string; name: string; slug: string; color: string; icon: string | null } | null
   channel: { id: string; type: string; label: string }
   participants?: Array<{ userId: string; user: { id: string; name: string; email: string } }>
   messages: Array<{ body: string; sentAt: string; direction: string; attachments?: Attachment[] | null; fromUserId?: string | null }>
@@ -244,6 +245,15 @@ function ConversationItem({ conv, active, currentUserId, onClick, onFavorite, on
 
         <div className="flex items-center justify-between gap-1">
           <div className="min-w-0 flex-1 flex items-center gap-1.5">
+            {conv.team && (
+              <span
+                className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0 rounded-full"
+                style={{ background: `${conv.team.color}20`, color: conv.team.color }}
+                title={`Setor: ${conv.team.name}`}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: conv.team.color }} />
+                {conv.team.name}
+              </span>
+            )}
             <span className="shrink-0 text-[10px] font-medium text-muted-foreground max-w-[70px] truncate" title={conv.channel.label}>
               {conv.channel.label}
             </span>
@@ -527,6 +537,15 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   const [activeFolder, setActiveFolder] = useState<{ channelId: string; folder: string } | null>(null)
   // Filtro por canal (null = todos os canais da view atual)
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null)
+  // Filtro por setor/team (null = todos)
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
+
+  // Times dos quais o usuário é membro (pra mostrar como filtros)
+  const { data: myTeams = [] } = useQuery<{ id: string; name: string; color: string; slug: string }[]>({
+    queryKey: ['teams', 'mine'],
+    queryFn: () => apiFetch('/teams/mine'),
+    staleTime: 60_000,
+  })
 
   // Quando troca de view (Conversas <-> Email), reseta os filtros locais.
   // Default: "Minhas" — atendente vê o próprio trabalho. Auto-fallback pra Fila
@@ -577,7 +596,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['conversations', view, filter, search, activeFolder, selectedChannelId],
+    queryKey: ['conversations', view, filter, search, activeFolder, selectedChannelId, selectedTeamId],
     queryFn: () => {
       // 'mine'/'queue'/'others' são meta-filtros que viram filter=all + assigneeId=*
       const isMeta = filter === 'mine' || filter === 'queue' || filter === 'others'
@@ -598,6 +617,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
       }
       // Filtro por canal (sobrescreve activeFolder.channelId se ambos estiverem setados)
       if (selectedChannelId) params.set('channelId', selectedChannelId)
+      if (selectedTeamId) params.set('teamId', selectedTeamId)
       return apiFetch<{ conversations: Conversation[]; queueCount: number }>(`/conversations?${params}`)
     },
     refetchInterval: 30_000,
@@ -766,6 +786,40 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
           })}
         </div>
       </div>
+
+      {/* Filtro por setor — só aparece se o usuário pertence a 2+ setores */}
+      {view === 'conversations' && myTeams.length >= 2 && (
+        <div className="flex overflow-x-auto no-scrollbar gap-1.5 px-3 py-1.5 border-b bg-muted/10 mask-edges">
+          <button
+            onClick={() => setSelectedTeamId(null)}
+            title="Todos os setores"
+            className={cn(
+              'shrink-0 text-[11px] py-1 px-2.5 rounded-full font-medium transition-all duration-200 border',
+              selectedTeamId === null
+                ? 'bg-primary/15 text-primary border-primary/40'
+                : 'bg-transparent text-muted-foreground border-transparent hover:bg-accent hover:text-foreground',
+            )}>
+            Todos setores
+          </button>
+          {myTeams.map((t) => {
+            const isActive = selectedTeamId === t.id
+            return (
+              <button key={t.id}
+                onClick={() => setSelectedTeamId(isActive ? null : t.id)}
+                title={t.name}
+                className={cn(
+                  'shrink-0 text-[11px] py-1 px-2.5 rounded-full font-medium transition-all duration-200 border flex items-center gap-1.5',
+                  isActive
+                    ? 'bg-primary/15 text-primary border-primary/40'
+                    : 'bg-transparent text-muted-foreground border-transparent hover:bg-accent hover:text-foreground',
+                )}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: t.color }} />
+                {t.name}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* Filtro por canal — só aparece se houver 2+ canais na view atual */}
       {showChannelFilter && (

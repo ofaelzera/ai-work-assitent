@@ -82,6 +82,7 @@ export function startIngestMetaWorker() {
           workspaceId,
           channelId,
           contactId: contact.id,
+          messageBody: body ?? null,
           autoAssign: false,
         })
 
@@ -95,6 +96,7 @@ export function startIngestMetaWorker() {
             status: 'OPEN',
             unreadCount: 1,
             lastQueuedAt: sentAt,
+            ...(route.teamId && { teamId: route.teamId }),
             ...(route.eligibleAssigneeIds && { eligibleAssigneeIds: route.eligibleAssigneeIds }),
           },
         }).catch(async () => {

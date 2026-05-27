@@ -16,9 +16,18 @@ export const PERMISSIONS = {
   // ── Conversas ─────────────────────────────────────────────────────────────
   'conversations.viewAll':     'Ver todas as conversas (não só as minhas)',
   'conversations.assign':      'Encaminhar conversa pra outro atendente',
+  'conversations.transferTeam':'Transferir conversa pra outro setor/time',
   'conversations.archive':     'Arquivar / desarquivar conversas',
   'conversations.takeover':    'Assumir conversa que outro está atendendo',
   'conversations.delete':      'Deletar conversa',
+
+  // ── Times / Setores ───────────────────────────────────────────────────────
+  'teams.view':                'Ver os setores e a fila do próprio setor',
+  'teams.viewAll':             'Ver conversas de qualquer setor (não só dos meus)',
+  'teams.manage':              'Criar / editar / deletar setores e gerenciar membros',
+
+  // ── Flows / Regras de Roteamento ─────────────────────────────────────────
+  'flows.manage':              'Criar / editar / publicar fluxos e regras de roteamento',
 
   // ── Kanban ────────────────────────────────────────────────────────────────
   'cards.create':              'Criar cards',
@@ -69,7 +78,9 @@ export const DEFAULT_MEMBER_PERMISSIONS: PermissionKey[] = [
   'cards.edit',
   'contacts.view',
   'contacts.edit',
-  'conversations.assign',  // pode encaminhar a própria
+  'conversations.assign',      // pode encaminhar a própria
+  'conversations.transferTeam',// pode transferir pra outro setor
+  'teams.view',                // vê os setores e a fila do próprio
 ]
 
 /**
@@ -92,13 +103,16 @@ export const SYSTEM_ROLES: SystemRoleTemplate[] = [
     name: 'Supervisor',
     description: 'Vê tudo, gerencia equipe, mas não mexe em integrações',
     permissions: [
-      'conversations.viewAll', 'conversations.assign', 'conversations.archive', 'conversations.takeover',
+      'conversations.viewAll', 'conversations.assign', 'conversations.transferTeam',
+      'conversations.archive', 'conversations.takeover',
       'cards.create', 'cards.edit', 'cards.delete', 'boards.manage',
       'contacts.view', 'contacts.viewAll', 'contacts.edit', 'contacts.delete',
       'companies.view', 'companies.manage',
       'tasks.viewAll', 'tasks.manageAll',
       'storage.viewAll',
       'admin.events', 'admin.users',
+      'teams.view', 'teams.viewAll', 'teams.manage',
+      'flows.manage',
       'reports.view',
     ],
   },
@@ -108,7 +122,8 @@ export const SYSTEM_ROLES: SystemRoleTemplate[] = [
     permissions: [
       'cards.create', 'cards.edit',
       'contacts.view', 'contacts.edit',
-      'conversations.assign',
+      'conversations.assign', 'conversations.transferTeam',
+      'teams.view',
     ],
   },
 ]

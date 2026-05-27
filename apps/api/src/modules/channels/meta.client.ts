@@ -9,15 +9,17 @@ export interface MetaCredentials {
 }
 
 export class MetaClient {
-  private api = axios.create({
-    baseURL: 'https://graph.facebook.com/v19.0',
-    headers: {
-      Authorization: `Bearer ${this.credentials.systemUserToken}`,
-      'Content-Type': 'application/json',
-    },
-  })
+  private api: import('axios').AxiosInstance;
 
-  constructor(private credentials: MetaCredentials) {}
+  constructor(private credentials: MetaCredentials) {
+    this.api = axios.create({
+      baseURL: 'https://graph.facebook.com/v19.0',
+      headers: {
+        Authorization: `Bearer ${this.credentials.systemUserToken}`,
+        'Content-Type': 'application/json',
+      },
+    })
+  }
 
   /**
    * Envia uma mensagem de texto via WhatsApp Oficial

@@ -1,158 +1,207 @@
 /**
  * routing.service.ts
  *
- * Lógica centralizada de roteamento de conversas — define QUEM pode ver/assumir
- * uma conversa nova na fila. NÃO faz auto-atribuição: o atendente sempre tem
- * que clicar em "Assumir" para iniciar (isso dispara boas-vindas e zera o
- * cronômetro de SLA).
+ * Roteamento de novas conversas. Define para QUEM (assignee) e para QUAL setor (team)
+ * uma conversa nova vai. NÃO faz auto-atribuição: o atendente sempre tem que clicar
+ * "Assumir" para iniciar (dispara boas-vindas + cronômetro de SLA).
  *
- * Precedência: empresa (via contato) > canal > workspace > fallback.
+ * Ordem de precedência (primeira que casa, ganha):
+ *   1. RoutingRule (matcher → action) — regras dinâmicas configuradas no admin
+ *   2. Empresa (via contato) — Company.distributionMode + defaultAssigneeId/RR
+ *   3. Fallback (Workspace Settings) — distribuição global (regra padrão)
  *
  * Resultado:
- *  - `eligibleAssigneeIds = null` → fila pública (todos veem)
- *  - `eligibleAssigneeIds = [userId, ...]` → só esses usuários veem na fila
- *  - `assigneeId` só vem preenchido quando o caller pede explicitamente
- *    (ex: conversa proativa criada por um atendente que quer já assumir)
+ *   • teamId            → time atualmente dono (null quando legado/fila pública)
+ *   • eligibleAssigneeIds → array de userIds elegíveis (null = fila pública)
+ *   • assigneeId        → só preenchido em fluxos proativos (autoAssign=true)
+ *   • flowId            → flow a iniciar (quando rota veio de start_flow ou Channel.defaultFlowId)
+ *
+ * Compat: chamadas existentes continuam funcionando — campos novos são opcionais
+ * no resultado e os workers só leem o que sabem usar.
  */
 import { prisma } from '../../lib/prisma.js'
+import type { ChannelType } from '@prisma/client'
+import { resolveTeamEligibility } from '../teams/teams.service.js'
+import { evaluateRoutingRules } from '../routing/rules.service.js'
+
+export type DistMode = 'all' | 'fixed' | 'round_robin' | 'load_balanced'
+export type RouteSource = 'rule' | 'company' | 'fallback'
 
 export interface RouteResult {
-  /** Atribuído imediatamente (raramente — só em fluxos proativos). */
+  /** Atribuído imediatamente (raro — só em fluxos proativos com autoAssign=true). */
   assigneeId: string | null
-  /** Lista de usuários que podem ver/assumir. null = fila pública. */
+  /** Time atualmente dono da conversa (null = sem time / legado). */
+  teamId: string | null
+  /** Lista de userIds que podem ver/assumir. null = fila pública geral. */
   eligibleAssigneeIds: string[] | null
-  distMode: 'all' | 'fixed' | 'round_robin'
-  source: 'company' | 'channel' | 'workspace' | 'fallback'
+  distMode: DistMode
+  source: RouteSource
+  /** Quando preenchido, o caller deve iniciar este flow para a conversa. */
+  flowId?: string | null
+  /** ID da regra que casou (quando source='rule'). */
+  ruleId?: string | null
 }
 
 interface RouteArgs {
   workspaceId: string
   channelId: string
   contactId: string | null
+  /** Tipo do canal — usado por RoutingRules. Opcional (será carregado se omitido). */
+  channelType?: ChannelType | null
+  /** Indica se é grupo (WA) — usado por matchers. */
+  isGroup?: boolean
+  /** Corpo da primeira mensagem — usado por matchers de keyword. */
+  messageBody?: string | null
   /**
-   * Quando true (padrão), retorna `assigneeId=null` para que o usuário precise
-   * clicar em Assumir. Quando false, atribui imediatamente se houver regra
-   * fixed/RR, ou cai no `fallbackUserId`.
+   * Quando true (padrão false), atribui imediatamente se houver regra
+   * fixed/RR/LB. Quando false, sempre deixa em fila (atendente precisa Assumir).
    */
   autoAssign?: boolean
-  /** Usuário fallback (ex: o criador da conv proativa). Usado se autoAssign=true e não houver regra. */
+  /** Usuário fallback quando autoAssign=true e não há regra. */
   fallbackUserId?: string | null
 }
 
 export async function routeNewConversation(args: RouteArgs): Promise<RouteResult> {
-  const { workspaceId, channelId, contactId, autoAssign = false, fallbackUserId = null } = args
+  const {
+    workspaceId,
+    channelId,
+    contactId,
+    autoAssign = false,
+    fallbackUserId = null,
+    isGroup = false,
+    messageBody = null,
+  } = args
 
-  // 1) Empresa via contato
-  const contact = contactId
-    ? await prisma.contact.findUnique({
-        where: { id: contactId },
-        select: { companyId: true },
-      })
-    : null
-
-  const companyRules = contact?.companyId
-    ? await prisma.company.findUnique({
-        where: { id: contact.companyId },
-        select: {
-          id: true,
-          distributionMode: true,
-          defaultAssigneeId: true,
-          roundRobinUserIds: true,
-          rrCursor: true,
-        },
-      })
-    : null
-
-  // 2) Canal
+  // Carrega canal (sempre precisamos pra defaultTeamId/defaultFlowId/settings)
   const channel = await prisma.channel.findUnique({
     where: { id: channelId },
-    select: { settings: true },
+    select: {
+      type: true,
+      settings: true,
+      defaultTeamId: true,
+      defaultFlowId: true,
+    },
   })
+  const channelType = args.channelType ?? channel?.type ?? null
   const channelSettings = (channel?.settings as Record<string, unknown> | null) ?? {}
 
-  // 3) Workspace
+  // 1) RULES — primeira regra que casa
+  const matched = await evaluateRoutingRules({
+    workspaceId,
+    channelId,
+    channelType,
+    contactId,
+    isGroup,
+    messageBody,
+    trigger: 'new_conversation',
+  })
+
+  if (matched) {
+    const action = matched.action
+    if (action.type === 'assign_team' && action.teamId) {
+      const elig = await resolveTeamEligibility({ teamId: action.teamId })
+      const eligible = elig.userIds.length > 0 ? elig.userIds : null
+      // Se overflow e há team de overflow configurado, tenta uma vez
+      let finalTeamId: string | null = action.teamId
+      let finalEligible = eligible
+      if (elig.overflowed) {
+        const ovf = await prisma.team.findUnique({
+          where: { id: action.teamId },
+          select: { overflowTeamId: true },
+        })
+        if (ovf?.overflowTeamId) {
+          const elig2 = await resolveTeamEligibility({ teamId: ovf.overflowTeamId })
+          finalTeamId = ovf.overflowTeamId
+          finalEligible = elig2.userIds.length > 0 ? elig2.userIds : null
+        }
+      }
+      return {
+        assigneeId: autoAssign && finalEligible?.[0] ? finalEligible[0] : null,
+        teamId: finalTeamId,
+        eligibleAssigneeIds: finalEligible,
+        distMode: elig.distMode,
+        source: 'rule',
+        ruleId: matched.ruleId,
+        flowId: channel?.defaultFlowId ?? null,
+      }
+    }
+    if (action.type === 'assign_user' && action.userId) {
+      return {
+        assigneeId: autoAssign ? action.userId : null,
+        teamId: null,
+        eligibleAssigneeIds: [action.userId],
+        distMode: 'fixed',
+        source: 'rule',
+        ruleId: matched.ruleId,
+        flowId: channel?.defaultFlowId ?? null,
+      }
+    }
+    if (action.type === 'start_flow' && action.flowId) {
+      // Flow vai cuidar do roteamento posteriormente; cai como fila pública até lá
+      return {
+        assigneeId: null,
+        teamId: null,
+        eligibleAssigneeIds: null,
+        distMode: 'all',
+        source: 'rule',
+        ruleId: matched.ruleId,
+        flowId: action.flowId,
+      }
+    }
+    // add_tag etc — continua avaliando próximos níveis (não retorna)
+  }
+
+
+
+  // 3) FALLBACK (Regra Padrão)
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
     select: { settings: true },
   })
-  const workspaceSettings = (workspace?.settings as Record<string, unknown> | null) ?? {}
+  const wsSettings = (workspace?.settings as Record<string, unknown> | null) ?? {}
+  const wsMode = wsSettings.distributionMode as DistMode | undefined
 
-  const companyMode = companyRules?.distributionMode as 'all' | 'fixed' | 'round_robin' | null | undefined
-  const channelMode = channelSettings.distributionMode as 'all' | 'fixed' | 'round_robin' | undefined
-  const wsMode = workspaceSettings.distributionMode as 'all' | 'fixed' | 'round_robin' | undefined
-
-  const distMode = (companyMode ?? channelMode ?? wsMode ?? 'all') as 'all' | 'fixed' | 'round_robin'
-  const source: RouteResult['source'] = companyMode
-    ? 'company'
-    : channelMode
-      ? 'channel'
-      : wsMode
-        ? 'workspace'
-        : 'fallback'
-
-  // Resolve usuário(s) elegível(eis) pela regra ativa
-  let pickedUserId: string | null = null
-  let eligible: string[] | null = null
-
-  if (distMode === 'fixed') {
-    const fixedUser =
-      (companyMode === 'fixed' ? companyRules?.defaultAssigneeId : null) ??
-      (channelMode === 'fixed' ? (channelSettings.defaultAssigneeId as string | null) : null) ??
-      (wsMode === 'fixed' ? (workspaceSettings.defaultAssigneeId as string | null) : null) ??
-      null
-    if (fixedUser) {
-      pickedUserId = fixedUser
-      eligible = [fixedUser]
-    }
-  } else if (distMode === 'round_robin') {
-    if (companyMode === 'round_robin' && companyRules) {
-      const userIds = (companyRules.roundRobinUserIds as string[] | null) ?? []
-      if (userIds.length > 0) {
-        const lastIdx = typeof companyRules.rrCursor === 'number' ? companyRules.rrCursor : -1
-        const nextIdx = (lastIdx + 1) % userIds.length
-        pickedUserId = userIds[nextIdx] ?? null
-        eligible = pickedUserId ? [pickedUserId] : null
-        await prisma.company.update({
-          where: { id: companyRules.id },
-          data: { rrCursor: nextIdx },
-        }).catch(() => {})
-      }
-    } else if (channelMode === 'round_robin') {
-      const userIds = (channelSettings.roundRobinUserIds as string[] | undefined) ?? []
-      if (userIds.length > 0) {
-        const lastIdx = typeof channelSettings.rrCursor === 'number' ? channelSettings.rrCursor : -1
-        const nextIdx = (lastIdx + 1) % userIds.length
-        pickedUserId = userIds[nextIdx] ?? null
-        eligible = pickedUserId ? [pickedUserId] : null
-        await prisma.channel.update({
-          where: { id: channelId },
-          data: { settings: { ...channelSettings, rrCursor: nextIdx } as any },
-        }).catch(() => {})
-      }
-    } else if (wsMode === 'round_robin') {
-      const userIds = (workspaceSettings.roundRobinUserIds as string[] | undefined) ?? []
-      if (userIds.length > 0) {
-        const lastIdx = typeof workspaceSettings.rrCursor === 'number' ? workspaceSettings.rrCursor : -1
-        const nextIdx = (lastIdx + 1) % userIds.length
-        pickedUserId = userIds[nextIdx] ?? null
-        eligible = pickedUserId ? [pickedUserId] : null
-        await prisma.workspace.update({
-          where: { id: workspaceId },
-          data: { settings: { ...workspaceSettings, rrCursor: nextIdx } as any },
-        }).catch(() => {})
+  if (wsMode === 'fixed') {
+    const u = (wsSettings.defaultAssigneeId as string | null) ?? null
+    if (u) {
+      return {
+        assigneeId: autoAssign ? u : null,
+        teamId: null,
+        eligibleAssigneeIds: [u],
+        distMode: 'fixed',
+        source: 'fallback',
+        flowId: channel?.defaultFlowId ?? null,
       }
     }
   }
-  // distMode === 'all' → eligible permanece null (fila pública)
-
-  // Por padrão NUNCA atribui automaticamente. A conv entra na fila — restrita
-  // ou pública — e o atendente precisa clicar Assumir.
-  let assigneeId: string | null = null
-
-  // Override apenas para fluxos proativos (autoAssign=true)
-  if (autoAssign) {
-    assigneeId = pickedUserId ?? fallbackUserId
+  if (wsMode === 'round_robin') {
+    const userIds = (wsSettings.roundRobinUserIds as string[] | undefined) ?? []
+    if (userIds.length > 0) {
+      const lastIdx = typeof wsSettings.rrCursor === 'number' ? wsSettings.rrCursor : -1
+      const nextIdx = (lastIdx + 1) % userIds.length
+      const picked = userIds[nextIdx] ?? null
+      await prisma.workspace.update({
+        where: { id: workspaceId },
+        data: { settings: { ...wsSettings, rrCursor: nextIdx } as any },
+      }).catch(() => {})
+      return {
+        assigneeId: autoAssign && picked ? picked : null,
+        teamId: null,
+        eligibleAssigneeIds: picked ? [picked] : null,
+        distMode: 'round_robin',
+        source: 'fallback',
+        flowId: channel?.defaultFlowId ?? null,
+      }
+    }
   }
 
-  return { assigneeId, eligibleAssigneeIds: eligible, distMode, source }
+  // Fila pública geral (all)
+  return {
+    assigneeId: autoAssign ? (fallbackUserId ?? null) : null,
+    teamId: null,
+    eligibleAssigneeIds: null,
+    distMode: 'all',
+    source: 'fallback',
+    flowId: channel?.defaultFlowId ?? null,
+  }
 }

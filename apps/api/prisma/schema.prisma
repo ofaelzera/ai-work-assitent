@@ -15,28 +15,33 @@ model Workspace {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users            User[]
-  channels         Channel[]
-  contacts         Contact[]
-  conversations    Conversation[]
-  messages         Message[]
-  boards           Board[]
-  cards            Card[]
-  tasks            Task[]
-  agents           Agent[]
-  prompts          Prompt[]
-  aiLogs           AIExecutionLog[]
-  memoryChunks     MemoryChunk[]
-  calendarAccounts CalendarAccount[]
-  calendarEvents   CalendarEvent[]
-  vaultItems       VaultItem[]
-  vaultFolders     VaultFolder[]
-  attachments      Attachment[]
-  storageFolders   StorageFolder[]
-  eventLogs        EventLog[]
-  companies        Company[]
-  customRoles      CustomRole[]
-  quickReplies     QuickReply[]
+  users                 User[]
+  channels              Channel[]
+  contacts              Contact[]
+  conversations         Conversation[]
+  messages              Message[]
+  boards                Board[]
+  cards                 Card[]
+  tasks                 Task[]
+  agents                Agent[]
+  prompts               Prompt[]
+  aiLogs                AIExecutionLog[]
+  memoryChunks          MemoryChunk[]
+  calendarAccounts      CalendarAccount[]
+  calendarEvents        CalendarEvent[]
+  vaultItems            VaultItem[]
+  vaultFolders          VaultFolder[]
+  attachments           Attachment[]
+  storageFolders        StorageFolder[]
+  eventLogs             EventLog[]
+  companies             Company[]
+  customRoles           CustomRole[]
+  quickReplies          QuickReply[]
+  teams                 Team[]
+  routingRules          RoutingRule[]
+  flows                 Flow[]
+  flowExecutions        FlowExecution[]
+  conversationTransfers ConversationTransfer[]
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -66,6 +71,10 @@ model User {
   sentMessages          Message[]                 @relation("MessageUserSender")
   chatParticipations    ConversationParticipant[]
   messageReads          MessageRead[]
+  teamMemberships       TeamMembership[]
+  transfersFrom         ConversationTransfer[]    @relation("TransferFromUser")
+  transfersTo           ConversationTransfer[]    @relation("TransferToUser")
+  transfersBy           ConversationTransfer[]    @relation("TransferActor")
 
   @@index([workspaceId])
   @@index([customRoleId])
@@ -104,18 +113,18 @@ model RefreshToken {
 
 // ─── Evolution Servers ───────────────────────────────────────────────────────
 model EvolutionServer {
-  id              String               @id @default(cuid())
-  name            String               // "VPS Brasil", "VPS EUA"
-  url             String               // "https://evo.meusite.com"
-  apiKey          String               @db.Text // criptografada (AES-256-GCM)
+  id              String                @id @default(cuid())
+  name            String // "VPS Brasil", "VPS EUA"
+  url             String // "https://evo.meusite.com"
+  apiKey          String                @db.Text // criptografada (AES-256-GCM)
   status          EvolutionServerStatus @default(ACTIVE)
-  maxInstances    Int                  @default(100)
-  instanceCount   Int                  @default(0)
-  priority        Int                  @default(0) // maior = preferido
-  isHealthy       Boolean              @default(true)
+  maxInstances    Int                   @default(100)
+  instanceCount   Int                   @default(0)
+  priority        Int                   @default(0) // maior = preferido
+  isHealthy       Boolean               @default(true)
   lastHealthCheck DateTime?
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
 
   channels Channel[]
 }
@@ -131,17 +140,25 @@ model Channel {
   config            Json // segredos cifrados em repouso (AES-256-GCM)
   signature         String?       @db.Text // assinatura de email (HTML ou texto)
   settings          Json? // não-criptografado: { ignoreGroups, defaultAssigneeId, autoResolveOnRead, distributionMode, imapFolders, lastAssignedUserId }
+  // Time padrão pra onde novas conversas vão quando nenhuma regra/empresa case.
+  // Substitui (e é prioritário sobre) defaultAssigneeId do settings legado.
+  defaultTeamId     String?
+  // Flow disparado em novas conversas (null = sem flow automático). Sobrescrito por RoutingRule action=start_flow.
+  defaultFlowId     String?
   lastSyncedAt      DateTime? // última sincronização bem-sucedida (usado pra delta sync)
   deletedAt         DateTime?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  workspace       Workspace       @relation(fields: [workspaceId], references: [id])
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id])
   evolutionServer EvolutionServer? @relation(fields: [evolutionServerId], references: [id])
   conversations   Conversation[]
+  defaultTeam     Team?            @relation("ChannelDefaultTeam", fields: [defaultTeamId], references: [id])
+  defaultFlow     Flow?            @relation("ChannelDefaultFlow", fields: [defaultFlowId], references: [id])
 
   @@index([workspaceId, type])
   @@index([evolutionServerId])
+  @@index([defaultTeamId])
 }
 
 // ─── Contacts ────────────────────────────────────────────────────────────────
@@ -175,20 +192,20 @@ model Contact {
 
 // ─── Companies ───────────────────────────────────────────────────────────────
 model Company {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String
   name        String
-  color       String   @default("#6366f1")
+  color       String  @default("#6366f1")
   domain      String? // ex: empresa.com.br
 
   // Cadastro estendido
-  logoUrl   String? @db.LongText // data URL base64 — precisa de coluna grande
-  cnpj      String?
-  phone     String?
-  email     String?
-  website   String?
-  address   String? @db.Text
-  notes     String? @db.Text
+  logoUrl String? @db.LongText // data URL base64 — precisa de coluna grande
+  cnpj    String?
+  phone   String?
+  email   String?
+  website String?
+  address String? @db.Text
+  notes   String? @db.Text
 
   // Regras de distribuição de atendimentos.
   // Quando definidas, sobrescrevem canal/workspace.
@@ -210,54 +227,63 @@ model Company {
 
 // ─── Conversations ───────────────────────────────────────────────────────────
 model Conversation {
-  id              String             @id @default(cuid())
-  workspaceId     String
-  channelId       String
-  contactId       String?
-  companyId       String? // vínculo direto com empresa — útil para grupos (DMs herdam via contact.companyId)
-  assigneeId      String? // usuário responsável (Fase 1: regras de canal)
-  externalId      String // chatId WA / threadId Gmail
-  folder          String? // pasta IMAP de origem (só pra emails)
-  subject         String?
-  isGroup         Boolean            @default(false)
-  favorite        Boolean            @default(false)
-  archived        Boolean            @default(false)
-  status          ConversationStatus @default(OPEN)
-  source          ConvSource         @default(LIVE) // LIVE = real-time, IMPORTED = veio do sync histórico
-  importedAt      DateTime? // marca quando foi importada via sync histórico
-  claimedAt       DateTime? // quando alguém assumiu a conversa (Fase B)
-  lastQueuedAt    DateTime? // última vez que entrou em fila (para métricas time-in-queue)
+  id                  String             @id @default(cuid())
+  workspaceId         String
+  channelId           String
+  contactId           String?
+  companyId           String? // vínculo direto com empresa — útil para grupos (DMs herdam via contact.companyId)
+  assigneeId          String? // usuário responsável (Fase 1: regras de canal)
+  // Time atualmente dono da conversa. null = legado/sem time (fila pública geral).
+  // Quando preenchido + assigneeId=null → conv está na "fila do time".
+  teamId              String?
+  externalId          String // chatId WA / threadId Gmail
+  folder              String? // pasta IMAP de origem (só pra emails)
+  subject             String?
+  isGroup             Boolean            @default(false)
+  favorite            Boolean            @default(false)
+  archived            Boolean            @default(false)
+  status              ConversationStatus @default(OPEN)
+  source              ConvSource         @default(LIVE) // LIVE = real-time, IMPORTED = veio do sync histórico
+  importedAt          DateTime? // marca quando foi importada via sync histórico
+  claimedAt           DateTime? // quando alguém assumiu a conversa (Fase B)
+  lastQueuedAt        DateTime? // última vez que entrou em fila (para métricas time-in-queue)
   eligibleAssigneeIds Json? // string[] | null. null = fila pública; preenchido = só esses users veem
-  releasedFrom    Json? // [{ userId, at, reason }] — audit de devoluções (Fase B)
-  lastMessageAt   DateTime?
-  firstResponseAt DateTime? // quando demos a primeira resposta
-  resolvedAt      DateTime? // quando foi finalizada
-  reopenCount     Int                @default(0) // vezes que reabriu
-  triageCount     Int                @default(0) // vezes que foi triada
-  unreadCount     Int                @default(0)
+  // Tags livres por conversa (string[]). Usadas por RoutingRules/Flows.
+  tags                Json?
+  releasedFrom        Json? // [{ userId, at, reason }] — DEPRECATED: usar ConversationTransfer. Mantido pra compat.
+  lastMessageAt       DateTime?
+  firstResponseAt     DateTime? // quando demos a primeira resposta
+  resolvedAt          DateTime? // quando foi finalizada
+  reopenCount         Int                @default(0) // vezes que reabriu
+  triageCount         Int                @default(0) // vezes que foi triada
+  unreadCount         Int                @default(0)
   // Chat interno: discrimina tipo da conversa. EXTERNAL = canais legados (WA/Email).
-  type            ConversationType   @default(EXTERNAL)
+  type                ConversationType   @default(EXTERNAL)
   // Nome do grupo (somente quando type=GROUP). DIRECT/EXTERNAL ficam null.
-  name            String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  name                String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
   workspace      Workspace                 @relation(fields: [workspaceId], references: [id])
   channel        Channel                   @relation(fields: [channelId], references: [id])
   contact        Contact?                  @relation(fields: [contactId], references: [id])
   company        Company?                  @relation(fields: [companyId], references: [id])
   assignee       User?                     @relation("ConversationAssignee", fields: [assigneeId], references: [id])
+  team           Team?                     @relation(fields: [teamId], references: [id])
   messages       Message[]
   participants   ConversationParticipant[]
   cards          Card[]
   tasks          Task[]
   calendarEvents CalendarEvent[]
+  transfers      ConversationTransfer[]
+  flowExecutions FlowExecution[]
 
   // Sem unique — múltiplos tickets por contato são permitidos (modelo ticket)
   @@index([channelId, externalId])
   @@index([workspaceId, status, lastMessageAt])
   @@index([workspaceId, lastMessageAt])
   @@index([workspaceId, assigneeId])
+  @@index([workspaceId, teamId, status])
   @@index([channelId, folder])
   @@index([workspaceId, source])
   @@index([workspaceId, companyId])
@@ -549,7 +575,7 @@ model CalendarAccount {
   workspaceId String
   userId      String
   provider    String   @default("google")
-  email       String?  // email da conta Google
+  email       String? // email da conta Google
   tokens      Json // cifrado
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -569,12 +595,12 @@ model CalendarEvent {
   title             String
   description       String?  @db.Text
   location          String?  @db.Text
-  meetLink          String?  // link de videoconferência (Google Meet, Teams, Zoom)
-  attendees         Json?    // [{ email, name, status }]
+  meetLink          String? // link de videoconferência (Google Meet, Teams, Zoom)
+  attendees         Json? // [{ email, name, status }]
   allDay            Boolean  @default(false)
-  status            String?  // confirmed | tentative | cancelled
-  organizer         String?  // email do organizador
-  color             String?  // colorId do Google Calendar
+  status            String? // confirmed | tentative | cancelled
+  organizer         String? // email do organizador
+  color             String? // colorId do Google Calendar
   startAt           DateTime
   endAt             DateTime
   cardId            String?
@@ -801,7 +827,7 @@ enum ConversationStatus {
 model QuickReply {
   id          String   @id @default(cuid())
   workspaceId String
-  shortcut    String   // atalho digitado após /
+  shortcut    String // atalho digitado após /
   title       String?
   body        String   @db.Text
   createdAt   DateTime @default(now())
@@ -816,4 +842,221 @@ model QuickReply {
 enum ConvSource {
   LIVE // criada por mensagem real-time (Evolution socket)
   IMPORTED // veio do sync de histórico — nasce RESOLVED
+}
+
+// ─── Teams (Setores de Atendimento) ──────────────────────────────────────────
+// Setores como Suporte, Vendas, Financeiro. Cada conversa pode pertencer a um team
+// (Conversation.teamId), e a distribuição entre os membros do team segue seu próprio
+// distributionMode (sobrepõe canal/workspace).
+model Team {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  slug        String // identificador estável (usado em flows e logs)
+  color       String  @default("#6366f1")
+  icon        String? // nome de ícone lucide (ex: "headphones", "shopping-cart")
+  description String? @db.Text
+
+  // Regras de distribuição internas do team.
+  // 'all' = todos os membros ativos veem na fila
+  // 'fixed' = sempre vai pro defaultAssigneeId
+  // 'round_robin' = distribui em cursor sequencial
+  // 'load_balanced' = membro com menos conversas OPEN ganha
+  distributionMode  String  @default("all")
+  defaultAssigneeId String? // usado por 'fixed' — FK lógica
+  roundRobinUserIds Json? // string[] explícito (se null em RR, usa membros ativos)
+  rrCursor          Int     @default(0)
+
+  // SLA e horário (opcionais)
+  businessHours       Json? // { mon: [{ start: "08:00", end: "18:00" }], ... }
+  slaFirstResponseMin Int? // minutos pra primeira resposta
+  slaResolutionMin    Int? // minutos pra resolução
+  overflowTeamId      String? // se ninguém disponível dentro do horário/capacity, transborda
+
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  workspace     Workspace              @relation(fields: [workspaceId], references: [id])
+  members       TeamMembership[]
+  conversations Conversation[]
+  overflowTeam  Team?                  @relation("TeamOverflow", fields: [overflowTeamId], references: [id])
+  overflowOf    Team[]                 @relation("TeamOverflow")
+  channels      Channel[]              @relation("ChannelDefaultTeam")
+  transfersFrom ConversationTransfer[] @relation("TransferFromTeam")
+  transfersTo   ConversationTransfer[] @relation("TransferToTeam")
+  routingRules  RoutingRule[]          @relation("RuleAssignTeam")
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, isActive])
+}
+
+model TeamMembership {
+  id       String   @id @default(cuid())
+  teamId   String
+  userId   String
+  role     TeamRole @default(AGENT)
+  // Pausar agente no team sem remover (ex: férias). Inativos não recebem RR/LB.
+  isActive Boolean  @default(true)
+  // Limite máximo de conversas OPEN simultâneas (usado por load_balanced).
+  // null = sem limite.
+  capacity Int?
+  joinedAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([teamId, userId])
+  @@index([userId, isActive])
+}
+
+enum TeamRole {
+  LEADER
+  AGENT
+}
+
+// ─── Histórico estruturado de transferências ─────────────────────────────────
+// Substitui Conversation.releasedFrom (Json) com tabela auditável. Cada transferência
+// (user→user, user→team, team→team, system→team, release pra fila) gera 1 linha.
+model ConversationTransfer {
+  id             String @id @default(cuid())
+  workspaceId    String
+  conversationId String
+
+  fromUserId String?
+  fromTeamId String?
+  toUserId   String?
+  toTeamId   String?
+
+  // SYSTEM = roteamento automático (regra, flow, novo ticket)
+  // MANUAL = ação humana via UI
+  // RELEASE = devolução à fila (também grava aqui pra ter timeline única)
+  // TAKEOVER = admin assumiu de outro atendente
+  kind   TransferKind @default(MANUAL)
+  reason String?      @db.Text
+
+  actorUserId String? // user que disparou (null = sistema)
+  createdAt   DateTime @default(now())
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id])
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  fromUser     User?        @relation("TransferFromUser", fields: [fromUserId], references: [id])
+  toUser       User?        @relation("TransferToUser", fields: [toUserId], references: [id])
+  fromTeam     Team?        @relation("TransferFromTeam", fields: [fromTeamId], references: [id])
+  toTeam       Team?        @relation("TransferToTeam", fields: [toTeamId], references: [id])
+  actor        User?        @relation("TransferActor", fields: [actorUserId], references: [id])
+
+  @@index([workspaceId, conversationId, createdAt])
+  @@index([workspaceId, toTeamId, createdAt])
+}
+
+enum TransferKind {
+  SYSTEM
+  MANUAL
+  RELEASE
+  TAKEOVER
+}
+
+// ─── Routing Rules (Regras dinâmicas de roteamento) ──────────────────────────
+// Avaliadas em ordem de prioridade ANTES dos fallbacks (canal/workspace).
+// Permite "se contato tem tag VIP → atribui a João", "se canal=Vendas-WA → vai pra team Vendas",
+// "se palavra-chave 'orçamento' → start flow Vendas".
+model RoutingRule {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  // Filtros que devem TODOS bater (AND). null = sem filtro nesse eixo.
+  // { channelIds?: string[], channelTypes?: string[], companyIds?: string[],
+  //   contactTagsAny?: string[], keywordsAny?: string[], businessHours?: bool,
+  //   isGroup?: bool }
+  matcher     Json
+  // Ação a executar quando bater.
+  // { type: 'assign_team'|'assign_user'|'start_flow'|'add_tag',
+  //   teamId?: string, userId?: string, flowId?: string, tags?: string[] }
+  action      Json
+  priority    Int     @default(100)
+  isActive    Boolean @default(true)
+  // Limita avaliação aos triggers selecionados.
+  // Default: ['new_conversation']
+  triggers    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id])
+  // FK opcional pra facilitar joins quando action.type='assign_team'
+  assignTeam   Team?     @relation("RuleAssignTeam", fields: [assignTeamId], references: [id])
+  assignTeamId String?
+
+  @@index([workspaceId, isActive, priority])
+  @@index([assignTeamId])
+}
+
+// ─── Flows (Jornadas de Atendimento) ─────────────────────────────────────────
+// Grafo de nós executado pelo flowExecutor.worker.ts. Cada nó muta o contexto
+// e/ou tem side effects (enviar mensagem, atribuir time, etc).
+//
+// Trigger:
+//   { type: 'new_conversation' | 'message_received' | 'manual',
+//     filters?: { channelIds?: string[], channelTypes?: string[],
+//                 keywordsAny?: string[], companyIds?: string[] } }
+//
+// Graph:
+//   { nodes: [{ id, type, position: {x,y}, data: {...} }],
+//     edges: [{ id, source, sourceHandle?, target }] }
+//
+// Tipos de nó (extensível em nodes/registry.ts):
+//   - start          (entry point — único e obrigatório)
+//   - message        (envia texto/mídia)
+//   - menu           (envia opções e aguarda resposta — pausa em WAITING_INPUT)
+//   - condition      (branch por expressão sobre context/contact/conv)
+//   - assign_team    (move conv pra fila do team)
+//   - assign_user    (atribui direto a um user)
+//   - start_bot      (invoca um Agent)
+//   - wait_for_human (sai do flow e fica em fila — pode reativar)
+//   - tag            (adiciona tags à conv ou contato)
+//   - end
+model Flow {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?  @db.Text
+  trigger     Json
+  graph       Json
+  isActive    Boolean  @default(true)
+  version     Int      @default(1)
+  priority    Int      @default(100)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace  Workspace       @relation(fields: [workspaceId], references: [id])
+  executions FlowExecution[]
+  channels   Channel[]       @relation("ChannelDefaultFlow")
+
+  @@index([workspaceId, isActive, priority])
+}
+
+model FlowExecution {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  flowId         String
+  conversationId String
+  currentNodeId  String?
+  // RUNNING | WAITING_INPUT | COMPLETED | FAILED | CANCELLED
+  status         String    @default("RUNNING")
+  // Variáveis acumuladas { lastMenuChoice, contactTags, custom: {...} }
+  context        Json
+  // Histórico de nós visitados pra debug/auditoria.
+  trace          Json?
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id])
+  flow         Flow         @relation(fields: [flowId], references: [id])
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, status])
+  @@index([workspaceId, status])
 }

@@ -238,14 +238,10 @@ function Toggle({ label, description, value, onChange, disabled }: {
   )
 }
 
-function GlobalRulesPanel({ isAdmin }: { isAdmin: boolean }) {
+function AiSettingsPanel({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient()
 
   type WsSettings = {
-    distributionMode?: 'all' | 'fixed' | 'round_robin'
-    defaultAssigneeId?: string | null
-    roundRobinUserIds?: string[]
-    claimTimeoutMinutes?: number | null
     aiSuggestReplyEnabled?: boolean
   }
 
@@ -254,135 +250,30 @@ function GlobalRulesPanel({ isAdmin }: { isAdmin: boolean }) {
     queryFn: () => apiFetch<WsSettings>('/workspace/settings'),
   })
 
-  const { data: users = [] } = useQuery<{ id: string; name: string | null; email: string }[]>({
-    queryKey: ['users'],
-    queryFn: () => apiFetch('/users'),
-  })
-
   const saveMutation = useMutation({
     mutationFn: (patch: Partial<WsSettings>) =>
       apiFetch('/workspace/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspace-settings'] })
-      toast.success('Regras globais salvas')
+      toast.success('Configurações salvas')
     },
-    onError: () => toast.error('Erro ao salvar regras globais'),
+    onError: () => toast.error('Erro ao salvar configurações'),
   })
 
   if (isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>
 
   const s: WsSettings = settings ?? {}
-  const distMode = s.distributionMode ?? 'all'
   const patch = (update: Partial<WsSettings>) => saveMutation.mutate(update)
-
-  const userLabel = (id: string) => {
-    const u = users.find(u => u.id === id)
-    return u?.name ?? u?.email ?? id
-  }
-
-  const DIST_LABELS: Record<string, { label: string; desc: string }> = {
-    all: { label: 'Todos veem', desc: 'Ninguém é atribuído automaticamente — conversa entra na fila pública' },
-    fixed: { label: 'Fixo', desc: 'Todas as conversas são atribuídas ao mesmo atendente' },
-    round_robin: { label: 'Round-robin', desc: 'Conversas são distribuídas em rodízio entre os atendentes selecionados' },
-  }
 
   return (
     <div className="space-y-5">
-      <p className="text-xs text-muted-foreground">
-        Estas regras se aplicam a todos os canais que <strong>não têm distribuição própria configurada</strong>. Canal sempre sobrescreve o global.
-      </p>
-
-      {/* Distribuição */}
-      <div className="space-y-3">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Distribuição padrão de conversas</p>
-        <div className="space-y-2">
-          {(['all', 'fixed', 'round_robin'] as const).map((mode) => (
-            <label key={mode} className={cn('flex items-start gap-2.5 cursor-pointer rounded-lg border p-3 transition-colors',
-              distMode === mode ? 'border-primary bg-primary/5' : 'hover:bg-muted/40',
-              !isAdmin && 'cursor-not-allowed opacity-60',
-            )}>
-              <input
-                type="radio"
-                name="ws-dist"
-                checked={distMode === mode}
-                onChange={() => isAdmin && patch({ distributionMode: mode })}
-                disabled={!isAdmin}
-                className="mt-0.5 accent-primary"
-              />
-              <div>
-                <p className="text-sm font-medium">{DIST_LABELS[mode].label}</p>
-                <p className="text-xs text-muted-foreground">{DIST_LABELS[mode].desc}</p>
-              </div>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* Fixo: select do atendente padrão */}
-      {distMode === 'fixed' && (
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium">Atendente padrão</p>
-          <select
-            value={s.defaultAssigneeId ?? ''}
-            onChange={e => patch({ defaultAssigneeId: e.target.value || null })}
-            disabled={!isAdmin}
-            className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
-          >
-            <option value="">— Selecione —</option>
-            {users.map(u => (
-              <option key={u.id} value={u.id}>{u.name ?? u.email}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* Round-robin: multi-select */}
-      {distMode === 'round_robin' && (
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium">Atendentes no rodízio</p>
-          <div className="rounded-lg border divide-y max-h-40 overflow-y-auto">
-            {users.map(u => {
-              const selected = (s.roundRobinUserIds ?? []).includes(u.id)
-              return (
-                <label key={u.id} className={cn('flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-muted/40', !isAdmin && 'cursor-not-allowed opacity-60')}>
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    disabled={!isAdmin}
-                    onChange={e => {
-                      const current = s.roundRobinUserIds ?? []
-                      patch({ roundRobinUserIds: e.target.checked ? [...current, u.id] : current.filter(id => id !== u.id) })
-                    }}
-                    className="accent-primary"
-                  />
-                  <span className="text-sm">{u.name ?? u.email}</span>
-                </label>
-              )
-            })}
-          </div>
-          {(s.roundRobinUserIds ?? []).length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              Ordem atual: {(s.roundRobinUserIds ?? []).map(userLabel).join(' → ')}
-            </p>
-          )}
-        </div>
-      )}
-
-      {!isAdmin && (
-        <p className="text-xs text-muted-foreground italic">Apenas administradores podem alterar estas regras.</p>
-      )}
-
-      {/* IA */}
-      <div className="space-y-3 pt-4 border-t">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Inteligência Artificial</p>
-        <Toggle
-          label="Permitir Sugestão de Resposta com IA"
-          description="Habilita o botão mágico no chat para os atendentes pedirem ajuda à IA para redigir ou melhorar respostas."
-          value={s.aiSuggestReplyEnabled ?? true} // Default true
-          onChange={v => patch({ aiSuggestReplyEnabled: v })}
-          disabled={!isAdmin || saveMutation.isPending}
-        />
-      </div>
+      <Toggle
+        label="Permitir Sugestão de Resposta com IA"
+        description="Habilita o botão mágico no chat para os atendentes pedirem ajuda à IA para redigir ou melhorar respostas."
+        value={s.aiSuggestReplyEnabled ?? true} // Default true
+        onChange={v => patch({ aiSuggestReplyEnabled: v })}
+        disabled={!isAdmin || saveMutation.isPending}
+      />
     </div>
   )
 }
@@ -487,10 +378,10 @@ export default function SettingsPage() {
         <CompanyDataPanel isAdmin={isAdmin} />
       </AdminSection>
 
-      {/* Regras globais de distribuição */}
+      {/* Inteligência Artificial */}
       {isAdmin && (
-        <AdminSection title="Regras globais de atendimento" icon={Users} description="Fallback para canais sem distribuição configurada">
-          <GlobalRulesPanel isAdmin={isAdmin} />
+        <AdminSection title="Inteligência Artificial" icon={Users} description="Configurações globais de recursos inteligentes">
+          <AiSettingsPanel isAdmin={isAdmin} />
         </AdminSection>
       )}
 

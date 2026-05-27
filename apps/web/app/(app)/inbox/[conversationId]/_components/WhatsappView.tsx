@@ -854,7 +854,9 @@ function ForwardConversationModal({
   onClose: () => void
   onDone: () => void
 }) {
+  const [mode, setMode] = useState<'user' | 'team'>('user')
   const [selectedUserId, setSelectedUserId] = useState('')
+  const [selectedTeamId, setSelectedTeamId] = useState('')
   const [note, setNote] = useState('')
 
   const { data: users = [] } = useQuery<{ id: string; name: string | null; email: string }[]>({
@@ -863,24 +865,47 @@ function ForwardConversationModal({
     staleTime: 60_000,
   })
 
+  const { data: teams = [] } = useQuery<{ id: string; name: string; color: string; slug: string }[]>({
+    queryKey: ['teams', 'opt'],
+    queryFn: () => apiFetch('/teams/options'),
+    staleTime: 60_000,
+  })
+
   const otherUsers = users.filter(u => u.id !== currentAssigneeId)
 
   const forwardMutation = useMutation({
-    mutationFn: () =>
-      apiFetch(`/conversations/${conversationId}/assign`, {
+    mutationFn: () => {
+      if (mode === 'team') {
+        return apiFetch(`/conversations/${conversationId}/transfer-to-team`, {
+          method: 'POST',
+          body: JSON.stringify({
+            teamId: selectedTeamId,
+            ...(note.trim() && { note: note.trim() }),
+          }),
+        })
+      }
+      return apiFetch(`/conversations/${conversationId}/assign`, {
         method: 'PATCH',
         body: JSON.stringify({
           assigneeId: selectedUserId,
           ...(note.trim() && { note: note.trim() }),
         }),
-      }),
+      })
+    },
     onSuccess: () => {
-      const name = users.find(u => u.id === selectedUserId)?.name ?? 'atendente'
-      toast.success(`Conversa enviada para a fila de ${name}`)
+      if (mode === 'team') {
+        const team = teams.find(t => t.id === selectedTeamId)
+        toast.success(`Conversa enviada para o setor ${team?.name ?? ''}`)
+      } else {
+        const name = users.find(u => u.id === selectedUserId)?.name ?? 'atendente'
+        toast.success(`Conversa enviada para a fila de ${name}`)
+      }
       onDone()
     },
-    onError: () => toast.error('Erro ao encaminhar conversa'),
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao encaminhar'),
   })
+
+  const canSubmit = mode === 'user' ? !!selectedUserId : !!selectedTeamId
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -888,33 +913,63 @@ function ForwardConversationModal({
         <div>
           <h3 className="font-semibold text-base">Encaminhar conversa</h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            A conversa vai para a <strong>fila do atendente</strong> escolhido — ele precisa clicar em "Assumir" para iniciar.
+            {mode === 'team'
+              ? 'A conversa vai para a fila do setor — qualquer membro pode assumir.'
+              : 'A conversa vai para a fila do atendente — ele precisa clicar em "Assumir".'}
           </p>
         </div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Atendente</label>
-          <div className="space-y-1 max-h-48 overflow-y-auto border rounded-lg p-1">
-            {otherUsers.length === 0 && (
-              <p className="text-sm text-muted-foreground text-center py-3">Nenhum outro atendente disponível</p>
-            )}
-            {otherUsers.map(u => (
-              <button
-                key={u.id}
-                onClick={() => setSelectedUserId(u.id)}
-                className={cn(
-                  'w-full text-left px-3 py-2 rounded-md text-sm transition-colors',
-                  selectedUserId === u.id
-                    ? 'bg-primary text-primary-foreground font-medium'
-                    : 'hover:bg-accent',
-                )}
-              >
-                {u.name ?? u.email}
-                {u.name && <span className="ml-1.5 text-xs opacity-60">{u.email}</span>}
-              </button>
-            ))}
-          </div>
+        {/* Tabs */}
+        <div className="flex gap-1 p-1 bg-muted rounded-lg text-xs">
+          <button onClick={() => setMode('user')}
+            className={cn('flex-1 px-2 py-1.5 rounded font-medium transition',
+              mode === 'user' ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground')}>
+            Atendente
+          </button>
+          <button onClick={() => setMode('team')}
+            className={cn('flex-1 px-2 py-1.5 rounded font-medium transition',
+              mode === 'team' ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground')}>
+            Setor
+          </button>
         </div>
+
+        {mode === 'user' ? (
+          <div className="space-y-2">
+            <div className="space-y-1 max-h-48 overflow-y-auto border rounded-lg p-1">
+              {otherUsers.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-3">Nenhum outro atendente disponível</p>
+              )}
+              {otherUsers.map(u => (
+                <button key={u.id} onClick={() => setSelectedUserId(u.id)}
+                  className={cn(
+                    'w-full text-left px-3 py-2 rounded-md text-sm transition-colors',
+                    selectedUserId === u.id ? 'bg-primary text-primary-foreground font-medium' : 'hover:bg-accent',
+                  )}>
+                  {u.name ?? u.email}
+                  {u.name && <span className="ml-1.5 text-xs opacity-60">{u.email}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="space-y-1 max-h-48 overflow-y-auto border rounded-lg p-1">
+              {teams.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-3">Nenhum setor cadastrado</p>
+              )}
+              {teams.map(t => (
+                <button key={t.id} onClick={() => setSelectedTeamId(t.id)}
+                  className={cn(
+                    'w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2',
+                    selectedTeamId === t.id ? 'bg-primary text-primary-foreground font-medium' : 'hover:bg-accent',
+                  )}>
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: t.color }} />
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Nota (opcional)</label>
@@ -933,9 +988,9 @@ function ForwardConversationModal({
           </button>
           <button
             onClick={() => forwardMutation.mutate()}
-            disabled={!selectedUserId || forwardMutation.isPending}
+            disabled={!canSubmit || forwardMutation.isPending}
             className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors">
-            {forwardMutation.isPending ? 'Enviando…' : 'Enviar pra fila'}
+            {forwardMutation.isPending ? 'Enviando…' : 'Encaminhar'}
           </button>
         </div>
       </div>
@@ -2594,7 +2649,7 @@ function ContactCardModal({ onClose, onSend, isPending }: {
           {contacts.map(c => {
             const org = c.company?.name
             const isSelected = selected?.id === c.id
-            const avatarUrl = (c.metadata as any)?.avatarUrl
+            const avatarUrl = (c as any).metadata?.avatarUrl
             return (
               <button
                 key={c.id}

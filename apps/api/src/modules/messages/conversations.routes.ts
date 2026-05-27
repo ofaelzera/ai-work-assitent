@@ -7,6 +7,7 @@ import { makeMetaClient } from '../channels/meta.client.js'
 import { sendEmail, moveImapMessage } from '../channels/email.client.js'
 import { dedupConversations } from './dedup.service.js'
 import { routeNewConversation } from './routing.service.js'
+import { resolveTeamEligibility, getUserTeamIds } from '../teams/teams.service.js'
 import { Prisma } from '@prisma/client'
 
 /**
@@ -50,6 +51,13 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           folder: z.string().optional(),
           assigneeId: z.string().optional(),  // "me" | "unassigned" | "mine_and_queue" | <userId>
           companyId: z.string().optional(),   // filtra conversas da empresa (direto OU via contato)
+          teamId: z.string().optional(),      // filtra por team específico (id ou "none" pra sem-team)
+          // Modo de inbox (sobrepõe assigneeId pra simplificar UI):
+          //  - mine   → conversas atribuídas a mim
+          //  - team   → fila dos meus times (assigneeId=null AND teamId ∈ meus_times)
+          //  - public → fila pública geral (assigneeId=null AND teamId=null AND eligible=null)
+          //  - all    → admin: vê tudo
+          inbox: z.enum(['mine', 'team', 'public', 'all']).optional(),
           q: z.string().optional(),
           cursor: z.string().optional(),
           limit: z.coerce.number().default(50),
@@ -60,7 +68,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req) => {
       const { workspaceId, sub: userId } = req.user
-      const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, companyId, q, cursor, limit, filter, includeImported } = req.query
+      const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, companyId, teamId, inbox, q, cursor, limit, filter, includeImported } = req.query
 
       // Resolve filtro de canal por tipo (single, CSV-in ou CSV-not-in)
       const channelTypeFilter: Record<string, unknown> = {}
@@ -80,6 +88,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       //   explicitamente a Fila (`assigneeId=unassigned`) — aí mostra as não
       //   atribuídas pra ele poder assumir.
       const canViewAll = await hasPermission(req.user, 'conversations.viewAll')
+      const canViewAllTeams = await hasPermission(req.user, 'teams.viewAll')
       let assigneeFilter: Record<string, unknown> | null = null
       // Helper: combina filtro de assignee=null com eligibility (fila restrita).
       // Para admins/supervisores, eligibility é ignorado — vêem TODAS as convs da
@@ -88,7 +97,34 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         canViewAll
           ? { assigneeId: null }
           : { AND: [{ assigneeId: null }, eligibilityFilter(userId)] }
-      if (canViewAll) {
+
+      // Filtro de team: o que o usuário pode ver dentro da fila do team.
+      // 'team' inbox: convs com teamId IN (meus_teams) sem dono.
+      // 'public' inbox: convs sem team e sem dono.
+      const myTeamIdsPromise = inbox === 'team' || (!canViewAllTeams && (inbox || assigneeId === 'unassigned'))
+        ? getUserTeamIds(userId)
+        : Promise.resolve<string[]>([])
+      const myTeamIds = await myTeamIdsPromise
+
+      // Aplica modo `inbox` (sobrepõe assigneeId legado quando presente)
+      if (inbox === 'mine') {
+        assigneeFilter = { assigneeId: userId }
+      } else if (inbox === 'team') {
+        assigneeFilter = {
+          AND: [
+            { assigneeId: null },
+            myTeamIds.length > 0 ? { teamId: { in: myTeamIds } } : { id: '__none__' },
+          ],
+        }
+      } else if (inbox === 'public') {
+        assigneeFilter = canViewAll
+          ? { AND: [{ assigneeId: null }, { teamId: null }] }
+          : { AND: [{ assigneeId: null }, { teamId: null }, eligibilityFilter(userId)] }
+      } else if (inbox === 'all') {
+        // ADMIN/Supervisor: vê tudo (sem filtro de assignee)
+        if (canViewAll) assigneeFilter = null
+        else assigneeFilter = { assigneeId: userId }
+      } else if (canViewAll) {
         assigneeFilter = assigneeId === 'unassigned'
           ? queueClause()
           : assigneeId === 'mine_and_queue'
@@ -100,14 +136,38 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           ? { assigneeId: assigneeId === 'me' ? userId : assigneeId }
           : null
       } else {
-        // Sem conversations.viewAll: só vê o que é dele
+        // Sem conversations.viewAll e sem `inbox`: só vê o que é dele OU fila dos times dele OU fila pública/restrita
         if (assigneeId === 'unassigned') {
-          assigneeFilter = queueClause()
+          // Atendente puxando fila → soma fila pública (sem team) + fila dos meus times + conversas enviadas diretamente
+          assigneeFilter = {
+            AND: [
+              { assigneeId: null },
+              {
+                OR: [
+                  // explicitly eligible for this user (e.g. transferred directly)
+                  { eligibleAssigneeIds: { array_contains: userId } },
+                  // fila pública restrita por elegibilidade
+                  { AND: [{ teamId: null }, eligibilityFilter(userId)] },
+                  // fila dos meus times
+                  ...(myTeamIds.length > 0 ? [{ teamId: { in: myTeamIds } } as any] : []),
+                ],
+              },
+            ],
+          }
         } else {
-          // Qualquer outro caso (mine, todos, others, undefined) → força só as minhas
+          // Default: só as minhas
           assigneeFilter = { assigneeId: userId }
         }
       }
+
+      // Filtro adicional por team (independente do inbox mode)
+      let teamScope: Record<string, unknown> | null = null
+      if (teamId === 'none') {
+        teamScope = { teamId: null }
+      } else if (teamId) {
+        teamScope = { teamId }
+      }
+
       const memberScope = null  // já incluso em assigneeFilter
 
       // Chat interno (DIRECT/GROUP) tem UI dedicada em /chat e NÃO deve aparecer
@@ -135,6 +195,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
                 AND: [
                   ...(memberScope ? [memberScope] : []),
                   ...(assigneeFilter ? [assigneeFilter] : []),
+                  ...(teamScope ? [teamScope] : []),
                 ],
               }),
           // Arquivadas ficam separadas; demais filtros excluem arquivadas
@@ -175,6 +236,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           channel: { select: { id: true, type: true, label: true } },
           assignee: { select: { id: true, name: true, email: true, settings: true } },
           company: { select: { id: true, name: true, color: true } },
+          team: { select: { id: true, name: true, slug: true, color: true, icon: true } },
           messages: {
             orderBy: { sentAt: 'desc' },
             take: 1,
@@ -917,6 +979,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           workspaceId,
           channelId,
           contactId: contact.id,
+          messageBody: text,
           autoAssign: true,
           fallbackUserId: req.user.sub,
         })
@@ -933,6 +996,8 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
             assigneeId: route.assigneeId,
             claimedAt: route.assigneeId ? now : null,
             lastQueuedAt: now,
+            ...(route.teamId && { teamId: route.teamId }),
+            ...(route.eligibleAssigneeIds && { eligibleAssigneeIds: route.eligibleAssigneeIds }),
           },
         })
         logger.info(
@@ -1597,9 +1662,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
-  // ─── Encaminhar conversa para um usuário (transferir pra fila do destino) ──
-  // A conv vai para a FILA restrita ao usuário destino — ele precisa clicar
-  // Assumir para iniciar (gera métricas + dispara boas-vindas).
+  // ─── Encaminhar conversa para um usuário OU team ───────────────────────────
+  // Aceita `assigneeId` (null = fila), `teamId` (null = remove vínculo de time)
+  // ou ambos simultaneamente (ex: atribuir a um usuário dentro de um team).
+  // Mantém compat: clientes antigos que só mandam `assigneeId` continuam funcionando.
   // Quem pode: ADMIN sempre; MEMBER só se for o assignee atual.
   app.patch(
     '/conversations/:id/assign',
@@ -1608,52 +1674,126 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         params: z.object({ id: z.string() }),
         body: z.object({
-          assigneeId: z.string().nullable(),
+          assigneeId: z.string().nullable().optional(),
+          teamId: z.string().nullable().optional(),
           note: z.string().max(1000).optional(),
-        }),
+        }).refine(
+          (b) => b.assigneeId !== undefined || b.teamId !== undefined,
+          { message: 'Informe assigneeId ou teamId' },
+        ),
       },
     },
     async (req: any, reply) => {
       const { workspaceId, sub: userId, role } = req.user
-      const { assigneeId: targetUserId, note } = req.body
+      const { assigneeId: targetUserId, teamId: targetTeamId, note } = req.body
       const conv = await prisma.conversation.findFirstOrThrow({
         where: { id: req.params.id, workspaceId },
-        select: { assigneeId: true, assignee: { select: { id: true, name: true, email: true } } },
+        select: {
+          assigneeId: true,
+          teamId: true,
+          assignee: { select: { id: true, name: true, email: true } },
+          team: { select: { id: true, name: true } },
+        },
       })
       if (role !== 'ADMIN' && conv.assigneeId !== userId) {
         return reply.forbidden('Você precisa ser o atendente atual (ou admin) para encaminhar esta conversa')
       }
 
-      // Resolve nomes pra log de evento
-      const [fromUser, toUser] = await Promise.all([
+      // Se vai mexer no team, exige permissão específica
+      if (targetTeamId !== undefined && targetTeamId !== conv.teamId) {
+        const canTransferTeam = await hasPermission(req.user, 'conversations.transferTeam')
+        if (!canTransferTeam) {
+          return reply.forbidden('Você não tem permissão para transferir entre setores')
+        }
+      }
+
+      // Resolve dados pra log
+      const [fromUser, toUser, toTeam] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, email: true } }),
         targetUserId
           ? prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true, name: true, email: true } })
           : null,
+        targetTeamId
+          ? prisma.team.findUnique({ where: { id: targetTeamId }, select: { id: true, name: true } })
+          : null,
       ])
 
       const now = new Date()
-      // Encaminhar para usuário específico → conv vai para FILA restrita a ele
-      // Encaminhar para null → devolve à fila pública
+
+      // Calcula a nova elegibilidade.
+      // Se foi pedido team → resolve via teamEligibility (distribui conforme distMode).
+      // Se foi pedido só user → restringe a ele.
+      // Se foi pedido null pra ambos → fila pública.
+      let nextEligible: string[] | null = null
+      let nextTeamId: string | null | undefined = targetTeamId === undefined ? conv.teamId : targetTeamId
+
+      if (targetUserId) {
+        nextEligible = [targetUserId]
+      } else if (targetTeamId) {
+        const elig = await resolveTeamEligibility({ teamId: targetTeamId })
+        nextEligible = elig.userIds.length > 0 ? elig.userIds : null
+        // Overflow opcional
+        if (elig.overflowed) {
+          const t = await prisma.team.findUnique({ where: { id: targetTeamId }, select: { overflowTeamId: true } })
+          if (t?.overflowTeamId) {
+            const elig2 = await resolveTeamEligibility({ teamId: t.overflowTeamId })
+            nextTeamId = t.overflowTeamId
+            nextEligible = elig2.userIds.length > 0 ? elig2.userIds : null
+          }
+        }
+      } else if (targetUserId === null && targetTeamId === null) {
+        nextEligible = null
+      } else if (targetUserId === null && targetTeamId === undefined) {
+        // Mantém team atual, mas tira atribuição → recalcula elegibilidade pelo team
+        if (conv.teamId) {
+          const elig = await resolveTeamEligibility({ teamId: conv.teamId })
+          nextEligible = elig.userIds.length > 0 ? elig.userIds : null
+        } else {
+          nextEligible = null
+        }
+      }
+
       const updated = await prisma.conversation.update({
         where: { id: req.params.id, workspaceId },
         data: {
           assigneeId: null,
           claimedAt: null,
           lastQueuedAt: now,
-          eligibleAssigneeIds: targetUserId ? [targetUserId] as any : Prisma.JsonNull,
+          ...(targetTeamId !== undefined && { teamId: nextTeamId ?? null }),
+          eligibleAssigneeIds: nextEligible ? (nextEligible as any) : Prisma.JsonNull,
         },
         select: {
           id: true,
           assigneeId: true,
+          teamId: true,
           eligibleAssigneeIds: true,
           assignee: { select: { id: true, name: true, email: true, settings: true } },
+          team: { select: { id: true, name: true, slug: true, color: true, icon: true } },
         },
       })
 
-      // Cria evento interno no timeline (não envia pro cliente)
+      // Grava histórico estruturado
+      await prisma.conversationTransfer.create({
+        data: {
+          workspaceId,
+          conversationId: req.params.id,
+          fromUserId: conv.assigneeId,
+          fromTeamId: conv.teamId,
+          toUserId: targetUserId ?? null,
+          toTeamId: targetTeamId === undefined ? conv.teamId : (nextTeamId ?? null),
+          kind: 'MANUAL',
+          reason: note ?? null,
+          actorUserId: userId,
+        },
+      })
+
+      // Timeline visual
       const fromLabel = fromUser?.name ?? fromUser?.email ?? 'Sistema'
-      const toLabel = toUser ? (toUser.name ?? toUser.email) : 'Fila pública'
+      const toUserLabel = toUser ? (toUser.name ?? toUser.email) : null
+      const toTeamLabel = toTeam ? toTeam.name : null
+      const toLabel = toUserLabel
+        ? (toTeamLabel ? `${toUserLabel} (${toTeamLabel})` : toUserLabel)
+        : (toTeamLabel ?? 'Fila pública')
       const transferBody = note
         ? `${fromLabel} encaminhou para ${toLabel}\n— ${note}`
         : `${fromLabel} encaminhou para ${toLabel}`
@@ -1667,6 +1807,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           fromUserId: userId,
           fromName: fromLabel,
           toUserId: targetUserId,
+          toTeamId: targetTeamId === undefined ? conv.teamId : nextTeamId,
           toName: toLabel,
           note: note ?? null,
         },
@@ -1676,6 +1817,113 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         actorUserId: userId,
         targetType: 'conversation',
         targetId: req.params.id,
+        payload: { toUserId: targetUserId ?? null, toTeamId: targetTeamId === undefined ? conv.teamId : nextTeamId ?? null },
+      })
+
+      return updated
+    },
+  )
+
+  // ─── Transferir conversa para um setor (atalho explícito) ──────────────────
+  // Equivalente a /assign com teamId, mas mais explícito na UI e força a checagem
+  // de `conversations.transferTeam`.
+  app.post(
+    '/conversations/:id/transfer-to-team',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          teamId: z.string(),
+          note: z.string().max(1000).optional(),
+        }),
+      },
+    },
+    async (req: any, reply) => {
+      const { workspaceId, sub: userId, role } = req.user
+      const { teamId: targetTeamId, note } = req.body
+
+      const canTransferTeam = await hasPermission(req.user, 'conversations.transferTeam')
+      if (!canTransferTeam) {
+        return reply.forbidden('Sem permissão para transferir entre setores')
+      }
+
+      const conv = await prisma.conversation.findFirstOrThrow({
+        where: { id: req.params.id, workspaceId },
+        select: { assigneeId: true, teamId: true },
+      })
+      if (role !== 'ADMIN' && conv.assigneeId !== userId) {
+        const canViewAll = await hasPermission(req.user, 'conversations.viewAll')
+        if (!canViewAll) {
+          return reply.forbidden('Apenas o atendente atual ou supervisor pode transferir')
+        }
+      }
+
+      const team = await prisma.team.findFirst({
+        where: { id: targetTeamId, workspaceId, deletedAt: null },
+        select: { id: true, name: true, overflowTeamId: true },
+      })
+      if (!team) return reply.notFound('Time não encontrado')
+
+      const elig = await resolveTeamEligibility({ teamId: team.id })
+      let nextTeamId: string = team.id
+      let nextEligible: string[] | null = elig.userIds.length > 0 ? elig.userIds : null
+      if (elig.overflowed && team.overflowTeamId) {
+        const elig2 = await resolveTeamEligibility({ teamId: team.overflowTeamId })
+        nextTeamId = team.overflowTeamId
+        nextEligible = elig2.userIds.length > 0 ? elig2.userIds : null
+      }
+
+      const now = new Date()
+      const updated = await prisma.conversation.update({
+        where: { id: req.params.id, workspaceId },
+        data: {
+          assigneeId: null,
+          claimedAt: null,
+          lastQueuedAt: now,
+          teamId: nextTeamId,
+          eligibleAssigneeIds: nextEligible ? (nextEligible as any) : Prisma.JsonNull,
+        },
+        select: {
+          id: true,
+          teamId: true,
+          assigneeId: true,
+          eligibleAssigneeIds: true,
+          team: { select: { id: true, name: true, slug: true, color: true, icon: true } },
+        },
+      })
+
+      await prisma.conversationTransfer.create({
+        data: {
+          workspaceId,
+          conversationId: req.params.id,
+          fromUserId: conv.assigneeId,
+          fromTeamId: conv.teamId,
+          toTeamId: nextTeamId,
+          kind: 'MANUAL',
+          reason: note ?? null,
+          actorUserId: userId,
+        },
+      })
+
+      const fromUser = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } })
+      const fromLabel = fromUser?.name ?? fromUser?.email ?? 'Sistema'
+      await createInternalEvent({
+        workspaceId,
+        conversationId: req.params.id,
+        kind: 'transfer',
+        body: note
+          ? `${fromLabel} transferiu para o setor ${team.name}\n— ${note}`
+          : `${fromLabel} transferiu para o setor ${team.name}`,
+        fromUserId: userId,
+        meta: { fromUserId: userId, toTeamId: nextTeamId, toTeamName: team.name, note: note ?? null },
+      })
+
+      await eventBus.audit(workspaceId, 'conversation.transferred_team', {
+        actorUserId: userId,
+        targetType: 'conversation',
+        targetId: req.params.id,
+        payload: { toTeamId: nextTeamId },
       })
 
       return updated
@@ -1828,7 +2076,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const conversation = await prisma.conversation.findFirst({
         where: { id, workspaceId },
-        select: { assigneeId: true, releasedFrom: true },
+        select: { assigneeId: true, teamId: true, releasedFrom: true },
       })
       if (!conversation) return reply.notFound('Conversa não encontrada')
 
@@ -1841,21 +2089,46 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         ? conversation.releasedFrom as any[]
         : []
 
+      // Se a conv tem team, ao devolver recalcula elegibilidade pelo distMode do team
+      let nextEligible: string[] | null = null
+      if (conversation.teamId) {
+        const elig = await resolveTeamEligibility({ teamId: conversation.teamId })
+        nextEligible = elig.userIds.length > 0 ? elig.userIds : null
+      }
+
+      const now = new Date()
       const updated = await prisma.conversation.update({
         where: { id },
         data: {
           assigneeId: null,
           claimedAt: null,
+          lastQueuedAt: now,
+          // mantém legado em sincronia até remoção futura
           releasedFrom: [
             ...prevReleases,
-            { userId, at: new Date().toISOString(), reason },
+            { userId, at: now.toISOString(), reason },
           ] as any,
+          eligibleAssigneeIds: nextEligible ? (nextEligible as any) : Prisma.JsonNull,
         },
         select: {
           id: true,
           assigneeId: true,
           claimedAt: true,
-          releasedFrom: true,
+          teamId: true,
+          eligibleAssigneeIds: true,
+        },
+      })
+
+      await prisma.conversationTransfer.create({
+        data: {
+          workspaceId,
+          conversationId: id,
+          fromUserId: userId,
+          fromTeamId: conversation.teamId,
+          toTeamId: conversation.teamId, // continua no mesmo team, apenas volta pra fila
+          kind: 'RELEASE',
+          reason,
+          actorUserId: userId,
         },
       })
 
@@ -1866,6 +2139,30 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       })
 
       return updated
+    },
+  )
+
+  // ─── Histórico de transferências de uma conversa ─────────────────────────
+  app.get(
+    '/conversations/:id/transfers',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req) => {
+      const { workspaceId } = req.user
+      return prisma.conversationTransfer.findMany({
+        where: { workspaceId, conversationId: req.params.id },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          fromUser: { select: { id: true, name: true, email: true } },
+          toUser: { select: { id: true, name: true, email: true } },
+          fromTeam: { select: { id: true, name: true, color: true } },
+          toTeam: { select: { id: true, name: true, color: true } },
+          actor: { select: { id: true, name: true, email: true } },
+        },
+        take: 100,
+      })
     },
   )
 

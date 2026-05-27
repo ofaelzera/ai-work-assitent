@@ -31,6 +31,9 @@ import { reportsRoutes } from './modules/reports/reports.routes.js'
 import { chatRoutes } from './modules/chat/chat.routes.js'
 import { quickRepliesRoutes } from './modules/quick-replies/quick-replies.routes.js'
 import { evolutionServersRoutes } from './modules/evolution-servers/evolution-servers.routes.js'
+import { teamsRoutes } from './modules/teams/teams.routes.js'
+import { routingRulesRoutes } from './modules/routing/rules.routes.js'
+import { flowsRoutes } from './modules/flows/flows.routes.js'
 import type { JwtPayload } from '@aiwa/shared'
 
 declare module '@fastify/jwt' {
@@ -179,6 +182,9 @@ export async function buildApp() {
   await app.register(chatRoutes)
   await app.register(quickRepliesRoutes)
   await app.register(evolutionServersRoutes)
+  await app.register(teamsRoutes)
+  await app.register(routingRulesRoutes)
+  await app.register(flowsRoutes)
 
   return app
 }

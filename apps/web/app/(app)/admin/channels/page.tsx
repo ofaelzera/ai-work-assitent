@@ -636,67 +636,7 @@ function ChannelRulesPanel({ channelId, channelType }: { channelId: string; chan
         </div>
       )}
 
-      {/* Distribuição — funciona para todos os tipos */}
-      <div className="space-y-3">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Distribuição de conversas</p>
-        <div className="space-y-2">
-          {(['all', 'fixed', 'round_robin'] as const).map((mode) => (
-            <label key={mode} className="flex items-center gap-2.5 cursor-pointer">
-              <input
-                type="radio"
-                name={`dist-${channelId}`}
-                checked={distMode === mode}
-                onChange={() => patch({ distributionMode: mode })}
-                className="accent-primary"
-              />
-              <div>
-                <span className="text-sm">
-                  {mode === 'all' ? 'Todos os atendentes' : mode === 'fixed' ? 'Atendente fixo' : 'Revezamento (round-robin)'}
-                </span>
-              </div>
-            </label>
-          ))}
-        </div>
 
-        {/* Seletor de atendente fixo */}
-        {distMode === 'fixed' && (
-          <select
-            value={s.defaultAssigneeId ?? ''}
-            onChange={(e) => patch({ defaultAssigneeId: e.target.value || null })}
-            className="w-full rounded-lg border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-          >
-            <option value="">Selecione um atendente...</option>
-            {users.map(u => (
-              <option key={u.id} value={u.id}>{u.name ?? u.email}</option>
-            ))}
-          </select>
-        )}
-
-        {/* Multi-select para round-robin */}
-        {distMode === 'round_robin' && (
-          <div className="space-y-1.5">
-            <p className="text-xs text-muted-foreground">Selecione os atendentes em revezamento:</p>
-            {users.map(u => {
-              const ids = s.roundRobinUserIds ?? []
-              const checked = ids.includes(u.id)
-              return (
-                <label key={u.id} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => {
-                      const next = checked ? ids.filter(id => id !== u.id) : [...ids, u.id]
-                      patch({ roundRobinUserIds: next })
-                    }}
-                    className="accent-primary"
-                  />
-                  <span className="text-sm">{u.name ?? u.email}</span>
-                </label>
-              )
-            })}
-          </div>
-        )}
-      </div>
 
       {saveMutation.isPending && (
         <p className="text-xs text-muted-foreground animate-pulse">Salvando...</p>

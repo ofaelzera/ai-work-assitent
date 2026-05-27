@@ -1,6 +1,9 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
+import { z } from 'zod'
 import { Prisma } from '@prisma/client'
 import { prisma } from '../../lib/prisma.js'
+import { hasPermission, requirePerm } from '../../lib/acl.js'
+import { getTeamStats, getUserTeamIds } from '../teams/teams.service.js'
 
 /**
  * Dashboard role-aware:
@@ -214,6 +217,102 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
         recentConversations,
         recentTasks,
       }
+    },
+  )
+
+  // ─── Dashboard de setores (times) ──────────────────────────────────────────
+  // Lista stats por team. Quem não tem teams.viewAll vê só os seus.
+  app.get(
+    '/dashboard/teams',
+    { onRequest: [app.authenticate, requirePerm('teams.view')] },
+    async (req) => {
+      const { workspaceId, sub: userId } = req.user
+      const canViewAll = await hasPermission(req.user, 'teams.viewAll')
+      const teams = await prisma.team.findMany({
+        where: {
+          workspaceId,
+          deletedAt: null,
+          ...(!canViewAll && { members: { some: { userId, isActive: true } } }),
+        },
+        select: {
+          id: true, name: true, slug: true, color: true, icon: true,
+          distributionMode: true, isActive: true,
+          slaFirstResponseMin: true, slaResolutionMin: true,
+          _count: { select: { members: true } },
+        },
+        orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+      })
+      const stats = await Promise.all(teams.map((t) => getTeamStats(workspaceId, t.id)))
+      return teams.map((t, i) => ({ ...t, stats: stats[i] }))
+    },
+  )
+
+  // ─── Carga por agente dentro de um team ────────────────────────────────────
+  app.get(
+    '/dashboard/teams/:id/agents',
+    {
+      onRequest: [app.authenticate, requirePerm('teams.view')],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId, sub: userId } = req.user
+      const canViewAll = await hasPermission(req.user, 'teams.viewAll')
+      const team = await prisma.team.findFirst({
+        where: { id: req.params.id, workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!team) return reply.notFound('Time não encontrado')
+      if (!canViewAll) {
+        const ids = await getUserTeamIds(userId)
+        if (!ids.includes(team.id)) return reply.forbidden('Sem acesso a este setor')
+      }
+
+      const memberships = await prisma.teamMembership.findMany({
+        where: { teamId: team.id, isActive: true, user: { deletedAt: null } },
+        include: { user: { select: { id: true, name: true, email: true } } },
+      })
+      const userIds = memberships.map((m) => m.userId)
+      if (userIds.length === 0) return []
+
+      const [openCounts, recent] = await Promise.all([
+        prisma.conversation.groupBy({
+          by: ['assigneeId'],
+          where: { workspaceId, teamId: team.id, status: 'OPEN', assigneeId: { in: userIds } },
+          _count: { _all: true },
+        }),
+        prisma.conversation.findMany({
+          where: {
+            workspaceId,
+            teamId: team.id,
+            assigneeId: { in: userIds },
+            firstResponseAt: { not: null },
+            createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+          },
+          select: { assigneeId: true, createdAt: true, firstResponseAt: true },
+          take: 500,
+        }),
+      ])
+
+      const openByUser = new Map(openCounts.map((c) => [c.assigneeId, c._count._all]))
+      const sumByUser = new Map<string, { sum: number; n: number }>()
+      for (const r of recent) {
+        if (!r.assigneeId) continue
+        const cur = sumByUser.get(r.assigneeId) ?? { sum: 0, n: 0 }
+        cur.sum += (r.firstResponseAt!.getTime() - r.createdAt.getTime())
+        cur.n += 1
+        sumByUser.set(r.assigneeId, cur)
+      }
+
+      return memberships.map((m) => {
+        const avg = sumByUser.get(m.userId)
+        return {
+          user: m.user,
+          role: m.role,
+          capacity: m.capacity,
+          openConversations: openByUser.get(m.userId) ?? 0,
+          avgFirstResponseMin: avg && avg.n > 0 ? Math.round(avg.sum / avg.n / 60_000) : null,
+        }
+      })
     },
   )
 }
