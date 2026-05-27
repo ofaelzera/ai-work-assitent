@@ -1,38 +1,22 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { exec } from 'node:child_process'
-import path from 'node:path'
-import util from 'node:util'
-import url from 'node:url'
 import * as argon2 from 'argon2'
 import { prisma } from '../../lib/prisma.js'
 import { markSetupCompleted } from '../../lib/setup-status.js'
 
-const execPromise = util.promisify(exec)
-const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
-
-// Roda `prisma migrate deploy` tentando várias formas (PM2 às vezes não tem
-// pnpm no PATH). cwd = apps/api pra achar prisma/schema.prisma.
-async function runMigrations(): Promise<{ ok: true } | { ok: false; error: string }> {
-  // dist/modules/setup → apps/api
-  const apiDir = path.resolve(__dirname, '../../..')
-  const env = { ...process.env, PATH: process.env.PATH ?? '' }
-  const attempts = [
-    'npx --yes prisma migrate deploy',
-    'pnpm exec prisma migrate deploy',
-    'node ./node_modules/prisma/build/index.js migrate deploy',
-    'pnpm --filter api prisma migrate deploy',
-  ]
-  let lastError = ''
-  for (const cmd of attempts) {
-    try {
-      await execPromise(cmd, { cwd: apiDir, env, timeout: 120_000 })
-      return { ok: true }
-    } catch (err: any) {
-      lastError = err?.stderr || err?.message || String(err)
-    }
+/**
+ * Detecta se as tabelas do schema já existem fazendo uma query barata.
+ * Retorna false quando o erro for "table doesn't exist" (P2021).
+ */
+async function areTablesReady(): Promise<boolean> {
+  try {
+    await prisma.user.findFirst({ select: { id: true } })
+    return true
+  } catch (err: any) {
+    if (err?.code === 'P2021') return false
+    // Outros erros: assume que tabelas existem e deixa a query principal explodir
+    return true
   }
-  return { ok: false, error: lastError }
 }
 
 export async function setupRoutes(app: FastifyInstance) {
@@ -63,13 +47,13 @@ export async function setupRoutes(app: FastifyInstance) {
     const data = bodySchema.parse(req.body)
 
     try {
-      // 1. Rodar migrations PRIMEIRO (antes de qualquer query Prisma)
-      const migrate = await runMigrations()
-      if (!migrate.ok) {
-        app.log.error({ stderr: migrate.error }, 'migrate deploy falhou')
-        return reply.status(500).send({
+      // 1. Garantir que as tabelas existem (migrations precisam ter sido aplicadas
+      //    fora do setup — é parte do deploy).
+      const ready = await areTablesReady()
+      if (!ready) {
+        return reply.status(412).send({
           success: false,
-          error: `Falha ao aplicar migrations: ${migrate.error.slice(0, 500)}. Rode manualmente no servidor: cd apps/api && npx prisma migrate deploy`,
+          error: 'As tabelas do banco ainda não foram criadas. Rode as migrations no servidor antes de continuar:\n\n  cd apps/api && npx prisma migrate deploy',
         })
       }
 
