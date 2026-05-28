@@ -152,7 +152,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         )
         reply.setCookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTS)
         return reply.redirect(
-          `${webUrl}/auth/google-callback?access_token=${accessToken}`,
+          `${webUrl}/google-callback?access_token=${accessToken}`,
         )
       } catch (err: any) {
         req.log.warn({ err }, 'Google login failed')
