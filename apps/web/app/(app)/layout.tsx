@@ -27,6 +27,7 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSSE } from '@/lib/sse'
 import { useTheme } from 'next-themes'
+import { NotificationManager } from '@/components/providers/NotificationManager'
 
 /**
  * Itens do menu principal.
@@ -452,6 +453,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+      <NotificationManager />
     </div>
   )
 }
