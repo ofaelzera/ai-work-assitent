@@ -99,7 +99,7 @@ function AvatarUploader({ profile }: { profile: MeProfile }) {
           {avatarUrl ? (
             <img src={avatarUrl} alt={profile.name} className="h-full w-full object-cover" />
           ) : (
-            <div className="h-full w-full flex items-center justify-center text-2xl font-bold text-white bg-gradient-to-br from-primary to-violet-600">
+            <div className="h-full w-full flex items-center justify-center text-2xl font-bold text-primary-foreground bg-gradient-to-br from-primary to-secondary">
               {initials(profile.name, profile.email)}
             </div>
           )}

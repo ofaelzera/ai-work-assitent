@@ -61,6 +61,10 @@ async function main() {
     {
       name: 'Triagem',
       description: 'Classifica mensagens e identifica demandas',
+      // Triagem fica DESATIVADA por padrão — a triagem/distribuição automática
+      // agora é feita pelos Flows configuráveis. Admin pode ativar manualmente
+      // se quiser o classificador antigo voltar a rodar em paralelo.
+      isActive: false,
       systemPrompt: `Você é um agente de triagem. Analise a mensagem e responda SOMENTE em JSON válido com este schema:
 {
   "isDemand": boolean,

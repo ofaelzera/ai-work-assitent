@@ -16,7 +16,7 @@ const LoginForm = dynamic(() => import('./LoginForm'), {
   loading: () => (
     <div translate="no" className="relative min-h-screen flex items-center justify-center bg-background p-4 overflow-hidden" suppressHydrationWarning>
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/20 blur-[120px] animate-pulse pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/20 blur-[120px] animate-pulse delay-1000 pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-secondary/30 blur-[120px] animate-pulse delay-1000 pointer-events-none" />
       <div className="relative w-full max-w-md">
         <div className="glass-card rounded-2xl p-8 space-y-8">
           <div className="text-center space-y-2">

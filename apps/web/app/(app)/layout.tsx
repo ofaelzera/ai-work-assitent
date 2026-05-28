@@ -416,7 +416,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 {avatarUrl ? (
                   <img src={avatarUrl} alt={displayName} className="h-8 w-8 rounded-lg object-cover shrink-0 ring-1 ring-border shadow-sm" />
                 ) : (
-                  <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary/80 to-violet-600 flex items-center justify-center text-[12px] font-bold text-white shrink-0 shadow-sm">
+                  <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[12px] font-bold text-primary-foreground shrink-0 shadow-sm">
                     {fallback}
                   </div>
                 )}

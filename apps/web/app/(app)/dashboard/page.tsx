@@ -391,15 +391,15 @@ export default function DashboardPage() {
                   </div>
                 )}
 
-                <div className="rounded-2xl border bg-gradient-to-br from-violet-500/10 to-transparent p-5 flex items-center gap-4 shadow-sm">
-                  <div className="h-12 w-12 rounded-2xl bg-violet-100 dark:bg-violet-900/40 flex items-center justify-center shrink-0 shadow-inner">
-                    <Bot className="h-6 w-6 text-violet-600 dark:text-violet-400" />
+                <div className="rounded-2xl border bg-gradient-to-br from-secondary/10 to-transparent p-5 flex items-center gap-4 shadow-sm">
+                  <div className="h-12 w-12 rounded-2xl bg-secondary/20 flex items-center justify-center shrink-0 shadow-inner">
+                    <Bot className="h-6 w-6 text-secondary-foreground" />
                   </div>
                   <div>
                     {isLoading ? <Skeleton className="h-6 w-12 mb-1" /> : <p className="text-2xl font-bold tracking-tight text-foreground">{adminData.kpis.aiExecutionsLast24h}</p>}
                     <p className="text-xs font-medium text-muted-foreground">Execuções de IA (24h)</p>
                   </div>
-                  <Clock className="h-5 w-5 text-violet-500/30 ml-auto shrink-0" />
+                  <Clock className="h-5 w-5 text-muted-foreground ml-auto shrink-0" />
                 </div>
               </div>
             </div>

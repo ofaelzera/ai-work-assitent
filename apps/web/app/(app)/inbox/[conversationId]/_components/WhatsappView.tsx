@@ -831,7 +831,7 @@ export function AssigneeChip({ assignee }: {
       {avatarUrl ? (
         <img src={avatarUrl} alt={label} className="h-5 w-5 rounded-full object-cover shrink-0" />
       ) : (
-        <span className="h-5 w-5 rounded-full bg-gradient-to-br from-primary to-violet-600 flex items-center justify-center text-[9px] font-semibold text-white shrink-0">
+        <span className="h-5 w-5 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[9px] font-semibold text-white shrink-0">
           {ini}
         </span>
       )}
@@ -1884,7 +1884,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                             />
                           ) : (
                             <div
-                              className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-violet-600 flex items-center justify-center text-[10px] font-bold text-white"
+                              className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[10px] font-bold text-white"
                               title={`Enviado por ${msg.fromUser.name ?? msg.fromUser.email}`}
                             >
                               {((msg.fromUser.name ?? msg.fromUser.email).trim()[0] ?? '?').toUpperCase()}

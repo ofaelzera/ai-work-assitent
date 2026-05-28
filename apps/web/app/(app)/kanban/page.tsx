@@ -421,7 +421,7 @@ export default function KanbanPage() {
                   'hover:border-primary/40 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 group',
                 )}
               >
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary to-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary to-secondary opacity-0 group-hover:opacity-100 transition-opacity" />
                 
                 <div className="flex items-start justify-between relative z-10">
                   <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shrink-0">
