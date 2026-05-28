@@ -1759,7 +1759,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         <div
           className="flex-1 overflow-y-auto px-4 py-3 space-y-0.5 relative"
           style={{
-            backgroundColor: 'hsl(var(--accent)/0.4)',
+            backgroundColor: 'var(--chat-bg)',
             backgroundImage: `radial-gradient(circle, hsl(var(--foreground)/0.06) 1px, transparent 1px)`,
             backgroundSize: '20px 20px',
           }}

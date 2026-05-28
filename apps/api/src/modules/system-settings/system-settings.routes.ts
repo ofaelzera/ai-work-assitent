@@ -16,6 +16,8 @@ export async function systemSettingsRoutes(app: FastifyInstance) {
           faviconUrl: true,
           primaryColor: true,
           secondaryColor: true,
+          chatBgColorLight: true,
+          chatBgColorDark: true,
         },
       })
 
@@ -25,6 +27,8 @@ export async function systemSettingsRoutes(app: FastifyInstance) {
           companyName: 'My Company',
           primaryColor: '#6366f1',
           secondaryColor: '#4f46e5',
+          chatBgColorLight: '#efeae2',
+          chatBgColorDark: '#0b141a',
         })
       }
 
@@ -35,6 +39,8 @@ export async function systemSettingsRoutes(app: FastifyInstance) {
         companyName: 'My Company',
         primaryColor: '#6366f1',
         secondaryColor: '#4f46e5',
+        chatBgColorLight: '#efeae2',
+        chatBgColorDark: '#0b141a',
       })
     }
   })
@@ -53,6 +59,8 @@ export async function systemSettingsRoutes(app: FastifyInstance) {
       faviconUrl: z.string().nullable().optional(),
       primaryColor: z.string().optional(),
       secondaryColor: z.string().optional(),
+      chatBgColorLight: z.string().optional(),
+      chatBgColorDark: z.string().optional(),
       institutionalTexts: z.any().optional(),
       contactInfo: z.any().optional(),
       externalLinks: z.any().optional(),

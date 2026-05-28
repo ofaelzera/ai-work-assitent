@@ -765,6 +765,8 @@ model SystemSettings {
   faviconUrl             String?  @db.LongText
   primaryColor           String   @default("#6366f1")
   secondaryColor         String   @default("#4f46e5")
+  chatBgColorLight       String   @default("#efeae2")
+  chatBgColorDark        String   @default("#0b141a")
   institutionalTexts     Json?    // { welcomeTitle, welcomeDescription, footerText }
   contactInfo            Json?    // { email, phone, address }
   externalLinks          Json?    // { website, helpCenter, terms, privacy }

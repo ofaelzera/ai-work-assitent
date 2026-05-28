@@ -18,6 +18,8 @@ interface BrandingSettings {
   faviconUrl: string | null
   primaryColor: string
   secondaryColor: string
+  chatBgColorLight: string
+  chatBgColorDark: string
 }
 
 const DEFAULTS: BrandingSettings = {
@@ -28,6 +30,8 @@ const DEFAULTS: BrandingSettings = {
   faviconUrl: null,
   primaryColor: '#6366f1',
   secondaryColor: '#4f46e5',
+  chatBgColorLight: '#efeae2',
+  chatBgColorDark: '#0b141a',
 }
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 // 5 MB — recortado depois pelo modal
@@ -237,6 +241,48 @@ export default function BrandingPage() {
                   Botão Secundário
                 </button>
                 <span style={{ color: form.primaryColor }} className="text-sm font-medium">Texto primário</span>
+              </div>
+            </div>
+          </AdminSection>
+
+          {/* Fundo do Chat */}
+          <AdminSection title="Fundo do Chat" description="Cores de fundo para a área de mensagens." icon={Palette}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Fundo Claro (Light Theme)</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={form.chatBgColorLight}
+                    onChange={(e) => handleField('chatBgColorLight', e.target.value)}
+                    className="h-10 w-16 cursor-pointer rounded border"
+                  />
+                  <input
+                    type="text"
+                    value={form.chatBgColorLight}
+                    onChange={(e) => handleField('chatBgColorLight', e.target.value)}
+                    className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+                    placeholder="#efeae2"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Fundo Escuro (Dark Theme)</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={form.chatBgColorDark}
+                    onChange={(e) => handleField('chatBgColorDark', e.target.value)}
+                    className="h-10 w-16 cursor-pointer rounded border"
+                  />
+                  <input
+                    type="text"
+                    value={form.chatBgColorDark}
+                    onChange={(e) => handleField('chatBgColorDark', e.target.value)}
+                    className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+                    placeholder="#0b141a"
+                  />
+                </div>
               </div>
             </div>
           </AdminSection>

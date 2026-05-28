@@ -109,6 +109,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             __html: `window.__APP_CONFIG__=${JSON.stringify({ apiUrl: publicApiUrl })};`,
           }}
         />
+        <style dangerouslySetInnerHTML={{ __html: `
+          :root {
+            --chat-bg: ${settings?.chatBgColorLight || '#efeae2'};
+          }
+          .dark {
+            --chat-bg: ${settings?.chatBgColorDark || '#0b141a'};
+          }
+        ` }} />
       </head>
       <body className={inter.className} style={customStyle} suppressHydrationWarning>
         <Providers>{children}</Providers>
