@@ -87,7 +87,7 @@ export function NotificationManager() {
     if (ev.type !== 'message.received') return
 
     // O payload recebido: { conversationId, body, direction, ... }
-    const { conversationId, direction, body } = ev.payload || {}
+    const { conversationId, direction, body } = (ev.payload as any) || {}
     
     // Só notificamos INBOUND
     if (direction !== 'INBOUND') return
