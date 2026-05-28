@@ -27,10 +27,11 @@ async function getSystemSettings() {
 }
 
 /**
- * Converte hex (#RRGGBB) pro formato "H S% L%" que o Tailwind/shadcn espera
- * nas CSS vars (usadas como `hsl(var(--primary))`). Retorna null em hex inválido.
+ * Converte hex (#RRGGBB) pra { hslString, luminance }. Retorna null em hex inválido.
+ * - `hslString`: "H S% L%" pro Tailwind/shadcn (usado como `hsl(var(--primary))`)
+ * - `luminance`: 0..1 (relativa, perceptual aproximada) pra decidir foreground claro/escuro
  */
-function hexToHslString(hex: string | null | undefined): string | null {
+function parseHex(hex: string | null | undefined): { hslString: string; luminance: number } | null {
   if (!hex) return null
   const m = /^#?([a-f\d]{6})$/i.exec(hex.trim())
   if (!m) return null
@@ -53,7 +54,17 @@ function hexToHslString(hex: string | null | undefined): string | null {
     }
     h *= 60
   }
-  return `${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`
+  // Luminância aproximada (sRGB ponderado) — boa o suficiente pra decidir contraste
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  return {
+    hslString: `${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`,
+    luminance,
+  }
+}
+
+/** Foreground legível pra um fundo: branco se escuro, quase-preto se claro. */
+function readableForeground(luminance: number): string {
+  return luminance < 0.55 ? '0 0% 100%' : '222 47% 11%'
 }
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -72,11 +83,21 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // CSS vars precisam estar no formato HSL space-separated (ex: "243 75% 59%")
   // porque o Tailwind faz `hsl(var(--primary))`. Aplicamos só quando o admin
   // configurou cores válidas; caso contrário caímos no default do globals.css.
-  const primaryHsl = hexToHslString(settings?.primaryColor)
-  const secondaryHsl = hexToHslString(settings?.secondaryColor)
+  // Também calculamos `*-foreground` automaticamente pra garantir contraste.
+  const primary = parseHex(settings?.primaryColor)
+  const secondary = parseHex(settings?.secondaryColor)
   const customStyle: React.CSSProperties = {}
-  if (primaryHsl) (customStyle as any)['--primary'] = primaryHsl
-  if (secondaryHsl) (customStyle as any)['--secondary'] = secondaryHsl
+  if (primary) {
+    (customStyle as any)['--primary'] = primary.hslString
+    ;(customStyle as any)['--primary-foreground'] = readableForeground(primary.luminance)
+    ;(customStyle as any)['--ring'] = primary.hslString
+  }
+  if (secondary) {
+    (customStyle as any)['--secondary'] = secondary.hslString
+    ;(customStyle as any)['--secondary-foreground'] = readableForeground(secondary.luminance)
+    ;(customStyle as any)['--accent'] = secondary.hslString
+    ;(customStyle as any)['--accent-foreground'] = readableForeground(secondary.luminance)
+  }
 
   const publicApiUrl = getPublicApiUrl()
 

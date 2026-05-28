@@ -10,6 +10,7 @@ import { login } from '@/lib/auth'
 import { useAuthStore } from '@/store/auth'
 import { apiFetch, getAccessToken } from '@/lib/api'
 import { Bot } from 'lucide-react'
+import { useTheme } from 'next-themes'
 
 function GoogleIcon() {
   return (
@@ -74,21 +75,27 @@ export default function LoginForm() {
   }
 
   const title = settings?.systemTitle || 'AI Work Assistant'
+  // Escolhe a logo certa pro tema atual (fallback pra logo clara se não tem escura)
+  const { resolvedTheme } = useTheme()
+  const activeLogoUrl =
+    resolvedTheme === 'dark'
+      ? (settings?.logoDarkUrl || settings?.logoUrl || null)
+      : (settings?.logoUrl || null)
 
   return (
     <div translate="no" className="relative min-h-screen flex items-center justify-center bg-background p-4 overflow-hidden">
 
-      {/* Decorative Background Elements */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-[var(--primary)]/20 blur-[120px] animate-pulse pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-[var(--secondary)]/20 blur-[120px] animate-pulse delay-1000 pointer-events-none" />
+      {/* Decorative Background Elements — usam as cores de marca via Tailwind tokens */}
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/20 blur-[120px] animate-pulse pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-secondary/20 blur-[120px] animate-pulse delay-1000 pointer-events-none" />
 
       {/* Main Login Card */}
       <div className="relative w-full max-w-md animate-slide-up">
         <div className="glass-card rounded-2xl p-8 space-y-8">
 
           <div className="text-center space-y-2">
-            {settings?.logoUrl ? (
-              <img src={settings.logoUrl} alt={title} className="h-12 w-auto mx-auto mb-4" />
+            {activeLogoUrl ? (
+              <img src={activeLogoUrl} alt={title} className="h-12 w-auto mx-auto mb-4" />
             ) : (
               <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 mb-2">
                 <Bot className="h-6 w-6 text-primary" />

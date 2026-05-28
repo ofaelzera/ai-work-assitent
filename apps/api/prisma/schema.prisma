@@ -760,7 +760,8 @@ model SystemSettings {
   id                     String   @id @default("default")
   systemTitle            String   @default("AI Work Assistant")
   companyName            String   @default("My Company")
-  logoUrl                String?  @db.LongText
+  logoUrl                String?  @db.LongText  // logo pra tema claro
+  logoDarkUrl            String?  @db.LongText  // logo pra tema escuro (fallback: logoUrl)
   faviconUrl             String?  @db.LongText
   primaryColor           String   @default("#6366f1")
   secondaryColor         String   @default("#4f46e5")

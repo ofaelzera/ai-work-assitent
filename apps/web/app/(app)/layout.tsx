@@ -26,6 +26,7 @@ import { apiFetch, getAccessToken } from '@/lib/api'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSSE } from '@/lib/sse'
+import { useTheme } from 'next-themes'
 
 /**
  * Itens do menu principal.
@@ -272,6 +273,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const displayName = me?.name ?? me?.email ?? 'Meu Perfil'
   const fallback = ((displayName ?? '?').trim()[0] ?? '?').toUpperCase()
 
+  // White-label: nome do sistema e logo no header da sidebar
+  const { data: branding } = useQuery<{
+    systemTitle?: string
+    logoUrl?: string | null
+    logoDarkUrl?: string | null
+  }>({
+    queryKey: ['system-settings'],
+    queryFn: () => apiFetch('/system-settings/public', { skipAuth: true }),
+    staleTime: 60_000,
+  })
+  const systemTitle = branding?.systemTitle ?? 'Work Assistant'
+  // Escolhe a logo certa pro tema atual. Se não tem versão escura, usa a clara.
+  const { resolvedTheme } = useTheme()
+  const logoUrl =
+    resolvedTheme === 'dark'
+      ? (branding?.logoDarkUrl || branding?.logoUrl || null)
+      : (branding?.logoUrl || null)
+
   if (!ready) {
     return (
       <div className="flex h-screen items-center justify-center bg-background text-muted-foreground text-sm">
@@ -293,11 +312,23 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <aside className="w-64 flex-shrink-0 bg-card/60 backdrop-blur-xl border-r flex flex-col shadow-2xl z-10">
         <div className="p-5 pb-3">
           <div className="flex items-center justify-between gap-1 animate-fade-in">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-lg shadow-primary/20">
-                <Bot className="h-4 w-4 text-primary-foreground" />
-              </div>
-              <span className="font-bold text-[15px] tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">Work Assistant</span>
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {logoUrl ? (
+                <img
+                  src={logoUrl}
+                  alt={systemTitle}
+                  className="h-14 max-h-14 max-w-full w-auto object-contain"
+                />
+              ) : (
+                <>
+                  <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-lg shadow-primary/20 shrink-0">
+                    <Bot className="h-4 w-4 text-primary-foreground" />
+                  </div>
+                  <span className="font-bold text-[15px] tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70 truncate">
+                    {systemTitle}
+                  </span>
+                </>
+              )}
             </div>
             <ThemeToggle />
           </div>
