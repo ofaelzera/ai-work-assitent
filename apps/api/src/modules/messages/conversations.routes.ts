@@ -427,10 +427,23 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       const { cursor, limit } = req.query
 
       // Marcar como lido no banco
-      await prisma.conversation.updateMany({
-        where: { id, workspaceId },
+      const readResult = await prisma.conversation.updateMany({
+        where: { id, workspaceId, unreadCount: { gt: 0 } },
         data: { unreadCount: 0 },
       })
+
+      // Avisa via SSE que a conversa foi lida — emitido APÓS o zeramento, então
+      // os badges (sidebar/abas) refazem o fetch já com o valor correto. Sem isso,
+      // a invalidação client-side corria com eventos message.received e o badge
+      // às vezes ficava "fantasma" até dar F5. Só na abertura inicial (!cursor) e
+      // se realmente havia algo não lido.
+      if (!cursor && readResult.count > 0) {
+        eventBus.emit('*', {
+          workspaceId,
+          type: 'conversation.read',
+          payload: { conversationId: id, userId: req.user.sub },
+        })
+      }
 
       const messages = await prisma.message.findMany({
         where: {

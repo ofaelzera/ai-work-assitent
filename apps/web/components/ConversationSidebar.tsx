@@ -655,6 +655,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   useSSE((event) => {
     if (
       event.type === 'message.received' ||
+      event.type === 'conversation.read' ||
       event.type === 'conversation.status_changed' ||
       event.type === 'conversation.claimed' ||
       event.type === 'conversation.released'

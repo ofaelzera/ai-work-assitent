@@ -190,6 +190,7 @@ function InboxBadges() {
     if (
       ev.type === 'message.received' ||
       ev.type === 'message.sent' ||
+      ev.type === 'conversation.read' ||
       ev.type === 'conversation.claimed' ||
       ev.type === 'conversation.released' ||
       ev.type === 'conversation.status_changed' ||
