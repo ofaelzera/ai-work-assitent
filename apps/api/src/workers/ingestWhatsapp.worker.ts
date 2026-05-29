@@ -366,6 +366,13 @@ export function startIngestWhatsappWorker() {
           where: { id: conversation.id },
           data: updateData,
         })
+
+        // Mensagem nova de entrada → limpa as leituras: a conversa volta a ser
+        // "não lida" para todos os atendentes (badges/lista por usuário).
+        const msgFromMe = message.key?.fromMe ?? false
+        if (!conversation.archived && !msgFromMe) {
+          await prisma.conversationRead.deleteMany({ where: { conversationId: conversation.id } })
+        }
       }
 
       // Upsert message (idempotente pelo externalId)

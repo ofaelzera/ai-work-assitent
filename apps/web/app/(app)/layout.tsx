@@ -193,6 +193,7 @@ function InboxBadges() {
       ev.type === 'conversation.read' ||
       ev.type === 'conversation.claimed' ||
       ev.type === 'conversation.released' ||
+      ev.type === 'conversation.assigned' ||
       ev.type === 'conversation.status_changed' ||
       ev.type === 'conversation.moved'
     ) {

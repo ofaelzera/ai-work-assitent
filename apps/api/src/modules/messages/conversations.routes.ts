@@ -37,6 +37,26 @@ import { env } from '../../config/env.js'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
+/**
+ * Devolução à fila / transferência: a conversa volta a ser "não lida" (notificação)
+ * para todos os atendentes — exceto quem fez a ação (não notifica quem transferiu).
+ * Garante unreadCount > 0 para o badge aparecer mesmo que a conversa já tivesse sido lida.
+ */
+async function markUnreadForHandoff(conversationId: string, actorUserId: string) {
+  await prisma.conversationRead.deleteMany({
+    where: { conversationId, userId: { not: actorUserId } },
+  })
+  await prisma.conversationRead.upsert({
+    where: { conversationId_userId: { conversationId, userId: actorUserId } },
+    update: { readAt: new Date() },
+    create: { conversationId, userId: actorUserId },
+  })
+  await prisma.conversation.updateMany({
+    where: { id: conversationId, unreadCount: 0 },
+    data: { unreadCount: 1 },
+  })
+}
+
 export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
   // Listar conversas
   app.get(
@@ -205,7 +225,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(filter === 'resolved'
             ? { status: 'RESOLVED' }
             : filter !== 'archived' ? { status: { in: ['OPEN', 'WAITING'] } } : {}),
-          ...(filter === 'unread' && { unreadCount: { gt: 0 } }),
+          ...(filter === 'unread' && { unreadCount: { gt: 0 }, reads: { none: { userId } } }),
           ...(filter === 'favorites' && { favorite: true }),
           ...(filter === 'groups' && { isGroup: true }),
           ...(q && {
@@ -248,6 +268,8 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
             where: { leftAt: null },
             include: { user: { select: { id: true, name: true, email: true } } },
           },
+          // Minha leitura desta conversa (pra calcular não-lida por usuário)
+          reads: { where: { userId }, select: { conversationId: true } },
         },
       })
 
@@ -283,8 +305,11 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const dedupedConversations = dedupedAll.map(c => {
         const ids = Array.isArray(c.eligibleAssigneeIds) ? (c.eligibleAssigneeIds as string[]) : null
+        const { reads, ...rest } = c as typeof c & { reads: unknown[] }
         return {
-          ...c,
+          ...rest,
+          // Não-lida do ponto de vista do usuário atual: tem não-lida E eu não li.
+          unreadForMe: c.unreadCount > 0 && (reads as unknown[]).length === 0,
           eligibleAssignees: ids
             ? ids.flatMap(id => {
                 const u = eligibleUsersMap.get(id)
@@ -311,6 +336,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           status: { in: ['OPEN', 'WAITING'] },
           type: 'EXTERNAL',
           unreadCount: { gt: 0 },
+          reads: { none: { userId } },
           NOT: { externalId: 'status@broadcast' },
           ...(canViewAll ? {} : eligibilityFilter(userId)),
           ...(Object.keys(channelTypeFilter).length && { channel: channelTypeFilter as any }),
@@ -341,16 +367,18 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const [queueCount, myUnreadCount] = await Promise.all([
         // Fila: atendente só conta o que pode assumir; admin conta tudo (visão geral).
+        // `reads: none` → some da MINHA fila quando eu leio, mas segue pros outros.
         prisma.conversation.count({
           where: {
             ...baseExternal,
             assigneeId: null,
             unreadCount: { gt: 0 },
+            reads: { none: { userId } },
             ...(canViewAll ? {} : eligibilityFilter(userId)),
           },
         }),
         prisma.conversation.count({
-          where: { ...baseExternal, assigneeId: userId, unreadCount: { gt: 0 } },
+          where: { ...baseExternal, assigneeId: userId, unreadCount: { gt: 0 }, reads: { none: { userId } } },
         }),
       ])
 
@@ -426,18 +454,28 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       const { id } = req.params
       const { cursor, limit } = req.query
 
-      // Marcar como lido no banco
-      const readResult = await prisma.conversation.updateMany({
-        where: { id, workspaceId, unreadCount: { gt: 0 } },
-        data: { unreadCount: 0 },
-      })
-
-      // Avisa via SSE que a conversa foi lida — emitido APÓS o zeramento, então
-      // os badges (sidebar/abas) refazem o fetch já com o valor correto. Sem isso,
-      // a invalidação client-side corria com eventos message.received e o badge
-      // às vezes ficava "fantasma" até dar F5. Só na abertura inicial (!cursor) e
-      // se realmente havia algo não lido.
-      if (!cursor && readResult.count > 0) {
+      // Marca a conversa como lida (por usuário). Na abertura inicial (!cursor):
+      //  • registra MINHA leitura (limpa o badge só pra mim);
+      //  • zera o unreadCount global SÓ se a conversa for minha (atribuída a mim) —
+      //    conversas da fila continuam não-lidas pros outros até alguém assumir.
+      if (!cursor) {
+        const convRead = await prisma.conversation.findUnique({
+          where: { id },
+          select: { assigneeId: true },
+        })
+        await prisma.conversationRead.upsert({
+          where: { conversationId_userId: { conversationId: id, userId: req.user.sub } },
+          update: { readAt: new Date() },
+          create: { conversationId: id, userId: req.user.sub },
+        })
+        if (convRead?.assigneeId === req.user.sub) {
+          await prisma.conversation.updateMany({
+            where: { id, workspaceId },
+            data: { unreadCount: 0 },
+          })
+        }
+        // Emite APÓS gravar a leitura → os badges (sidebar/abas) refetcham já com o
+        // valor correto, sem corrida com message.received (badge "fantasma").
         eventBus.emit('*', {
           workspaceId,
           type: 'conversation.read',
@@ -469,8 +507,12 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
 
-      // Para canais WhatsApp e Meta WhatsApp: envia read receipt
-      if ((conversation?.channel.type === 'WHATSAPP' || conversation?.channel.type === 'META_WHATSAPP') && !cursor) {
+      // Read receipt (visualizado/tique azul) só é enviado quando a conversa está
+      // ATRIBUÍDA ao atendente atual (ele assumiu / conversa ativa). Em conversas na
+      // fila (sem dono) ou de outro atendente, NÃO mandamos o "visto" pro cliente —
+      // evita o desconforto de "viu e não respondeu". Vale também para grupos.
+      const isMine = conversation?.assigneeId === req.user.sub
+      if (isMine && (conversation?.channel.type === 'WHATSAPP' || conversation?.channel.type === 'META_WHATSAPP') && !cursor) {
         try {
           const remoteJid = conversation.externalId
           const phoneNumber = remoteJid.replace(/@.+$/, '')
@@ -1821,6 +1863,9 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
 
+      // Transferência → notificação pro(s) destinatário(s), menos pra quem transferiu
+      await markUnreadForHandoff(req.params.id, userId)
+
       // Grava histórico estruturado
       await prisma.conversationTransfer.create({
         data: {
@@ -2167,6 +2212,9 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           eligibleAssigneeIds: true,
         },
       })
+
+      // Volta a notificar os outros (fila), menos quem devolveu
+      await markUnreadForHandoff(id, userId)
 
       await prisma.conversationTransfer.create({
         data: {

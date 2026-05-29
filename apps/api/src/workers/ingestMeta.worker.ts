@@ -127,6 +127,11 @@ export function startIngestMetaWorker() {
           where: { id: conversation.id },
           data: updateData,
         })
+
+        // Mensagem nova de entrada → limpa leituras: volta a "não lida" pra todos.
+        if (!conversation.archived) {
+          await prisma.conversationRead.deleteMany({ where: { conversationId: conversation.id } })
+        }
       }
 
       const existing = await prisma.message.findUnique({

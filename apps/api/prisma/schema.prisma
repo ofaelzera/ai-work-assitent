@@ -71,6 +71,7 @@ model User {
   sentMessages          Message[]                 @relation("MessageUserSender")
   chatParticipations    ConversationParticipant[]
   messageReads          MessageRead[]
+  conversationReads     ConversationRead[]
   teamMemberships       TeamMembership[]
   transfersFrom         ConversationTransfer[]    @relation("TransferFromUser")
   transfersTo           ConversationTransfer[]    @relation("TransferToUser")
@@ -272,6 +273,7 @@ model Conversation {
   team           Team?                     @relation(fields: [teamId], references: [id])
   messages       Message[]
   participants   ConversationParticipant[]
+  reads          ConversationRead[]
   cards          Card[]
   tasks          Task[]
   calendarEvents CalendarEvent[]
@@ -352,6 +354,21 @@ model MessageRead {
 
   @@id([messageId, userId])
   @@index([userId, readAt])
+}
+
+// Leitura de conversa por usuário (inbox externo). Permite que "ler" limpe a
+// notificação só de quem leu — conversas da fila continuam não-lidas pros outros.
+// Uma mensagem nova apaga os registros da conversa (volta a ser não-lida pra todos).
+model ConversationRead {
+  conversationId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@id([conversationId, userId])
+  @@index([userId])
 }
 
 // ─── Kanban ──────────────────────────────────────────────────────────────────

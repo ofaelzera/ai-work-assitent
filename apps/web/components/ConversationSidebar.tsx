@@ -43,6 +43,7 @@ interface Conversation {
   status: 'OPEN' | 'WAITING' | 'RESOLVED'
   subject: string | null
   unreadCount: number
+  unreadForMe?: boolean
   lastMessageAt: string | null
   assigneeId: string | null
   assignee: { id: string; name: string; email: string } | null
@@ -180,7 +181,8 @@ function ConversationItem({ conv, active, currentUserId, onClick, onFavorite, on
             ?? conv.externalId.replace('@s.whatsapp.net', '').replace('@g.us', '')))
 
   const lastMsg = conv.messages[0]
-  const hasUnread = conv.unreadCount > 0
+  // Não-lida do ponto de vista deste usuário (fallback ao global se backend antigo)
+  const hasUnread = conv.unreadForMe ?? conv.unreadCount > 0
   // Para grupos, a empresa pode estar diretamente na conversa (não no contato)
   const company = conv.company ?? conv.contact?.company
 
@@ -297,7 +299,7 @@ function ConversationItem({ conv, active, currentUserId, onClick, onFavorite, on
                 Na fila
               </span>
             )}
-            {conv.unreadCount > 0 && (
+            {hasUnread && (
               <span className="text-[10px] font-bold bg-primary text-primary-foreground rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
                 {conv.unreadCount > 99 ? '99+' : conv.unreadCount}
               </span>
@@ -322,7 +324,7 @@ function EmailItem({ conv, active, onClick, onFavorite, onArchive, canArchive }:
   const subject = (conv.subject ?? '').trim() || '(sem assunto)'
   const lastMsg = conv.messages[0]
   const preview = (lastMsg?.body ?? '').replace(/\s+/g, ' ').trim()
-  const hasUnread = conv.unreadCount > 0
+  const hasUnread = conv.unreadForMe ?? conv.unreadCount > 0
 
   return (
     <div
@@ -658,7 +660,8 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
       event.type === 'conversation.read' ||
       event.type === 'conversation.status_changed' ||
       event.type === 'conversation.claimed' ||
-      event.type === 'conversation.released'
+      event.type === 'conversation.released' ||
+      event.type === 'conversation.assigned'
     ) {
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
     }
@@ -701,12 +704,13 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
       ? `/inbox/${conv.id}?view=email`
       : `/inbox/${conv.id}`
     router.push(url)
-    // Marca como lida otimisticamente em TODAS as queries de conversations cacheadas
-    if (conv.unreadCount > 0) {
+    // Marca como lida otimisticamente (só pra mim) em TODAS as queries cacheadas.
+    // Não zera unreadCount global — só o flag por usuário, pra fila seguir pros outros.
+    if (conv.unreadForMe ?? conv.unreadCount > 0) {
       queryClient.setQueriesData<{ conversations?: Conversation[] }>(
         { queryKey: ['conversations'] },
         (old) => old
-          ? { ...old, conversations: old.conversations?.map(c => c.id === conv.id ? { ...c, unreadCount: 0 } : c) }
+          ? { ...old, conversations: old.conversations?.map(c => c.id === conv.id ? { ...c, unreadForMe: false } : c) }
           : old,
       )
     }
