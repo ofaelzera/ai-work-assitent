@@ -202,7 +202,7 @@ function ConversationItem({ conv, active, currentUserId, onClick, onFavorite, on
       onClick={onClick}
       onKeyDown={(e) => e.key === 'Enter' && onClick()}
       className={cn(
-        'group w-full text-left px-3 py-2.5 flex items-center gap-3 transition-colors relative cursor-pointer select-none',
+        'group w-full text-left px-3 py-2.5 flex items-start gap-3 transition-colors relative cursor-pointer select-none',
         active ? 'bg-primary/8' : 'hover:bg-accent/60',
         conv.archived && 'opacity-60',
       )}
@@ -212,93 +212,42 @@ function ConversationItem({ conv, active, currentUserId, onClick, onFavorite, on
       <Avatar name={displayName} isGroup={conv.isGroup} avatarUrl={(conv.contact?.metadata as any)?.avatarUrl} channelType={conv.channel.type} />
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between gap-1 mb-0.5">
-          <div className="flex items-center gap-1.5 min-w-0">
+        {/* Linha 1: ícone de grupo + nome (linha própria, sem disputar com badges) + horário */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1 min-w-0">
+            {conv.isGroup && (
+              <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label="Grupo" />
+            )}
             <p className={cn('text-sm truncate', hasUnread ? 'font-semibold' : 'font-medium')}>
               {displayName}
             </p>
-            {company && (
-              <span className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full text-white leading-none"
-                style={{ background: company.color }}>
-                {company.name.slice(0, 12)}
-              </span>
-            )}
-            {/* Badge "em atendimento" — só relevante para ADMIN que vê conversas de outros */}
-            {conv.assignee && (
-              <span
-                className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 leading-none"
-                title={`Em atendimento por ${conv.assignee.name ?? conv.assignee.email}`}>
-                @{(conv.assignee.name ?? conv.assignee.email).split(' ')[0].slice(0, 10)}
-              </span>
-            )}
-            {/* Badge "Aguardando @X" — fila restrita, mostra para quem não é o destinatário */}
-            {restrictedToOthers && eligible.length > 0 && (
-              <span
-                className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 leading-none"
-                title={`Fila restrita a ${eligible.map(u => u.name ?? u.email).join(', ')}`}>
-                Aguardando @{(eligible[0].name ?? eligible[0].email).split(' ')[0].slice(0, 10)}
-                {eligible.length > 1 && ` +${eligible.length - 1}`}
-              </span>
-            )}
           </div>
           <span className={cn('text-[11px] shrink-0', hasUnread ? 'text-primary font-medium' : 'text-muted-foreground')}>
             {formatConvTime(conv.lastMessageAt)}
           </span>
         </div>
 
-        <div className="flex items-center justify-between gap-1">
-          <div className="min-w-0 flex-1 flex items-center gap-1.5">
-            {conv.team && (
-              <span
-                className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0 rounded-full"
-                style={{ background: `${conv.team.color}20`, color: conv.team.color }}
-                title={`Setor: ${conv.team.name}`}>
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: conv.team.color }} />
-                {conv.team.name}
-              </span>
-            )}
-            <span className="shrink-0 text-[10px] font-medium text-muted-foreground max-w-[70px] truncate" title={conv.channel.label}>
-              {conv.channel.label}
-            </span>
-            <div className="w-1 h-1 rounded-full bg-border shrink-0" />
-            <div className="min-w-0 flex-1">
-              {presenceTxt
-                ? <p className="text-xs text-emerald-500 font-medium truncate">{presenceTxt}</p>
-                : lastMsg
-                  ? <MessagePreview msg={lastMsg} direction={lastMsg.direction} />
-                  : <p className="text-xs text-muted-foreground truncate">Sem mensagens</p>}
-            </div>
+        {/* Linha 2: prévia da última mensagem + ações/contador */}
+        <div className="flex items-center justify-between gap-2 mt-0.5">
+          <div className="min-w-0 flex-1">
+            {presenceTxt
+              ? <p className="text-xs text-emerald-500 font-medium truncate">{presenceTxt}</p>
+              : lastMsg
+                ? <MessagePreview msg={lastMsg} direction={lastMsg.direction} />
+                : <p className="text-xs text-muted-foreground truncate">Sem mensagens</p>}
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
-            {/* Tempo de espera na fila (só pra convs sem dono) */}
-            {waitingFor && (
-              <span
-                className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 shrink-0"
-                title="Tempo na fila">
-                ⏱ {waitingFor}
-              </span>
-            )}
-            {/* Botão Assumir foi removido da lista a pedido do usuário */}
-            {/* Arquivar — só visível para ADMIN */}
             {canArchive && (
               <button onClick={onArchive}
                 className="p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
                 title={conv.archived ? 'Desarquivar' : 'Arquivar'}>
-                {conv.archived
-                  ? <ArchiveRestore className="h-3 w-3" />
-                  : <Archive className="h-3 w-3" />}
+                {conv.archived ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />}
               </button>
             )}
-            {/* Favorito */}
             <button onClick={onFavorite}
               className={cn('p-0.5 rounded transition-opacity', conv.favorite ? 'opacity-100 text-amber-400' : 'opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-amber-400')}>
               <Star className={cn('h-3 w-3', conv.favorite && 'fill-amber-400')} />
             </button>
-            {!conv.assigneeId && conv.status !== 'RESOLVED' && !onClaim && (
-              <span className="text-[9px] font-semibold text-amber-600 bg-amber-100 dark:bg-amber-950 dark:text-amber-400 rounded px-1 py-0.5 shrink-0">
-                Na fila
-              </span>
-            )}
             {hasUnread && (
               <span className="text-[10px] font-bold bg-primary text-primary-foreground rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
                 {conv.unreadCount > 99 ? '99+' : conv.unreadCount}
@@ -306,6 +255,51 @@ function ConversationItem({ conv, active, currentUserId, onClick, onFavorite, on
             )}
           </div>
         </div>
+
+        {/* Linha 3: metadados — empresa, setor, atendente, fila, canal (trunca sozinha) */}
+        {(company || conv.team || conv.assignee || isOnQueue || conv.channel.label) && (
+          <div className="flex items-center gap-1 mt-1 overflow-hidden">
+            {company && (
+              <span className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full text-white leading-none max-w-[96px] truncate"
+                style={{ background: company.color }} title={company.name}>
+                {company.name}
+              </span>
+            )}
+            {conv.team && (
+              <span
+                className="shrink-0 inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.5 rounded-full leading-none"
+                style={{ background: `${conv.team.color}20`, color: conv.team.color }}
+                title={`Setor: ${conv.team.name}`}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: conv.team.color }} />
+                {conv.team.name}
+              </span>
+            )}
+            {conv.assignee && (
+              <span
+                className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 leading-none"
+                title={`Em atendimento por ${conv.assignee.name ?? conv.assignee.email}`}>
+                @{(conv.assignee.name ?? conv.assignee.email).split(' ')[0].slice(0, 12)}
+              </span>
+            )}
+            {isOnQueue && (
+              restrictedToOthers && eligible.length > 0 ? (
+                <span
+                  className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 leading-none"
+                  title={`Fila restrita a ${eligible.map(u => u.name ?? u.email).join(', ')}`}>
+                  Aguardando @{(eligible[0].name ?? eligible[0].email).split(' ')[0].slice(0, 10)}{eligible.length > 1 && ` +${eligible.length - 1}`}
+                </span>
+              ) : (
+                <span className="shrink-0 text-[9px] font-semibold text-amber-600 bg-amber-100 dark:bg-amber-950 dark:text-amber-400 rounded-full px-1.5 py-0.5 leading-none"
+                  title={waitingFor ? `Na fila há ${waitingFor}` : 'Na fila'}>
+                  Na fila{waitingFor && ` · ⏱${waitingFor}`}
+                </span>
+              )
+            )}
+            <span className="shrink-0 text-[9px] font-medium text-muted-foreground/70 max-w-[80px] truncate ml-auto" title={conv.channel.label}>
+              {conv.channel.label}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )
