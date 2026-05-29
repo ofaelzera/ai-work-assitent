@@ -277,6 +277,10 @@ export function ChatInput({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={disabled}
+          spellCheck
+          lang="pt-BR"
+          autoCorrect="on"
+          autoCapitalize="sentences"
           className="flex-1 w-full resize-none bg-transparent px-3 pt-3 pb-2 text-[15px] leading-relaxed focus:outline-none placeholder:text-muted-foreground/60 max-h-40 overflow-y-auto"
           rows={1}
         />
