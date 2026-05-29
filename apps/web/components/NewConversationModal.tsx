@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { X, Search, MessageSquare, Mail, Phone, UserPlus, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+import { X, Search, MessageSquare, Mail, Phone, UserPlus, CheckCircle2, AlertCircle, Loader2, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { maskPhone } from '@/lib/masks'
 
@@ -13,6 +13,12 @@ interface Contact {
   id: string; name: string | null; phone: string | null; email: string | null
   metadata?: { avatarUrl?: string } | null
   conversations: Array<{ id: string; channel: { id: string; type: string; label: string } }>
+}
+interface GroupItem {
+  id: string                       // groupJid (xxx@g.us)
+  subject: string
+  conversationId?: string | null   // se já existir conversa
+  pictureUrl?: string | null
 }
 
 interface NewConversationModalProps {
@@ -37,6 +43,7 @@ function Avatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }
 export default function NewConversationModal({ onClose, onCreated }: NewConversationModalProps) {
   const [search, setSearch] = useState('')
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null)
+  const [selectedGroup, setSelectedGroup] = useState<GroupItem | null>(null)
   const [selectedChannelId, setSelectedChannelId] = useState('')
   const [text, setText] = useState('')
   const [subject, setSubject] = useState('')
@@ -44,6 +51,7 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
   const [manualEmail, setManualEmail] = useState('')
   const [step, setStep] = useState<'pick-contact' | 'compose'>('pick-contact')
   const [waCheck, setWaCheck] = useState<'idle' | 'checking' | 'yes' | 'no'>('idle')
+  const [targetMode, setTargetMode] = useState<'contact' | 'group'>('contact')
   const waCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -72,6 +80,52 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
     : contactsData?.items ?? []
 
   const selectedChannel = connectedChannels.find(c => c.id === selectedChannelId)
+  const isWhatsAppChannel = selectedChannel?.type === 'WHATSAPP'
+
+  // Debounce do termo de busca de grupos (300ms) — fetchAllGroups é pesado
+  const [groupSearchDebounced, setGroupSearchDebounced] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setGroupSearchDebounced(search.trim()), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // Busca grupos quando modo=group e canal é WhatsApp
+  const queryClient = useQueryClient()
+  const { data: groupsData, isLoading: isLoadingGroups, isFetching: isFetchingGroups } = useQuery({
+    queryKey: ['conv-groups-search', selectedChannelId, groupSearchDebounced],
+    queryFn: () => apiFetch<{ items: GroupItem[] }>(
+      `/conversations/groups/search?channelId=${selectedChannelId}&q=${encodeURIComponent(groupSearchDebounced)}`,
+    ),
+    enabled: targetMode === 'group' && !!selectedChannelId && isWhatsAppChannel,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
+  })
+  const groups: GroupItem[] = groupsData?.items ?? []
+  const groupsBusy = isLoadingGroups || isFetchingGroups
+
+  // Pré-aquecimento: ao trocar pra aba Grupo, dispara já uma busca com q vazio,
+  // que faz o backend popular o cache do fetchAllGroups (TTL 5min).
+  useEffect(() => {
+    if (targetMode !== 'group' || !selectedChannelId || !isWhatsAppChannel) return
+    queryClient.prefetchQuery({
+      queryKey: ['conv-groups-search', selectedChannelId, ''],
+      queryFn: () => apiFetch<{ items: GroupItem[] }>(
+        `/conversations/groups/search?channelId=${selectedChannelId}&q=`,
+      ),
+      staleTime: 5 * 60_000,
+    })
+  }, [targetMode, selectedChannelId, isWhatsAppChannel, queryClient])
+
+  // Reseta seleções quando troca de modo ou canal não-WA
+  useEffect(() => {
+    if (!isWhatsAppChannel && targetMode === 'group') setTargetMode('contact')
+    if (targetMode === 'contact') setSelectedGroup(null)
+    if (targetMode === 'group') {
+      setSelectedContact(null)
+      setManualPhone('')
+      setManualEmail('')
+    }
+  }, [targetMode, isWhatsAppChannel])
 
   // Auto-select first compatible channel when contact selected
   useEffect(() => {
@@ -114,9 +168,10 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
         body: JSON.stringify({
           channelId: selectedChannelId,
           contactId: selectedContact?.id,
-          phone: isWa ? (selectedContact?.phone ?? manualPhone) : undefined,
+          phone: isWa && targetMode === 'contact' ? (selectedContact?.phone ?? manualPhone) : undefined,
           email: !isWa ? (selectedContact?.email ?? manualEmail) : undefined,
-          subject: subject || undefined,
+          groupJid: targetMode === 'group' ? selectedGroup?.id : undefined,
+          subject: subject || (targetMode === 'group' ? selectedGroup?.subject : undefined),
           text,
         }),
       })
@@ -130,7 +185,9 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
   })
 
   const canSend = selectedChannelId && text.trim() && (
-    selectedContact ?? manualPhone ?? manualEmail
+    targetMode === 'group'
+      ? !!selectedGroup
+      : (selectedContact ?? manualPhone ?? manualEmail)
   )
 
   return (
@@ -173,7 +230,102 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
             </div>
           </div>
 
+          {/* Toggle Contato/Grupo (apenas WhatsApp) */}
+          {isWhatsAppChannel && !selectedContact && !selectedGroup && (
+            <div className="flex gap-1 p-0.5 rounded-lg bg-muted/50 w-fit">
+              <button
+                onClick={() => setTargetMode('contact')}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors',
+                  targetMode === 'contact' ? 'bg-card shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <UserPlus className="h-3 w-3" /> Contato
+              </button>
+              <button
+                onClick={() => setTargetMode('group')}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors',
+                  targetMode === 'group' ? 'bg-card shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Users className="h-3 w-3" /> Grupo
+              </button>
+            </div>
+          )}
+
+          {/* Grupo selecionado */}
+          {targetMode === 'group' && selectedGroup && (
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">Grupo selecionado</label>
+              <div className="flex items-center gap-3 p-2.5 rounded-lg border bg-primary/5">
+                <Avatar name={selectedGroup.subject} avatarUrl={selectedGroup.pictureUrl} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{selectedGroup.subject}</p>
+                  <p className="text-xs text-muted-foreground truncate">{selectedGroup.id}</p>
+                </div>
+                <button onClick={() => setSelectedGroup(null)} className="p-1 hover:bg-accent rounded">
+                  <X className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Busca de grupos */}
+          {targetMode === 'group' && !selectedGroup && (
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">Buscar grupo</label>
+              <div className="relative mb-2">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <input
+                  autoFocus
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Nome do grupo..."
+                  className="w-full rounded-md border bg-transparent pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              <div className="rounded-lg border overflow-hidden max-h-48 overflow-y-auto">
+                {!selectedChannelId && (
+                  <p className="text-xs text-muted-foreground p-3 text-center">Selecione um canal WhatsApp</p>
+                )}
+                {selectedChannelId && groupsBusy && groups.length === 0 && (
+                  <p className="text-xs text-muted-foreground p-3">Buscando grupos...</p>
+                )}
+                {selectedChannelId && !groupsBusy && groups.length === 0 && (
+                  <p className="text-xs text-muted-foreground p-3 text-center">
+                    {search.trim() ? 'Nenhum grupo encontrado' : 'Nenhum grupo disponível'}
+                  </p>
+                )}
+                {groups.map(g => (
+                  <button
+                    key={g.id}
+                    onClick={() => {
+                      if (g.conversationId) {
+                        // Já existe conversa: abre direto
+                        onCreated(g.conversationId)
+                        onClose()
+                        return
+                      }
+                      setSelectedGroup(g)
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 hover:bg-accent transition-colors text-left"
+                  >
+                    <Avatar name={g.subject} avatarUrl={g.pictureUrl} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">{g.subject}</p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {g.conversationId ? 'Abrir conversa existente' : 'Iniciar nova conversa'}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Busca de contato */}
+          {targetMode === 'contact' && (
           <div>
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">
               {selectedContact ? 'Contato selecionado' : 'Buscar contato'}
@@ -287,6 +439,7 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
               </>
             )}
           </div>
+          )}
 
           {/* Assunto (só para email) */}
           {selectedChannel && selectedChannel.type !== 'WHATSAPP' && (

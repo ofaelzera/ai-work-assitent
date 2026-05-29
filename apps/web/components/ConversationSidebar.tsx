@@ -11,9 +11,10 @@ import { presenceLabel, type PresenceState } from '@/lib/usePresence'
 import { stripWhatsappMarks } from '@/lib/whatsappText'
 import {
   MessageSquare, Search, Star, Users, Mic, Image, FileText,
-  Video, Paperclip, SquarePen, Archive, ArchiveRestore, Folder, Inbox, ChevronRight,
+  Video, Paperclip, SquarePen, Archive, ArchiveRestore, Folder, Inbox, ChevronRight, UsersRound,
 } from 'lucide-react'
 import NewConversationModal from '@/components/NewConversationModal'
+import CreateGroupModal from '@/components/CreateGroupModal'
 import ComposeNewEmailModal from '@/components/ComposeNewEmailModal'
 import { cn } from '@/lib/utils'
 import { formatPhone, isInternalId } from '@/lib/phone'
@@ -532,6 +533,7 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   const [filter, setFilter] = useState<Filter>('mine')
   const [autoSwitched, setAutoSwitched] = useState(false)
   const [showNewConv, setShowNewConv] = useState(false)
+  const [showCreateGroup, setShowCreateGroup] = useState(false)
   const [showComposeEmail, setShowComposeEmail] = useState(false)
   // Modo email: pasta IMAP selecionada (null = todas)
   const [activeFolder, setActiveFolder] = useState<{ channelId: string; folder: string } | null>(null)
@@ -733,11 +735,18 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
         <div className="flex items-center justify-between px-1">
           <h2 className="text-base font-semibold">{headerTitle}</h2>
           {view === 'conversations' && (
-            <button onClick={() => setShowNewConv(true)}
-              className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-              title="Nova conversa">
-              <SquarePen className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-0.5">
+              <button onClick={() => setShowCreateGroup(true)}
+                className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="Criar grupo no WhatsApp">
+                <UsersRound className="h-4 w-4" />
+              </button>
+              <button onClick={() => setShowNewConv(true)}
+                className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="Nova conversa">
+                <SquarePen className="h-4 w-4" />
+              </button>
+            </div>
           )}
           {view === 'email' && (
             <button onClick={() => setShowComposeEmail(true)}
@@ -933,6 +942,16 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
       {showNewConv && (
         <NewConversationModal
           onClose={() => setShowNewConv(false)}
+          onCreated={(id) => {
+            queryClient.invalidateQueries({ queryKey: ['conversations'] })
+            router.push(`/inbox/${id}`)
+          }}
+        />
+      )}
+
+      {showCreateGroup && (
+        <CreateGroupModal
+          onClose={() => setShowCreateGroup(false)}
           onCreated={(id) => {
             queryClient.invalidateQueries({ queryKey: ['conversations'] })
             router.push(`/inbox/${id}`)

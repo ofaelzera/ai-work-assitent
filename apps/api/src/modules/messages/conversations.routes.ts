@@ -8,6 +8,7 @@ import { sendEmail, moveImapMessage } from '../channels/email.client.js'
 import { dedupConversations } from './dedup.service.js'
 import { routeNewConversation } from './routing.service.js'
 import { resolveTeamEligibility, getUserTeamIds } from '../teams/teams.service.js'
+import { loadGroupsCache, refreshGroupsCache, GROUPS_TTL_MS } from '../channels/groups-sync.service.js'
 import { Prisma } from '@prisma/client'
 
 /**
@@ -925,6 +926,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           contactId: z.string().optional(),
           phone: z.string().optional(),    // WhatsApp: número direto
           email: z.string().email().optional(), // Email
+          groupJid: z.string().optional(), // WhatsApp: jid de grupo (xxx@g.us)
           subject: z.string().optional(),
           text: z.string().min(1),
         }),
@@ -932,9 +934,13 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req, reply) => {
       const { workspaceId } = req.user
-      const { channelId, contactId, phone, email, subject, text } = req.body
+      const { channelId, contactId, phone, email, groupJid, subject, text } = req.body
 
       const channel = await prisma.channel.findFirstOrThrow({ where: { id: channelId, workspaceId } })
+
+      const isGroup = !!groupJid && groupJid.endsWith('@g.us')
+      if (groupJid && !isGroup) return reply.badRequest('groupJid inválido')
+      if (isGroup && channel.type !== 'WHATSAPP') return reply.badRequest('Grupos exigem canal WhatsApp')
 
       let contact = contactId
         ? await prisma.contact.findFirstOrThrow({ where: { id: contactId, workspaceId } })
@@ -942,7 +948,9 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // Determina o externalId da conversa
       let externalId: string
-      if (channel.type === 'WHATSAPP') {
+      if (isGroup) {
+        externalId = groupJid!
+      } else if (channel.type === 'WHATSAPP') {
         const rawPhone = phone ?? contact?.phone ?? ''
         const digits = rawPhone.replace(/\D/g, '')
         externalId = `${digits}@s.whatsapp.net`
@@ -952,11 +960,11 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       if (!externalId || externalId === '@s.whatsapp.net') {
-        return reply.badRequest('Telefone ou email obrigatório')
+        return reply.badRequest('Telefone, email ou grupo obrigatório')
       }
 
-      // Cria ou busca o contato
-      if (!contact) {
+      // Cria ou busca o contato (não aplicável a grupos)
+      if (!contact && !isGroup) {
         const lookupWhere = channel.type === 'WHATSAPP'
           ? { workspaceId, phone: externalId.replace('@s.whatsapp.net', '') }
           : { workspaceId, email: email ?? '' }
@@ -975,35 +983,63 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         // Conv proativa iniciada por atendente: aplica routing com autoAssign=true.
         // Se houver regra fixed/RR, atribui ao designado (assume na hora).
         // Senão, fica com o próprio criador como dono.
-        const route = await routeNewConversation({
-          workspaceId,
-          channelId,
-          contactId: contact.id,
-          messageBody: text,
-          autoAssign: true,
-          fallbackUserId: req.user.sub,
-        })
+        // Para grupos pulamos o routing (sem Contact associado) e atribuímos ao criador.
         const now = new Date()
-        conversation = await prisma.conversation.create({
-          data: {
+        if (isGroup) {
+          // Tenta puxar subject do grupo se o cliente não enviar
+          let groupSubject = subject
+          if (!groupSubject) {
+            try {
+              const { instanceName } = await getChannelConfig(channelId)
+              const client = await getClientForChannel(channelId)
+              const info = await client.fetchGroupInfo(instanceName, externalId)
+              groupSubject = info?.subject ?? undefined
+            } catch { /* ignore */ }
+          }
+          conversation = await prisma.conversation.create({
+            data: {
+              workspaceId,
+              channelId,
+              externalId,
+              subject: groupSubject,
+              isGroup: true,
+              lastMessageAt: now,
+              unreadCount: 0,
+              assigneeId: req.user.sub,
+              claimedAt: now,
+            },
+          })
+          logger.info({ conversationId: conversation.id, groupJid: externalId }, 'Nova conversa de grupo criada')
+        } else {
+          const route = await routeNewConversation({
             workspaceId,
             channelId,
-            contactId: contact.id,
-            externalId,
-            subject,
-            lastMessageAt: now,
-            unreadCount: 0,
-            assigneeId: route.assigneeId,
-            claimedAt: route.assigneeId ? now : null,
-            lastQueuedAt: now,
-            ...(route.teamId && { teamId: route.teamId }),
-            ...(route.eligibleAssigneeIds && { eligibleAssigneeIds: route.eligibleAssigneeIds }),
-          },
-        })
-        logger.info(
-          { conversationId: conversation.id, assigneeId: route.assigneeId, source: route.source, distMode: route.distMode },
-          'Nova conversa proativa criada',
-        )
+            contactId: contact!.id,
+            messageBody: text,
+            autoAssign: true,
+            fallbackUserId: req.user.sub,
+          })
+          conversation = await prisma.conversation.create({
+            data: {
+              workspaceId,
+              channelId,
+              contactId: contact!.id,
+              externalId,
+              subject,
+              lastMessageAt: now,
+              unreadCount: 0,
+              assigneeId: route.assigneeId,
+              claimedAt: route.assigneeId ? now : null,
+              lastQueuedAt: now,
+              ...(route.teamId && { teamId: route.teamId }),
+              ...(route.eligibleAssigneeIds && { eligibleAssigneeIds: route.eligibleAssigneeIds }),
+            },
+          })
+          logger.info(
+            { conversationId: conversation.id, assigneeId: route.assigneeId, source: route.source, distMode: route.distMode },
+            'Nova conversa proativa criada',
+          )
+        }
       }
 
       // Envia a primeira mensagem
@@ -2615,6 +2651,294 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       } catch (err: any) {
         return reply.badRequest(err?.message ?? 'Erro ao revogar convite')
       }
+    },
+  )
+
+  /**
+   * GET /conversations/groups/search — busca híbrida de grupos por canal WhatsApp.
+   * Primeiro busca em Conversation (isGroup=true) e, se trouxer pouco, faz fallback
+   * via Evolution `fetchAllGroups` para cobrir grupos ainda não sincronizados.
+   */
+  app.get(
+    '/conversations/groups/search',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        querystring: z.object({
+          channelId: z.string(),
+          q: z.string().optional(),
+          limit: z.coerce.number().min(1).max(50).default(20),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const { channelId, q, limit } = req.query
+
+      const channel = await prisma.channel.findFirst({ where: { id: channelId, workspaceId } })
+      if (!channel) return reply.badRequest('Canal não encontrado')
+      if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp suportam grupos')
+
+      const term = (q ?? '').trim()
+      const dbConvs = await prisma.conversation.findMany({
+        where: {
+          workspaceId,
+          channelId,
+          isGroup: true,
+          ...(term && {
+            OR: [
+              { subject: { contains: term } },
+              { externalId: { contains: term } },
+            ],
+          }),
+        },
+        select: { id: true, externalId: true, subject: true },
+        orderBy: { lastMessageAt: 'desc' },
+        take: limit,
+      })
+
+      type GroupItem = { id: string; subject: string; conversationId?: string; pictureUrl: string | null }
+      const items: GroupItem[] = dbConvs.map(c => ({
+        id: c.externalId,
+        subject: c.subject ?? c.externalId,
+        conversationId: c.id,
+        pictureUrl: null,
+      }))
+
+      // Normaliza pra comparação tolerante a acento/pontuação/caixa
+      const norm = (s: string) =>
+        s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
+      const termNorm = norm(term)
+
+      // Lê só do cache (atualizado em background pelo whatsappGroupsSync worker).
+      // Se não houver cache (canal recém-conectado, antes do primeiro sync),
+      // aciona refresh inline uma única vez pra evitar lista vazia.
+      if (items.length < limit) {
+        try {
+          const cached = await loadGroupsCache(channelId)
+          let all: any[] = cached?.data ?? []
+          const isStale = !cached || Date.now() - cached.at > GROUPS_TTL_MS
+          if (!cached) {
+            all = await refreshGroupsCache(channelId)
+          } else if (isStale) {
+            refreshGroupsCache(channelId).catch(err =>
+              logger.warn({ err, channelId }, 'refreshGroupsCache (background) falhou'),
+            )
+          }
+          const seen = new Set(items.map(i => i.id))
+          const filtered = all
+            .filter(g => typeof g?.id === 'string' && g.id.endsWith('@g.us'))
+            .filter(g => !seen.has(g.id))
+          const matched = termNorm
+            ? filtered.filter(g => {
+                const subjNorm = norm(String(g?.subject ?? ''))
+                return subjNorm.includes(termNorm) || g.id.toLowerCase().includes(termNorm)
+              })
+            : filtered
+          const fromEvo = matched
+            .slice(0, Math.max(0, limit - items.length))
+            .map(g => ({
+              id: g.id as string,
+              subject: (g.subject as string) ?? g.id,
+              conversationId: undefined as string | undefined,
+              pictureUrl: (g.pictureUrl as string | undefined) ?? null,
+            }))
+          logger.info(
+            { channelId, term, dbHits: items.length, evoTotal: all.length, evoMatched: matched.length, stale: isStale, hadCache: !!cached },
+            'groups search: stale-while-revalidate',
+          )
+          items.push(...fromEvo)
+        } catch (err) {
+          logger.warn({ err, channelId }, 'fetchAllGroups falhou durante busca')
+        }
+      }
+
+      return { items }
+    },
+  )
+
+  /**
+   * GET /conversations/groups/debug — diagnóstico: lista o que o Evolution devolve
+   * em `fetchAllGroups` (sem filtros) + tenta `findChats` pra comparar.
+   */
+  app.get(
+    '/conversations/groups/debug',
+    {
+      onRequest: [app.authenticate],
+      schema: { querystring: z.object({ channelId: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const { channelId } = req.query
+      const channel = await prisma.channel.findFirst({ where: { id: channelId, workspaceId } })
+      if (!channel) return reply.badRequest('Canal não encontrado')
+      if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas WhatsApp')
+
+      const { instanceName } = await getChannelConfig(channelId)
+      const client = await getClientForChannel(channelId)
+
+      let fetchAllRaw: any = null
+      let fetchAllErr: string | null = null
+      try { fetchAllRaw = await client.fetchAllGroups(instanceName, false) }
+      catch (e: any) { fetchAllErr = e?.message ?? String(e) }
+
+      let findChatsRaw: any = null
+      let findChatsErr: string | null = null
+      try { findChatsRaw = await client.findChats(instanceName) }
+      catch (e: any) { findChatsErr = e?.message ?? String(e) }
+
+      const asArray = (x: any): any[] =>
+        Array.isArray(x) ? x : Array.isArray(x?.groups) ? x.groups : Array.isArray(x?.chats) ? x.chats : []
+
+      const groupsArr = asArray(fetchAllRaw)
+      const chatsArr = asArray(findChatsRaw)
+      const groupChats = chatsArr.filter(c => typeof c?.id === 'string' && c.id.endsWith('@g.us'))
+
+      return {
+        instanceName,
+        fetchAllGroups: {
+          ok: !fetchAllErr,
+          err: fetchAllErr,
+          shape: fetchAllRaw === null ? 'null' : Array.isArray(fetchAllRaw) ? 'array' : typeof fetchAllRaw,
+          total: groupsArr.length,
+          sample: groupsArr.slice(0, 30).map(g => ({ id: g?.id, subject: g?.subject })),
+        },
+        findChats: {
+          ok: !findChatsErr,
+          err: findChatsErr,
+          total: chatsArr.length,
+          groupCount: groupChats.length,
+          sample: groupChats.slice(0, 30).map(c => ({ id: c?.id, name: c?.name ?? c?.pushName ?? c?.subject })),
+        },
+      }
+    },
+  )
+
+  /**
+   * POST /conversations/new/group — cria um grupo WhatsApp via Evolution,
+   * registra a Conversation correspondente e (opcionalmente) envia a primeira mensagem.
+   */
+  app.post(
+    '/conversations/new/group',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        body: z.object({
+          channelId: z.string(),
+          subject: z.string().min(1).max(100),
+          description: z.string().max(500).optional(),
+          participants: z.array(z.string().min(8)).min(1).max(256),
+          firstMessage: z.string().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const { channelId, subject, description, participants, firstMessage } = req.body
+
+      const channel = await prisma.channel.findFirst({ where: { id: channelId, workspaceId } })
+      if (!channel) return reply.badRequest('Canal não encontrado')
+      if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp criam grupos')
+
+      const cleanParticipants = Array.from(new Set(
+        participants.map(p => p.replace(/\D/g, '')).filter(p => p.length >= 8),
+      ))
+      if (cleanParticipants.length === 0) return reply.badRequest('Informe ao menos um participante válido')
+
+      const { instanceName } = await getChannelConfig(channelId)
+      const client = await getClientForChannel(channelId)
+
+      // Filtra apenas números que existem no WhatsApp pra evitar erro do Evolution
+      let validNumbers = cleanParticipants
+      try {
+        const checked = await client.checkIsWhatsApp(instanceName, cleanParticipants)
+        const validSet = new Set(checked.filter(r => r.exists).map(r => r.number))
+        validNumbers = cleanParticipants.filter(n => validSet.has(n))
+        if (validNumbers.length === 0) {
+          return reply.badRequest('Nenhum dos participantes possui WhatsApp ativo')
+        }
+      } catch (err) {
+        logger.warn({ err }, 'checkIsWhatsApp falhou — seguindo com lista original')
+      }
+
+      let groupJid: string
+      try {
+        const created = await client.createGroup(instanceName, subject, validNumbers, description)
+        if (!created?.id) throw new Error('Evolution não retornou id do grupo')
+        groupJid = created.id
+      } catch (err: any) {
+        logger.error({ err }, 'createGroup falhou')
+        return reply.badRequest(err?.message ?? 'Falha ao criar grupo no WhatsApp')
+      }
+
+      const now = new Date()
+      // Reutiliza qualquer conversa pré-existente para o mesmo groupJid (cobre race
+      // com o webhook do Evolution). Mantém criador como dono em qualquer caso.
+      const existing = await prisma.conversation.findFirst({
+        where: { channelId, externalId: groupJid, workspaceId },
+        orderBy: { createdAt: 'desc' },
+      })
+      let conversation = existing
+        ? await prisma.conversation.update({
+            where: { id: existing.id },
+            data: {
+              isGroup: true,
+              subject: existing.subject ?? subject,
+              assigneeId: req.user.sub,
+              claimedAt: existing.claimedAt ?? now,
+              status: existing.status === 'RESOLVED' ? 'OPEN' : existing.status,
+              archived: false,
+              lastMessageAt: now,
+            },
+          })
+        : await prisma.conversation.create({
+            data: {
+              workspaceId,
+              channelId,
+              externalId: groupJid,
+              subject,
+              isGroup: true,
+              lastMessageAt: now,
+              unreadCount: 0,
+              assigneeId: req.user.sub,
+              claimedAt: now,
+            },
+          })
+
+      let message: { id: string } | null = null
+      if (firstMessage && firstMessage.trim()) {
+        try {
+          const result = await client.sendText(instanceName, groupJid, firstMessage)
+          const msgExternalId = result.key?.id
+          const created = await prisma.message.create({
+            data: {
+              workspaceId,
+              conversationId: conversation.id,
+              direction: 'OUTBOUND',
+              externalId: msgExternalId,
+              fromUserId: req.user.sub,
+              body: firstMessage,
+              sentAt: now,
+            },
+          })
+          message = { id: created.id }
+          conversation = await prisma.conversation.update({
+            where: { id: conversation.id },
+            data: { lastMessageAt: now, status: 'WAITING' },
+          })
+        } catch (err) {
+          logger.error({ err, groupJid }, 'Falha ao enviar primeira mensagem do grupo')
+        }
+      }
+
+      await eventBus.emitAndPersist(workspaceId, 'conversation.updated', {
+        conversationId: conversation.id,
+        assigneeId: req.user.sub,
+        created: !existing,
+        isGroup: true,
+      })
+
+      return { conversation: { id: conversation.id }, groupJid, message }
     },
   )
 }
