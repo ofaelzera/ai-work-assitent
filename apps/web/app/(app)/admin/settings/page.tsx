@@ -243,11 +243,19 @@ function AiSettingsPanel({ isAdmin }: { isAdmin: boolean }) {
 
   type WsSettings = {
     aiSuggestReplyEnabled?: boolean
+    aiSuggestReplyAgentId?: string | null
+    aiDigestAgentId?: string | null
   }
+  type AgentLite = { id: string; name: string; isActive: boolean }
 
   const { data: settings, isLoading } = useQuery<WsSettings>({
     queryKey: ['workspace-settings'],
     queryFn: () => apiFetch<WsSettings>('/workspace/settings'),
+  })
+
+  const { data: agents = [] } = useQuery<AgentLite[]>({
+    queryKey: ['agents-list'],
+    queryFn: () => apiFetch<AgentLite[]>('/ai/agents'),
   })
 
   const saveMutation = useMutation({
@@ -264,6 +272,30 @@ function AiSettingsPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const s: WsSettings = settings ?? {}
   const patch = (update: Partial<WsSettings>) => saveMutation.mutate(update)
+  const activeAgents = agents.filter(a => a.isActive)
+
+  // Seletor de agente reutilizável para cada função do sistema
+  const AgentSelect = ({
+    label, description, value, onChange,
+  }: { label: string; description: string; value: string | null | undefined; onChange: (id: string | null) => void }) => (
+    <div className="space-y-1">
+      <label className="text-sm font-medium">{label}</label>
+      <p className="text-xs text-muted-foreground">{description}</p>
+      <select
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value || null)}
+        disabled={!isAdmin || saveMutation.isPending}
+        className="mt-1 w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+      >
+        <option value="">— Nenhum (desativado) —</option>
+        {activeAgents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        {/* Mostra o agente selecionado mesmo se inativo/ausente, pra não sumir silenciosamente */}
+        {value && !activeAgents.some(a => a.id === value) && agents.find(a => a.id === value) && (
+          <option value={value}>{agents.find(a => a.id === value)!.name} (inativo)</option>
+        )}
+      </select>
+    </div>
+  )
 
   return (
     <div className="space-y-5">
@@ -274,6 +306,28 @@ function AiSettingsPanel({ isAdmin }: { isAdmin: boolean }) {
         onChange={v => patch({ aiSuggestReplyEnabled: v })}
         disabled={!isAdmin || saveMutation.isPending}
       />
+
+      {(s.aiSuggestReplyEnabled ?? true) && (
+        <AgentSelect
+          label="Agente da sugestão de resposta"
+          description="Qual agente gera as sugestões do botão mágico. Se nenhum, usa o modelo padrão cadastrado em Provedores de IA."
+          value={s.aiSuggestReplyAgentId}
+          onChange={id => patch({ aiSuggestReplyAgentId: id })}
+        />
+      )}
+
+      <AgentSelect
+        label="Agente do resumo diário"
+        description="Monta o digest diário do workspace. Sem agente, o resumo diário fica desligado."
+        value={s.aiDigestAgentId}
+        onChange={id => patch({ aiDigestAgentId: id })}
+      />
+
+      {activeAgents.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          Nenhum agente ativo. Crie agentes em <a href="/admin/agents" className="text-primary underline">Agentes IA</a>.
+        </p>
+      )}
     </div>
   )
 }
@@ -284,10 +338,6 @@ export default function SettingsPage() {
 
   // ── Workspace name ──
   const [workspaceName, setWorkspaceName] = useState('')
-
-  // ── Password change ──
-  const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' })
-  const [pwSaving, setPwSaving] = useState(false)
 
   const { data: channels = [], isLoading: chLoading } = useQuery({
     queryKey: ['channels'],
@@ -306,30 +356,6 @@ export default function SettingsPage() {
       toast.success('Nome do workspace salvo!')
     } catch (e: any) {
       toast.error(e?.message ?? 'Endpoint não disponível ainda')
-    }
-  }
-
-  const handleChangePassword = async () => {
-    if (pwForm.next !== pwForm.confirm) {
-      toast.error('As senhas não coincidem')
-      return
-    }
-    if (pwForm.next.length < 8) {
-      toast.error('A nova senha deve ter ao menos 8 caracteres')
-      return
-    }
-    setPwSaving(true)
-    try {
-      await apiFetch('/auth/change-password', {
-        method: 'POST',
-        body: JSON.stringify({ current: pwForm.current, next: pwForm.next }),
-      })
-      toast.success('Senha alterada com sucesso!')
-      setPwForm({ current: '', next: '', confirm: '' })
-    } catch (e: any) {
-      toast.error(e?.message ?? 'Erro ao alterar senha')
-    } finally {
-      setPwSaving(false)
     }
   }
 
@@ -384,58 +410,6 @@ export default function SettingsPage() {
           <AiSettingsPanel isAdmin={isAdmin} />
         </AdminSection>
       )}
-
-      {/* Segurança */}
-      <AdminSection title="Segurança" icon={Shield} description="Altere sua senha de acesso">
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium">Senha atual</label>
-            <input
-              type="password"
-              value={pwForm.current}
-              onChange={e => setPwForm(p => ({ ...p, current: e.target.value }))}
-              placeholder="••••••••"
-              className="mt-1.5 w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium">Nova senha</label>
-              <input
-                type="password"
-                value={pwForm.next}
-                onChange={e => setPwForm(p => ({ ...p, next: e.target.value }))}
-                placeholder="Mínimo 8 caracteres"
-                className="mt-1.5 w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium">Confirmar senha</label>
-              <input
-                type="password"
-                value={pwForm.confirm}
-                onChange={e => setPwForm(p => ({ ...p, confirm: e.target.value }))}
-                placeholder="Repita a nova senha"
-                className={cn(
-                  'mt-1.5 w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2',
-                  pwForm.confirm && pwForm.next !== pwForm.confirm
-                    ? 'border-destructive focus:ring-destructive/50'
-                    : 'focus:ring-primary/50',
-                )}
-              />
-            </div>
-          </div>
-          <div className="flex justify-end">
-            <button
-              onClick={handleChangePassword}
-              disabled={!pwForm.current || !pwForm.next || !pwForm.confirm || pwSaving}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
-            >
-              {pwSaving ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Alterando...</> : <><Save className="h-3.5 w-3.5" /> Alterar senha</>}
-            </button>
-          </div>
-        </div>
-      </AdminSection>
 
       {/* Integrações */}
       <AdminSection title="Integrações" icon={Plug} description="Resumo dos canais conectados">

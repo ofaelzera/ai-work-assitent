@@ -1,6 +1,5 @@
 import { Worker } from 'bullmq'
 import { Prisma } from '@prisma/client'
-import { classifyQueue } from './classifyMessage.worker.js'
 import { redis } from '../lib/redis.js'
 import { prisma } from '../lib/prisma.js'
 import { eventBus } from '../lib/eventBus.js'
@@ -431,16 +430,6 @@ export function startIngestWhatsappWorker() {
           conversationId: conversation.id,
           messageBody: body,
         })
-      }
-
-      // Enfileira triage de IA para mensagens inbound — pula em conversas arquivadas
-      // (não queremos gastar tokens em chats que o usuário marcou como "ignorar")
-      if (!conversation.archived) {
-        await classifyQueue.add(
-          'classify',
-          { messageId: msg.id, conversationId: conversation.id, workspaceId },
-          { jobId: `classify-${msg.id}`, removeOnComplete: 50, removeOnFail: 20 },
-        )
       }
 
       // ── Auto-dedup do chat ───────────────────────────────────────────────

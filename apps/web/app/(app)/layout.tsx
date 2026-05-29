@@ -56,6 +56,7 @@ const navItems: Array<{ href: string; label: string; icon: any; perm?: string }>
 const adminItems: Array<{ href: string; label: string; perm: string }> = [
   { href: '/admin/channels', label: 'Canais',              perm: 'admin.channels' },
   { href: '/admin/agents',   label: 'Agentes IA',          perm: 'admin.agents' },
+  { href: '/admin/ai-settings', label: 'Provedores de IA',  perm: 'admin.settings' },
   // { href: '/admin/prompts',  label: 'Prompts',             perm: 'admin.agents' },
   { href: '/admin/ai-logs',  label: 'Logs IA',             perm: 'admin.agents' },
   { href: '/admin/events',   label: 'Eventos',             perm: 'admin.events' },

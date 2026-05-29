@@ -49,7 +49,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
     ...opts.messages,
   ]
 
-  const ai = getProvider(provider)
+  const ai = await getProvider(provider)
   const startMs = Date.now()
   let output: Awaited<ReturnType<typeof ai.generate>> | null = null
   let error: string | null = null

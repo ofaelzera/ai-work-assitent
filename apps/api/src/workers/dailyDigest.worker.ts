@@ -132,21 +132,16 @@ ${tasksText}
 Conversas abertas ou aguardando: ${openConversationsCount}
 Execuções de IA nas últimas 24h: ${aiExecutionsCount}`
 
-  // 6. Busca agente "daily-digest" / "digest" / "resumo" no workspace.
-  // Se NÃO houver agente ativo, pula totalmente — respeita o desligamento do usuário.
-  const agent = await prisma.agent.findFirst({
-    where: {
-      workspaceId,
-      isActive: true,
-      OR: [
-        { name: { contains: 'daily-digest' } },
-        { name: { contains: 'digest' } },
-        { name: { contains: 'Digest' } },
-        { name: { contains: 'resumo' } },
-        { name: { contains: 'Resumo' } },
-      ],
-    },
+  // 6. Agente de digest escolhido em Configurações → IA (aiDigestAgentId).
+  // Se NÃO houver configurado/ativo, pula totalmente — respeita o desligamento do usuário.
+  const ws = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { settings: true },
   })
+  const digestAgentId = (ws?.settings as Record<string, unknown> | null)?.aiDigestAgentId as string | undefined
+  const agent = digestAgentId
+    ? await prisma.agent.findFirst({ where: { id: digestAgentId, workspaceId, isActive: true } })
+    : null
 
   if (!agent) {
     logger.info({ workspaceId }, 'Daily digest pulado — nenhum agente de digest ativo')

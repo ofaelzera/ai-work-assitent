@@ -783,14 +783,44 @@ model SystemSettings {
   googleRedirectUri      String?
   googleAuthRedirectUri  String?
   webUrl                 String?
-  geminiApiKey           String?
-  openaiApiKey           String?
-  anthropicApiKey        String?
-  openrouterApiKey       String?
-  openrouterSiteUrl      String?
 
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
+}
+
+// Configuração dinâmica de provedores de IA (substitui as keys do .env).
+// A API key é cifrada com AES-256-GCM (lib/crypto.ts) — nunca em texto puro.
+model AiProviderConfig {
+  provider        String   @id // gemini | openrouter | anthropic | openai
+  enabled         Boolean  @default(false)
+  apiKeyCiphertext Bytes?
+  apiKeyIv        Bytes?
+  apiKeyAuthTag   Bytes?
+  extra           Json?    // { siteUrl, baseUrl, ... } específico do provider
+  models          AiModel[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Modelos cadastrados pelo usuário sob um provedor (ex: vários modelos do OpenRouter).
+// O sistema (agentes, sugestões) escolhe entre estes modelos.
+model AiModel {
+  id          String   @id @default(cuid())
+  provider    String   // FK lógica p/ AiProviderConfig.provider
+  modelId     String   // slug enviado à API (ex: "openai/gpt-4o-mini")
+  label       String   // nome amigável exibido na UI
+  description String?  @db.Text // particularidades / notas do modelo
+  temperature Float?   // temperatura padrão sugerida
+  maxTokens   Int?     // limite de tokens padrão
+  enabled     Boolean  @default(true)
+  isDefault   Boolean  @default(false) // modelo padrão do sistema (sugestões, fallback)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  config AiProviderConfig @relation(fields: [provider], references: [provider], onDelete: Cascade)
+
+  @@unique([provider, modelId])
+  @@index([provider])
 }
 
 // ─── Enums ───────────────────────────────────────────────────────────────────

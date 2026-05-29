@@ -1,6 +1,5 @@
 import { startIngestWhatsappWorker } from './ingestWhatsapp.worker.js'
 import { startIngestMetaWorker } from './ingestMeta.worker.js'
-import { startClassifyWorker } from './classifyMessage.worker.js'
 import { startDailyDigestWorker } from './dailyDigest.worker.js'
 import { startAgentRunWorker } from './agentRun.worker.js'
 import { startAgentDispatcher } from './agentDispatcher.worker.js'
@@ -14,7 +13,6 @@ export function startWorkers() {
   const workers = [
     startIngestWhatsappWorker(),
     startIngestMetaWorker(),
-    startClassifyWorker(),
     startDailyDigestWorker(),
     startAgentRunWorker(),
     startCalendarSyncWorker(),

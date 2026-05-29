@@ -254,6 +254,39 @@ function RecentConversationsList({ items, loading }: { items: ConvPreview[]; loa
   )
 }
 
+// ─── Card do Resumo Diário (IA) ─────────────────────────────────────────────
+interface DigestEvent {
+  id: string
+  createdAt: string
+  payload: { digest?: string; date?: string }
+}
+
+function DailyDigestCard() {
+  const { data } = useQuery({
+    queryKey: ['daily-digest-latest'],
+    queryFn: () => apiFetch<{ events: DigestEvent[] }>('/events?type=daily.digest&limit=1'),
+    refetchInterval: 5 * 60_000,
+  })
+
+  const latest = data?.events?.[0]
+  const digest = latest?.payload?.digest
+  if (!digest) return null
+
+  return (
+    <div className="rounded-2xl border bg-card p-5 animate-slide-up delay-100">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-foreground/80 tracking-wide uppercase">
+          <Bot className="h-4 w-4 text-primary" /> Resumo do dia
+        </h2>
+        <span className="text-xs text-muted-foreground">
+          {new Date(latest.createdAt).toLocaleDateString('pt-BR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+        </span>
+      </div>
+      <p className="text-sm text-foreground/90 whitespace-pre-wrap leading-relaxed">{digest}</p>
+    </div>
+  )
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const router = useRouter()
@@ -297,6 +330,8 @@ export default function DashboardPage() {
         {/* ─────────────────── VISÃO ADMIN ─────────────────── */}
         {isAdminScope && adminData && (
           <>
+            <DailyDigestCard />
+
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-slide-up delay-100">
               <KpiCard label="Mensagens não lidas" value={adminData.kpis.unreadMessages} icon={MessageSquare}
                 iconBg="bg-blue-100 dark:bg-blue-900/30" iconColor="text-blue-600 dark:text-blue-400" href="/inbox" loading={isLoading} />

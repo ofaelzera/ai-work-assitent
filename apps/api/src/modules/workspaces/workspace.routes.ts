@@ -36,6 +36,8 @@ export const workspaceRoutes: FastifyPluginAsyncZod = async (app) => {
           roundRobinUserIds: z.array(z.string()).optional(),
           claimTimeoutMinutes: z.number().int().min(0).nullable().optional(),
           aiSuggestReplyEnabled: z.boolean().optional(),
+          aiSuggestReplyAgentId: z.string().nullable().optional(),
+          aiDigestAgentId: z.string().nullable().optional(),
           razaoSocial: z.string().optional(),
           cnpj: z.string().optional(),
           companyPhone: z.string().optional(),

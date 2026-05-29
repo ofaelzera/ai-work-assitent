@@ -107,7 +107,7 @@ export async function runAgentWithTools(opts: RunAgentWithToolsOptions): Promise
   const enabledNames = Array.isArray(agent.enabledTools) ? (agent.enabledTools as string[]) : []
   const tools = getEnabledTools(enabledNames)
 
-  const ai = getProvider(agent.provider)
+  const ai = await getProvider(agent.provider)
   const systemPrompt = buildSystemPrompt(agent.systemPrompt, tools)
 
   const triggerContext = opts.triggerEvent

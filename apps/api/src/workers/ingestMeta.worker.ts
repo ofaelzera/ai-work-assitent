@@ -1,5 +1,4 @@
 import { Worker } from 'bullmq'
-import { classifyQueue } from './classifyMessage.worker.js'
 import { redis } from '../lib/redis.js'
 import { prisma } from '../lib/prisma.js'
 import { eventBus } from '../lib/eventBus.js'
@@ -157,14 +156,6 @@ export function startIngestMetaWorker() {
         body: msg.body ?? '',
         direction: 'INBOUND',
       })
-
-      if (!conversation.archived) {
-        await classifyQueue.add(
-          'classify',
-          { messageId: msg.id, conversationId: conversation.id, workspaceId },
-          { jobId: `classify-${msg.id}`, removeOnComplete: 50, removeOnFail: 20 },
-        )
-      }
     },
     { connection: redis, concurrency: 5 },
   )

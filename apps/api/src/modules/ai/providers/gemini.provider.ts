@@ -31,13 +31,14 @@ export class GeminiProvider implements AIProvider {
 
   async generate(input: AIGenerateInput): Promise<AIGenerateOutput> {
     let lastErr: unknown
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const maxRetries = input.maxRetries ?? MAX_RETRIES
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         return await this._generate(input)
       } catch (err) {
         lastErr = err
         const status = extractHttpStatus(err)
-        if (status && RETRY_STATUS.has(status) && attempt < MAX_RETRIES) {
+        if (status && RETRY_STATUS.has(status) && attempt < maxRetries) {
           const wait = retryDelay(attempt, err)
           logger.warn({ attempt, status, wait }, `Gemini ${status} — aguardando ${wait}ms antes de retry`)
           await new Promise(r => setTimeout(r, wait))

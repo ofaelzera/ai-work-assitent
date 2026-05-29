@@ -9,6 +9,8 @@ export interface AIGenerateInput {
   temperature?: number
   maxTokens?: number
   responseFormat?: 'text' | 'json'
+  /** Sobrescreve o nº de retries do provider (ex: 0 = falha rápida em testes). */
+  maxRetries?: number
 }
 
 export interface AIGenerateOutput {

@@ -57,29 +57,8 @@ async function main() {
   }
 
   // Agentes padrão
+  // (Triagem foi removida — atendimento/triagem agora é feito pelos Flows.)
   const agents = [
-    {
-      name: 'Triagem',
-      description: 'Classifica mensagens e identifica demandas',
-      // Triagem fica DESATIVADA por padrão — a triagem/distribuição automática
-      // agora é feita pelos Flows configuráveis. Admin pode ativar manualmente
-      // se quiser o classificador antigo voltar a rodar em paralelo.
-      isActive: false,
-      systemPrompt: `Você é um agente de triagem. Analise a mensagem e responda SOMENTE em JSON válido com este schema:
-{
-  "isDemand": boolean,
-  "intent": "support" | "billing" | "sales" | "info" | "technical" | "other",
-  "priority": "LOW" | "MEDIUM" | "HIGH" | "URGENT",
-  "summary": "resumo curto em até 100 chars",
-  "suggestedTitle": "título do card se for demanda",
-  "checklist": ["item1", "item2"],
-  "confidence": 0.0 a 1.0
-}
-Considere URGENT apenas para problemas de produção ou sistema fora do ar.`,
-      model: 'gemini-2.5-flash',
-      provider: 'gemini',
-      temperature: 0.3,
-    },
     {
       name: 'Sugestão de Resposta',
       description: 'Sugere respostas para mensagens recebidas',
@@ -125,6 +104,76 @@ Responda em JSON: { "summary": "texto", "bullets": ["item1", "item2"] }`,
       console.log(`✅ Agente criado: ${agent.name}`)
     }
   }
+
+  // Aponta as configurações do workspace para os agentes padrão (Configurações → IA),
+  // sem sobrescrever escolhas já feitas pelo admin. Mapeia por nome → função.
+  const wsRow = await prisma.workspace.findUnique({ where: { id: workspace.id }, select: { settings: true } })
+  const wsSettings = (wsRow?.settings as Record<string, unknown> | null) ?? {}
+  const findAgentId = async (contains: string[]) =>
+    (await prisma.agent.findFirst({
+      where: { workspaceId: workspace.id, OR: contains.map((n) => ({ name: { contains: n } })) },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true },
+    }))?.id
+  const settingsPatch: Record<string, unknown> = {}
+  if (!wsSettings.aiSuggestReplyAgentId) {
+    const id = await findAgentId(['Sugest', 'sugest', 'reply'])
+    if (id) settingsPatch.aiSuggestReplyAgentId = id
+  }
+  if (!wsSettings.aiDigestAgentId) {
+    const id = await findAgentId(['Resumidor', 'digest', 'resumo'])
+    if (id) settingsPatch.aiDigestAgentId = id
+  }
+  if (Object.keys(settingsPatch).length > 0) {
+    await prisma.workspace.update({
+      where: { id: workspace.id },
+      data: { settings: { ...wsSettings, ...settingsPatch } as any },
+    })
+    console.log(`✅ Configurações de IA do workspace vinculadas aos agentes padrão`)
+  }
+
+  // ── Modelos de IA padrão ──────────────────────────────────────────────────
+  // Recria os modelos que antes ficavam hardcoded no front. As keys de cada
+  // provedor continuam sendo configuradas em Admin → Provedores de IA.
+  const aiModels: Array<{
+    provider: string; modelId: string; label: string; isDefault?: boolean
+  }> = [
+    // OpenRouter — gratuitos
+    { provider: 'openrouter', modelId: 'meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (Meta) — grátis' },
+    { provider: 'openrouter', modelId: 'deepseek/deepseek-v4-flash:free',        label: 'DeepSeek V4 Flash — grátis' },
+    { provider: 'openrouter', modelId: 'qwen/qwen3-coder:free',                  label: 'Qwen3 Coder — grátis' },
+    { provider: 'openrouter', modelId: 'openai/gpt-oss-120b:free',               label: 'GPT-OSS 120B — grátis' },
+    { provider: 'openrouter', modelId: 'z-ai/glm-4.5-air:free',                  label: 'GLM 4.5 Air — grátis' },
+    // OpenRouter — pagos
+    { provider: 'openrouter', modelId: 'openai/gpt-4o-mini',           label: 'GPT-4o Mini (OpenAI)' },
+    { provider: 'openrouter', modelId: 'openai/gpt-4o',               label: 'GPT-4o (OpenAI)' },
+    { provider: 'openrouter', modelId: 'anthropic/claude-3.5-haiku',  label: 'Claude 3.5 Haiku (Anthropic)' },
+    { provider: 'openrouter', modelId: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet 4.6 (Anthropic)' },
+    { provider: 'openrouter', modelId: 'google/gemini-2.5-pro',       label: 'Gemini 2.5 Pro (Google)' },
+    // Gemini direto
+    { provider: 'gemini', modelId: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash', isDefault: true },
+    { provider: 'gemini', modelId: 'gemini-2.5-pro',        label: 'Gemini 2.5 Pro' },
+    { provider: 'gemini', modelId: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite' },
+  ]
+
+  // Garante a existência das configs de provedor (FK) — sem key ainda.
+  for (const provider of ['gemini', 'openrouter'] as const) {
+    await prisma.aiProviderConfig.upsert({
+      where: { provider },
+      update: {},
+      create: { provider, enabled: false },
+    })
+  }
+
+  for (const m of aiModels) {
+    const { isDefault, ...rest } = m
+    await prisma.aiModel.upsert({
+      where: { provider_modelId: { provider: m.provider, modelId: m.modelId } },
+      update: {},
+      create: { ...rest, isDefault: isDefault ?? false },
+    })
+  }
+  console.log(`✅ ${aiModels.length} modelos de IA semeados`)
 
   // ── Times padrão (setores) ────────────────────────────────────────────────
   // Cria um time "Geral" como fallback e modelos de Suporte/Vendas/Financeiro.

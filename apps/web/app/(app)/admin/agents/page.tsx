@@ -38,42 +38,25 @@ interface Agent {
   enabledTools?: string[] | null
 }
 
-const MODELS: { group: string; items: { value: string; provider: string; label: string }[] }[] = [
-  {
-    group: 'OpenRouter — Gratuitos',
-    items: [
-      { value: 'meta-llama/llama-4-scout:free', provider: 'openrouter', label: 'Llama 4 Scout (Meta) — grátis' },
-      { value: 'meta-llama/llama-4-maverick:free', provider: 'openrouter', label: 'Llama 4 Maverick (Meta) — grátis' },
-      { value: 'google/gemini-2.0-flash-exp:free', provider: 'openrouter', label: 'Gemini 2.0 Flash Exp — grátis' },
-      { value: 'deepseek/deepseek-r1:free', provider: 'openrouter', label: 'DeepSeek R1 — grátis' },
-      { value: 'mistralai/mistral-small-3.2-24b-instruct:free', provider: 'openrouter', label: 'Mistral Small 3.2 — grátis' },
-    ],
-  },
-  {
-    group: 'OpenRouter — Pagos',
-    items: [
-      { value: 'openai/gpt-4o-mini', provider: 'openrouter', label: 'GPT-4o Mini (OpenAI)' },
-      { value: 'openai/gpt-4o', provider: 'openrouter', label: 'GPT-4o (OpenAI)' },
-      { value: 'anthropic/claude-3.5-haiku', provider: 'openrouter', label: 'Claude 3.5 Haiku (Anthropic)' },
-      { value: 'anthropic/claude-3.7-sonnet', provider: 'openrouter', label: 'Claude 3.7 Sonnet (Anthropic)' },
-      { value: 'google/gemini-2.5-pro-preview', provider: 'openrouter', label: 'Gemini 2.5 Pro (Google)' },
-    ],
-  },
-  {
-    group: 'Gemini Direto',
-    items: [
-      { value: 'gemini-2.5-flash', provider: 'gemini', label: 'Gemini 2.5 Flash ✓' },
-      { value: 'gemini-2.5-pro', provider: 'gemini', label: 'Gemini 2.5 Pro' },
-      { value: 'gemini-2.0-flash-lite', provider: 'gemini', label: 'Gemini 2.0 Flash Lite' },
-    ],
-  },
-]
+interface AiModel {
+  id: string
+  provider: string
+  modelId: string
+  label: string
+  enabled: boolean
+  isDefault: boolean
+}
 
-const ALL_MODEL_OPTIONS = MODELS.flatMap(g => g.items)
+const PROVIDER_LABEL: Record<string, string> = {
+  gemini: 'Google Gemini',
+  openrouter: 'OpenRouter',
+  anthropic: 'Anthropic (Claude)',
+  openai: 'OpenAI',
+}
 
 const DEFAULT_FORM = {
-  name: '', description: '', systemPrompt: '', model: 'gemini-2.5-flash',
-  provider: 'gemini', temperature: 0.4,
+  name: '', description: '', systemPrompt: '', model: '',
+  provider: '', temperature: 0.4,
   trigger: null as TriggerConfig | null,
   enabledTools: [] as string[],
 }
@@ -100,6 +83,18 @@ export default function AgentsPage() {
     queryFn: () => apiFetch<ToolMeta[]>('/ai/tools'),
     staleTime: 5 * 60_000,
   })
+
+  const { data: aiModels = [] } = useQuery<AiModel[]>({
+    queryKey: ['ai-models'],
+    queryFn: () => apiFetch<AiModel[]>('/ai/models'),
+    staleTime: 60_000,
+  })
+  const enabledModels = aiModels.filter(m => m.enabled)
+  // Agrupa modelos habilitados por provedor para o <select>
+  const modelsByProvider = enabledModels.reduce<Record<string, AiModel[]>>((acc, m) => {
+    (acc[m.provider] ??= []).push(m)
+    return acc
+  }, {})
 
   const { data: channels = [] } = useQuery<{ id: string; label: string; type: string }[]>({
     queryKey: ['channels'],
@@ -214,24 +209,34 @@ export default function AgentsPage() {
             </div>
             <div>
               <label className="text-xs font-medium">Modelo</label>
-              <select
-                value={form.model}
-                onChange={e => {
-                  const selected = ALL_MODEL_OPTIONS.find(m => m.value === e.target.value)
-                  setForm(p => ({ ...p, model: e.target.value, provider: selected?.provider ?? p.provider }))
-                }}
-                className="mt-1 w-full rounded-lg border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              >
-                {MODELS.map(group => (
-                  <optgroup key={group.group} label={group.group}>
-                    {group.items.map(m => (
-                      <option key={m.value} value={m.value}>{m.label}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+              {enabledModels.length === 0 ? (
+                <p className="mt-1 rounded-lg border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
+                  Nenhum modelo cadastrado. Cadastre em{' '}
+                  <a href="/admin/ai-settings" className="text-primary underline">Provedores de IA</a>.
+                </p>
+              ) : (
+                <select
+                  value={form.model}
+                  onChange={e => {
+                    const selected = enabledModels.find(m => m.modelId === e.target.value)
+                    setForm(p => ({ ...p, model: e.target.value, provider: selected?.provider ?? p.provider }))
+                  }}
+                  className="mt-1 w-full rounded-lg border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="" disabled>Selecione um modelo...</option>
+                  {Object.entries(modelsByProvider).map(([prov, items]) => (
+                    <optgroup key={prov} label={PROVIDER_LABEL[prov] ?? prov}>
+                      {items.map(m => (
+                        <option key={m.id} value={m.modelId}>
+                          {m.label}{m.isDefault ? ' ★' : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              )}
               <p className="mt-1 text-[11px] text-muted-foreground">
-                Provider: <span className="font-mono">{form.provider}</span>
+                Provider: <span className="font-mono">{form.provider || '—'}</span>
               </p>
             </div>
             <div>
@@ -371,7 +376,7 @@ export default function AgentsPage() {
           <div className="flex justify-end gap-2">
             <button onClick={() => { setShowForm(false); setEditing(null) }}
               className="px-4 py-2 rounded-lg text-sm hover:bg-accent">Cancelar</button>
-            <button onClick={() => saveMutation.mutate(form)} disabled={saveMutation.isPending || !form.name || !form.systemPrompt}
+            <button onClick={() => saveMutation.mutate(form)} disabled={saveMutation.isPending || !form.name || !form.systemPrompt || !form.model}
               className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
               {saveMutation.isPending ? 'Salvando...' : 'Salvar'}
             </button>

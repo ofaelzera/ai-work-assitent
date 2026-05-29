@@ -14,6 +14,7 @@ const PATH_PERMS: Array<{ prefix: string; perm: string }> = [
   { prefix: '/admin/agents',   perm: 'admin.agents' },
   { prefix: '/admin/prompts',  perm: 'admin.agents' },
   { prefix: '/admin/ai-logs',  perm: 'admin.agents' },
+  { prefix: '/admin/ai-settings', perm: 'admin.settings' },
   { prefix: '/admin/events',   perm: 'admin.events' },
   { prefix: '/admin/reports',  perm: 'reports.view' },
   { prefix: '/admin/users',    perm: 'admin.users' },
