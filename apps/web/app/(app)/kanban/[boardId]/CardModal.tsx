@@ -7,7 +7,8 @@ import { toast } from 'sonner'
 import {
   X, Flag, Calendar, User, MessageSquare,
   Trash2, ExternalLink, Plus, Check, GripVertical, Phone, ListTodo,
-  Paperclip, Download, FileText, Image as ImageIcon, Music, Video,
+  Paperclip, Download, FileText, Image as ImageIcon, Music, Video, Upload, Loader2,
+  Building2, Search,
 } from 'lucide-react'
 
 import { getApiUrl } from '@/lib/runtime-config'
@@ -43,13 +44,126 @@ interface CardDetail {
   dueDate: string | null
   checklist: Omit<ChecklistItem, 'id'>[] | null
   contactId: string | null
+  companyId: string | null
   conversationId: string | null
   labels: string[] | null
   columnId: string
+  createdAt: string
   contact: { id: string; name: string | null; phone: string | null } | null
+  company: { id: string; name: string; color: string } | null
   conversation: { id: string; externalId: string } | null
+  creator: { id: string; name: string | null; email: string } | null
   comments: { id: string; userId: string | null; body: string; createdAt: string }[]
   column: { id: string; name: string; boardId: string }
+}
+
+// ── Seletor reutilizável (empresa/contato) ────────────────────────────────
+// Combobox simples com busca server-side. Salva ao escolher; permite limpar.
+function EntityPicker<T extends { id: string; name?: string | null; phone?: string | null; color?: string }>({
+  label, icon, current, fetchOptions, onPick, onClear, displayCurrent, placeholder,
+}: {
+  label: string
+  icon: React.ReactNode
+  current: T | null
+  fetchOptions: (q: string) => Promise<T[]>
+  onPick: (id: string) => void
+  onClear: () => void
+  displayCurrent: (item: T) => React.ReactNode
+  placeholder: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [options, setOptions] = useState<T[]>([])
+  const [loading, setLoading] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    setLoading(true)
+    const t = setTimeout(() => {
+      fetchOptions(query).then(rows => {
+        if (active) setOptions(rows)
+      }).finally(() => { if (active) setLoading(false) })
+    }, 200)
+    return () => { active = false; clearTimeout(t) }
+  }, [open, query, fetchOptions])
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={containerRef}>
+      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+        {icon} {label}
+      </p>
+      {current ? (
+        <div className="bg-muted/60 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">{displayCurrent(current)}</div>
+          <button
+            onClick={() => setOpen(true)}
+            className="text-[10px] text-muted-foreground hover:text-foreground shrink-0"
+            title="Trocar"
+          >
+            Trocar
+          </button>
+          <button
+            onClick={onClear}
+            className="text-[10px] text-muted-foreground hover:text-red-500 shrink-0"
+            title="Remover"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-accent/40 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
+        >
+          + Vincular
+        </button>
+      )}
+      {open && (
+        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1">
+          <div className="relative">
+            <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              autoFocus
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder={placeholder}
+              className="w-full rounded-md border bg-background pl-7 pr-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+          <div className="max-h-56 overflow-y-auto space-y-0.5">
+            {loading ? (
+              <p className="text-[11px] text-muted-foreground italic px-2 py-1">Buscando...</p>
+            ) : options.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground italic px-2 py-1">Nenhum resultado</p>
+            ) : (
+              options.map(opt => (
+                <button
+                  key={opt.id}
+                  onClick={() => { onPick(opt.id); setOpen(false); setQuery('') }}
+                  className="w-full text-left px-2 py-1.5 rounded-md hover:bg-accent text-xs flex items-center gap-2"
+                >
+                  {opt.color && <span className="h-2 w-2 rounded-full shrink-0" style={{ background: opt.color }} />}
+                  <span className="truncate flex-1">{opt.name ?? opt.phone ?? '(sem nome)'}</span>
+                  {opt.phone && opt.name && <span className="text-[10px] text-muted-foreground font-mono shrink-0">{opt.phone}</span>}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── Priority ──────────────────────────────────────────────────────────────
@@ -261,11 +375,12 @@ function useAttachmentBlobUrl(attachmentId: string, mimeType: string, enabled: b
   return src
 }
 
-function AttachmentItem({ att }: { att: Attachment }) {
+function AttachmentItem({ att, onDelete }: { att: Attachment; onDelete?: () => void }) {
   const isImage = att.mimeType.startsWith('image/')
   const isAudio = att.mimeType.startsWith('audio/')
   const isVideo = att.mimeType.startsWith('video/')
-  const isMedia = isImage || isAudio || isVideo
+  const isPdf = att.mimeType === 'application/pdf' || /\.pdf$/i.test(att.filename)
+  const isMedia = isImage || isAudio || isVideo || isPdf
   const src = useAttachmentBlobUrl(att.id, att.mimeType, isMedia)
 
   const Icon = isImage ? ImageIcon : isAudio ? Music : isVideo ? Video : FileText
@@ -298,6 +413,14 @@ function AttachmentItem({ att }: { att: Attachment }) {
           title="Baixar">
           <Download className="h-3.5 w-3.5" />
         </button>
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+            title="Remover anexo">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       {isImage && src && (
@@ -311,25 +434,112 @@ function AttachmentItem({ att }: { att: Attachment }) {
       {isVideo && src && (
         <video src={src} controls className="w-full max-h-64 rounded" />
       )}
+      {isPdf && src && (
+        <div className="space-y-1">
+          <iframe
+            src={src}
+            title={att.filename}
+            className="w-full h-72 rounded border bg-muted/30"
+          />
+          <button
+            onClick={() => window.open(src, '_blank')}
+            className="text-[10px] text-primary hover:underline"
+          >
+            Abrir em tela cheia
+          </button>
+        </div>
+      )}
     </div>
   )
 }
 
 function AttachmentsSection({ cardId }: { cardId: string }) {
+  const qc = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const canEdit = usePermission('cards.edit')
+
   const { data: attachments = [], isLoading } = useQuery<Attachment[]>({
     queryKey: ['card-attachments', cardId],
     queryFn: () => apiFetch(`/kanban/cards/${cardId}/attachments`),
   })
 
-  if (isLoading) {
-    return <p className="text-xs text-muted-foreground">Carregando anexos...</p>
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/storage/attachments/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['card-attachments', cardId] })
+      toast.success('Anexo removido')
+    },
+    onError: () => toast.error('Erro ao remover anexo'),
+  })
+
+  const handleUpload = async (file: File) => {
+    if (file.size > 64 * 1024 * 1024) {
+      toast.error('Arquivo muito grande (máx 64 MB)')
+      return
+    }
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch(`${getApiUrl()}/kanban/cards/${cardId}/attachments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${getAccessToken()}` },
+        body: formData,
+      })
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        throw new Error(body || `HTTP ${res.status}`)
+      }
+      toast.success('Anexo adicionado')
+      qc.invalidateQueries({ queryKey: ['card-attachments', cardId] })
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Erro ao enviar arquivo')
+    } finally {
+      setUploading(false)
+    }
   }
-  if (attachments.length === 0) {
-    return <p className="text-xs text-muted-foreground italic">Nenhum anexo</p>
-  }
+
   return (
     <div className="space-y-2">
-      {attachments.map(a => <AttachmentItem key={a.id} att={a} />)}
+      {canEdit && (
+        <div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={e => {
+              const f = e.target.files?.[0]
+              if (f) handleUpload(f)
+              e.target.value = ''
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-accent/40 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+          >
+            {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+            {uploading ? 'Enviando...' : 'Anexar arquivo (máx 64 MB)'}
+          </button>
+        </div>
+      )}
+
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Carregando anexos...</p>
+      ) : attachments.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">Nenhum anexo</p>
+      ) : (
+        attachments.map(a => (
+          <AttachmentItem
+            key={a.id}
+            att={a}
+            onDelete={canEdit ? () => {
+              if (confirm(`Remover "${a.filename}"?`)) deleteMutation.mutate(a.id)
+            } : undefined}
+          />
+        ))
+      )}
     </div>
   )
 }
@@ -643,6 +853,18 @@ export default function CardModal({
                 </button>
               </div>
             </section>
+
+            {/* Rodapé: quem criou e quando */}
+            <p className="text-[10px] text-muted-foreground/70 pt-2 mt-2 border-t border-border/40">
+              {card.creator ? (
+                <>by: <span className="font-medium text-muted-foreground">{card.creator.name ?? card.creator.email}</span></>
+              ) : (
+                <>by: <span className="italic">Sistema</span></>
+              )}
+              {card.createdAt && (
+                <> · {new Date(card.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</>
+              )}
+            </p>
           </div>
 
           {/* Sidebar */}
@@ -691,28 +913,58 @@ export default function CardModal({
               )}
             </div>
 
+            {/* Empresa */}
+            <EntityPicker
+              label="Empresa"
+              icon={<Building2 className="h-3 w-3" />}
+              current={card.company}
+              fetchOptions={async (q) => {
+                const list = await apiFetch<Array<{ id: string; name: string; color: string }>>(`/companies`)
+                const filtered = q ? list.filter(c => c.name.toLowerCase().includes(q.toLowerCase())) : list
+                return filtered.slice(0, 50)
+              }}
+              onPick={(id) => patchMutation.mutate({ companyId: id })}
+              onClear={() => patchMutation.mutate({ companyId: null })}
+              displayCurrent={(c) => (
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="h-2 w-2 rounded-full shrink-0" style={{ background: c.color }} />
+                  <span className="text-sm font-medium truncate">{c.name}</span>
+                </div>
+              )}
+              placeholder="Buscar empresa..."
+            />
+
             {/* Contato */}
-            {card.contact && (
-              <div>
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                  <User className="h-3 w-3" /> Contato
-                </p>
-                <div className="bg-muted/60 rounded-lg px-3 py-2.5 space-y-0.5">
+            <EntityPicker
+              label="Contato"
+              icon={<User className="h-3 w-3" />}
+              current={card.contact}
+              fetchOptions={async (q) => {
+                const params = new URLSearchParams({ limit: '50' })
+                if (q) params.set('q', q)
+                const res = await apiFetch<{ items: Array<{ id: string; name: string | null; phone: string | null }> }>(`/contacts?${params}`)
+                return res.items
+              }}
+              onPick={(id) => patchMutation.mutate({ contactId: id })}
+              onClear={() => patchMutation.mutate({ contactId: null })}
+              displayCurrent={(c) => (
+                <div className="space-y-0.5 min-w-0">
                   {!isPhoneAsName && contactName && (
-                    <p className="text-sm font-medium leading-snug">{contactName}</p>
+                    <p className="text-sm font-medium leading-snug truncate">{contactName}</p>
                   )}
                   {contactPhone && (
                     <div className="flex items-center gap-1.5">
                       <Phone className="h-3 w-3 text-muted-foreground shrink-0" />
-                      <p className="text-xs text-muted-foreground font-mono">{contactPhone}</p>
+                      <p className="text-xs text-muted-foreground font-mono truncate">{contactPhone}</p>
                     </div>
                   )}
                   {isPhoneAsName && (
-                    <p className="text-[10px] text-muted-foreground italic mt-0.5">Nome não cadastrado</p>
+                    <p className="text-[10px] text-muted-foreground italic">Nome não cadastrado</p>
                   )}
                 </div>
-              </div>
-            )}
+              )}
+              placeholder="Buscar contato..."
+            />
 
             {/* Conversa */}
             {card.conversationId && (

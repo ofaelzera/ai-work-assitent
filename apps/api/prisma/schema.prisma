@@ -72,6 +72,7 @@ model User {
   chatParticipations    ConversationParticipant[]
   messageReads          MessageRead[]
   conversationReads     ConversationRead[]
+  createdCards          Card[]             @relation("CardCreator")
   teamMemberships       TeamMembership[]
   transfersFrom         ConversationTransfer[]    @relation("TransferFromUser")
   transfersTo           ConversationTransfer[]    @relation("TransferToUser")
@@ -222,6 +223,7 @@ model Company {
   workspace     Workspace      @relation(fields: [workspaceId], references: [id])
   contacts      Contact[]
   conversations Conversation[]
+  cards         Card[]         @relation("CardCompany")
 
   @@index([workspaceId])
 }
@@ -435,8 +437,10 @@ model Card {
   priority       Priority  @default(MEDIUM)
   dueDate        DateTime?
   contactId      String?
+  companyId      String?
   conversationId String?
   createdBy      CreatedBy @default(USER)
+  createdByUserId String?  // quem clicou em "criar card" (null se foi criado pela IA/sistema)
   assigneeId     String?
   position       Int
   labels         Json?
@@ -448,13 +452,18 @@ model Card {
   workspace    Workspace     @relation(fields: [workspaceId], references: [id])
   column       Column        @relation(fields: [columnId], references: [id])
   contact      Contact?      @relation(fields: [contactId], references: [id])
+  company      Company?      @relation("CardCompany", fields: [companyId], references: [id])
   conversation Conversation? @relation(fields: [conversationId], references: [id])
+  creator      User?         @relation("CardCreator", fields: [createdByUserId], references: [id])
   history      CardHistory[]
   comments     CardComment[]
   attachments  Attachment[]
   tasks        Task[]
 
   @@index([workspaceId, columnId, position])
+  @@index([workspaceId, companyId])
+  @@index([workspaceId, contactId])
+  @@index([workspaceId, createdByUserId])
 }
 
 model CardComment {

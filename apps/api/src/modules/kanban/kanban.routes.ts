@@ -532,6 +532,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
           priority: priorityEnum.optional(),
           dueDate: z.string().optional(),
           contactId: z.string().optional(),
+          companyId: z.string().optional(),
           conversationId: z.string().optional(),
           checklist: z.array(z.object({ text: z.string(), done: z.boolean() })).optional(),
         }),
@@ -539,7 +540,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req, reply) => {
       const { workspaceId } = req.user
-      const { columnId, title, description, priority, dueDate, contactId, conversationId, checklist } = req.body
+      const { columnId, title, description, priority, dueDate, contactId, companyId, conversationId, checklist } = req.body
       const last = await prisma.card.findFirst({ where: { columnId, deletedAt: null }, orderBy: { position: 'desc' } })
       const card = await prisma.card.create({
         data: {
@@ -550,11 +551,17 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
           priority: priority ?? 'MEDIUM',
           dueDate: dueDate ? new Date(dueDate) : undefined,
           contactId,
+          companyId,
           conversationId,
+          createdByUserId: req.user.sub,
           checklist: checklist ?? [],
           position: (last?.position ?? -1) + 1,
         },
-        include: { contact: { select: { id: true, name: true, phone: true } } },
+        include: {
+          contact: { select: { id: true, name: true, phone: true } },
+          company: { select: { id: true, name: true, color: true } },
+          creator: { select: { id: true, name: true, email: true } },
+        },
       })
       await eventBus.audit(workspaceId, 'card.created', {
         actorUserId: req.user.sub,
@@ -576,7 +583,9 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
         include: {
           contact: { select: { id: true, name: true, phone: true } },
+          company: { select: { id: true, name: true, color: true } },
           conversation: { select: { id: true, externalId: true } },
+          creator: { select: { id: true, name: true, email: true } },
           comments: { orderBy: { createdAt: 'asc' } },
           column: { select: { id: true, name: true, boardId: true } },
         },
@@ -599,12 +608,13 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
           dueDate: z.string().nullable().optional(),
           checklist: z.array(z.object({ text: z.string(), done: z.boolean() })).optional(),
           contactId: z.string().nullable().optional(),
+          companyId: z.string().nullable().optional(),
           labels: z.array(z.string()).optional(),
         }),
       },
     },
     async (req, reply) => {
-      const { title, description, priority, dueDate, checklist, contactId, labels } = req.body
+      const { title, description, priority, dueDate, checklist, contactId, companyId, labels } = req.body
       const card = await prisma.card.updateMany({
         where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
         data: {
@@ -614,6 +624,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
           ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
           ...(checklist !== undefined && { checklist }),
           ...(contactId !== undefined && { contactId }),
+          ...(companyId !== undefined && { companyId }),
           ...(labels !== undefined && { labels }),
         },
       })
@@ -862,6 +873,56 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
+  // Upload direto de arquivo para o card (sem vir de mensagem).
+  app.post(
+    '/kanban/cards/:id/attachments',
+    {
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req: any, reply) => {
+      const { workspaceId, sub: userId } = req.user
+      const cardId = req.params.id
+
+      const card = await prisma.card.findFirst({
+        where: { id: cardId, workspaceId, deletedAt: null },
+      })
+      if (!card) return reply.notFound('Card não encontrado')
+
+      const data = await req.file()
+      if (!data) return reply.badRequest('Arquivo obrigatório')
+
+      const chunks: Buffer[] = []
+      for await (const chunk of data.file) chunks.push(chunk)
+      const buffer = Buffer.concat(chunks)
+      if (buffer.length > 64 * 1024 * 1024) {
+        return reply.badRequest('Arquivo muito grande (máx 64 MB)')
+      }
+
+      const ext = data.mimetype.split('/')[1]?.split(';')[0] ?? 'bin'
+      const safeName = (data.filename ?? `file.${ext}`).replace(/[^\w.\-]/g, '_')
+      const storageKey = path.join(workspaceId, 'attachments', `${randomUUID()}-${safeName}`)
+      const fullPath = path.join(env.STORAGE_PATH, storageKey)
+      await fs.mkdir(path.dirname(fullPath), { recursive: true })
+      await fs.writeFile(fullPath, buffer)
+
+      const record = await prisma.attachment.create({
+        data: {
+          workspaceId,
+          uploadedBy: userId,
+          filename: data.filename ?? safeName,
+          mimeType: data.mimetype,
+          sizeBytes: buffer.length,
+          storageKey,
+          cardId,
+        },
+        select: { id: true, filename: true, mimeType: true, sizeBytes: true, storageKey: true, createdAt: true },
+      })
+
+      return reply.code(201).send(record)
+    },
+  )
+
   app.get(
     '/storage/attachments/:id',
     {
@@ -915,6 +976,38 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       } catch {
         return reply.notFound('Arquivo não encontrado no disco')
       }
+    },
+  )
+
+  // DELETE /storage/attachments/:id — remove o anexo (apenas de cards por enquanto).
+  app.delete(
+    '/storage/attachments/:id',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId, sub: userId, role } = req.user
+      const attachment = await prisma.attachment.findFirst({
+        where: { id: req.params.id, workspaceId },
+      })
+      if (!attachment) return reply.notFound()
+
+      // Quem pode remover: quem subiu, admin, ou quem tem cards.edit em anexos de card
+      const isUploader = attachment.uploadedBy === userId
+      const isAdmin = role === 'ADMIN'
+      let canDelete = isUploader || isAdmin
+      if (!canDelete && attachment.cardId) {
+        canDelete = await hasPermission(req.user, 'cards.edit')
+      }
+      if (!canDelete) return reply.forbidden('Sem permissão para remover este anexo')
+
+      // Apaga o arquivo do disco (best-effort)
+      const fullPath = path.join(env.STORAGE_PATH, attachment.storageKey)
+      await fs.unlink(fullPath).catch(() => {})
+
+      await prisma.attachment.delete({ where: { id: attachment.id } })
+      return reply.code(204).send()
     },
   )
 }
