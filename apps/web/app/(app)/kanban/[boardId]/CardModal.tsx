@@ -156,8 +156,12 @@ function EntityPicker<T extends { id: string; name?: string | null; phone?: stri
                   className="w-full text-left px-2 py-1.5 rounded-md hover:bg-accent text-xs flex items-center gap-2"
                 >
                   {opt.color && <span className="h-2 w-2 rounded-full shrink-0" style={{ background: opt.color }} />}
-                  <span className="truncate flex-1">{opt.name ?? opt.phone ?? '(sem nome)'}</span>
-                  {opt.phone && opt.name && <span className="text-[10px] text-muted-foreground font-mono shrink-0">{opt.phone}</span>}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{opt.name ?? opt.phone ?? '(sem nome)'}</p>
+                    {opt.phone && opt.name && (
+                      <p className="text-[10px] text-muted-foreground font-mono truncate">{opt.phone}</p>
+                    )}
+                  </div>
                 </button>
               ))
             )}
@@ -265,8 +269,12 @@ function MultiContactsPicker({ cardId, contacts }: {
                       already ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent',
                     )}
                   >
-                    <span className="truncate flex-1">{opt.name ?? opt.phone ?? '(sem nome)'}</span>
-                    {opt.phone && opt.name && <span className="text-[10px] text-muted-foreground font-mono shrink-0">{opt.phone}</span>}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{opt.name ?? opt.phone ?? '(sem nome)'}</p>
+                      {opt.phone && opt.name && (
+                        <p className="text-[10px] text-muted-foreground font-mono truncate">{opt.phone}</p>
+                      )}
+                    </div>
                     {already && <Check className="h-3 w-3 text-emerald-500 shrink-0" />}
                   </button>
                 )
