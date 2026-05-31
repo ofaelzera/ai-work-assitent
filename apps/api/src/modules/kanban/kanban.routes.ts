@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import type { MediaAttachment } from '../channels/media.utils.js'
 import { getChannelConfig } from '../channels/channels.service.js'
 import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
+import { getBoardEligibleUserIds, canManageBoard } from './board-access.js'
 
 const priorityEnum = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT'])
 
@@ -24,6 +25,13 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get('/kanban/boards', { onRequest: [app.authenticate] }, async (req) => {
     const canSeeAll = await hasPermission(req.user, 'boards.manage')
     const userId = req.user.sub
+    // Times dos quais o usuário é membro ativo → boards compartilhados com esses setores
+    const myTeamIds = canSeeAll
+      ? []
+      : (await prisma.teamMembership.findMany({
+          where: { userId, isActive: true },
+          select: { teamId: true },
+        })).map(t => t.teamId)
     const visibilityFilter = canSeeAll
       ? {}
       : {
@@ -31,6 +39,9 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
             { visibility: 'PUBLIC' as const },
             { ownerId: userId },
             { visibility: 'SHARED' as const, shares: { some: { userId } } },
+            ...(myTeamIds.length > 0
+              ? [{ visibility: 'SHARED' as const, teamShares: { some: { teamId: { in: myTeamIds } } } }]
+              : []),
           ],
         }
 
@@ -377,6 +388,118 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
+  // ── Board team shares (compartilhar board com setores inteiros) ────────────
+  app.get(
+    '/kanban/boards/:id/team-shares',
+    { onRequest: [app.authenticate], schema: { params: z.object({ id: z.string() }) } },
+    async (req, reply) => {
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { ownerId: true },
+      })
+      if (!board) return reply.notFound()
+      const canManage = await hasPermission(req.user, 'boards.manage')
+      const canManageThis = canManage || board.ownerId === req.user.sub || await canManageBoard(req.params.id, req.user.sub)
+      if (!canManageThis) return reply.forbidden('Sem permissão')
+
+      const shares = await prisma.boardTeamShare.findMany({
+        where: { boardId: req.params.id },
+        orderBy: { createdAt: 'asc' },
+        include: {
+          team: { select: { id: true, name: true, slug: true, color: true, icon: true } },
+        },
+      })
+      return shares
+    },
+  )
+
+  app.post(
+    '/kanban/boards/:id/team-shares',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ teamId: z.string() }),
+      },
+    },
+    async (req, reply) => {
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { ownerId: true, visibility: true },
+      })
+      if (!board) return reply.notFound()
+      const canManage = await hasPermission(req.user, 'boards.manage')
+      const canManageThis = canManage || board.ownerId === req.user.sub || await canManageBoard(req.params.id, req.user.sub)
+      if (!canManageThis) return reply.forbidden('Sem permissão')
+
+      const team = await prisma.team.findFirst({
+        where: { id: req.body.teamId, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!team) return reply.notFound('Setor não encontrado')
+
+      const share = await prisma.boardTeamShare.upsert({
+        where: { boardId_teamId: { boardId: req.params.id, teamId: req.body.teamId } },
+        create: { boardId: req.params.id, teamId: req.body.teamId },
+        update: {},
+      })
+
+      // Auto-promove PRIVATE → SHARED (igual ao share por usuário)
+      if (board.visibility === 'PRIVATE') {
+        await prisma.board.update({
+          where: { id: req.params.id },
+          data: { visibility: 'SHARED' },
+        })
+      }
+      return reply.code(201).send(share)
+    },
+  )
+
+  app.delete(
+    '/kanban/boards/:id/team-shares/:teamId',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string(), teamId: z.string() }) },
+    },
+    async (req, reply) => {
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { ownerId: true },
+      })
+      if (!board) return reply.notFound()
+      const canManage = await hasPermission(req.user, 'boards.manage')
+      const canManageThis = canManage || board.ownerId === req.user.sub || await canManageBoard(req.params.id, req.user.sub)
+      if (!canManageThis) return reply.forbidden('Sem permissão')
+
+      await prisma.boardTeamShare.deleteMany({
+        where: { boardId: req.params.id, teamId: req.params.teamId },
+      })
+      return reply.code(204).send()
+    },
+  )
+
+  // ── Usuários elegíveis a virar responsável de um card neste board ──────────
+  // Respeita visibility (público=todos, shared=dono+users+team-members, private=dono).
+  app.get(
+    '/kanban/boards/:id/eligible-users',
+    { onRequest: [app.authenticate], schema: { params: z.object({ id: z.string() }) } },
+    async (req, reply) => {
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!board) return reply.notFound()
+      const ids = await getBoardEligibleUserIds(req.params.id)
+      if (ids.length === 0) return []
+      const users = await prisma.user.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true, email: true, settings: true },
+        orderBy: { name: 'asc' },
+      })
+      return users
+    },
+  )
+
   // ── Columns ───────────────────────────────────────────────────────────────
 
   app.post(
@@ -588,10 +711,129 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
           creator: { select: { id: true, name: true, email: true } },
           comments: { orderBy: { createdAt: 'asc' } },
           column: { select: { id: true, name: true, boardId: true } },
+          contacts: {
+            include: { contact: { select: { id: true, name: true, phone: true } } },
+          },
+          assignees: {
+            include: { user: { select: { id: true, name: true, email: true, settings: true } } },
+          },
         },
       })
       if (!card) return reply.notFound()
-      return card
+      // Achata p/ a UI: contacts[].contact → contacts[], assignees[].user → assignees[]
+      return {
+        ...card,
+        contacts: card.contacts.map(c => c.contact),
+        assignees: card.assignees.map(a => a.user),
+      }
+    },
+  )
+
+  // ── Card ↔ Contact (multi) ─────────────────────────────────────────────────
+  app.post(
+    '/kanban/cards/:id/contacts',
+    {
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ contactId: z.string() }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const card = await prisma.card.findFirst({
+        where: { id: req.params.id, workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!card) return reply.notFound()
+      const contact = await prisma.contact.findFirst({
+        where: { id: req.body.contactId, workspaceId },
+        select: { id: true },
+      })
+      if (!contact) return reply.notFound('Contato não encontrado')
+
+      await prisma.cardContact.upsert({
+        where: { cardId_contactId: { cardId: req.params.id, contactId: req.body.contactId } },
+        create: { cardId: req.params.id, contactId: req.body.contactId },
+        update: {},
+      })
+      return reply.code(204).send()
+    },
+  )
+
+  app.delete(
+    '/kanban/cards/:id/contacts/:contactId',
+    {
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
+      schema: { params: z.object({ id: z.string(), contactId: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const card = await prisma.card.findFirst({
+        where: { id: req.params.id, workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!card) return reply.notFound()
+
+      await prisma.cardContact.deleteMany({
+        where: { cardId: req.params.id, contactId: req.params.contactId },
+      })
+      return reply.code(204).send()
+    },
+  )
+
+  // ── Card ↔ User assignee (multi) ───────────────────────────────────────────
+  app.post(
+    '/kanban/cards/:id/assignees',
+    {
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ userId: z.string() }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const card = await prisma.card.findFirst({
+        where: { id: req.params.id, workspaceId, deletedAt: null },
+        select: { id: true, column: { select: { boardId: true } } },
+      })
+      if (!card) return reply.notFound()
+
+      // Só permite vincular usuários elegíveis ao board (público=todos,
+      // shared=dono+users+team-members, private=dono)
+      const eligibleIds = await getBoardEligibleUserIds(card.column.boardId)
+      if (!eligibleIds.includes(req.body.userId)) {
+        return reply.badRequest('Usuário não tem acesso a este board')
+      }
+
+      await prisma.cardAssignee.upsert({
+        where: { cardId_userId: { cardId: req.params.id, userId: req.body.userId } },
+        create: { cardId: req.params.id, userId: req.body.userId },
+        update: {},
+      })
+      return reply.code(204).send()
+    },
+  )
+
+  app.delete(
+    '/kanban/cards/:id/assignees/:userId',
+    {
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
+      schema: { params: z.object({ id: z.string(), userId: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const card = await prisma.card.findFirst({
+        where: { id: req.params.id, workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!card) return reply.notFound()
+
+      await prisma.cardAssignee.deleteMany({
+        where: { cardId: req.params.id, userId: req.params.userId },
+      })
+      return reply.code(204).send()
     },
   )
 

@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "db:push": "dotenv -e ../../.env -- prisma db push",
     "db:seed": "dotenv -e ../../.env -- tsx src/lib/seed.ts",
+    "migrate:card-multi": "dotenv -e ../../.env -- tsx scripts/migrate-card-multi.ts",
     "db:reset": "dotenv -e ../../.env -- prisma db push --force-reset --accept-data-loss && pnpm db:seed",
     "db:studio": "dotenv -e ../../.env -- prisma studio"
   },

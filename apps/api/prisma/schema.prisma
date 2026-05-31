@@ -73,6 +73,7 @@ model User {
   messageReads          MessageRead[]
   conversationReads     ConversationRead[]
   createdCards          Card[]             @relation("CardCreator")
+  cardAssignments       CardAssignee[]
   teamMemberships       TeamMembership[]
   transfersFrom         ConversationTransfer[]    @relation("TransferFromUser")
   transfersTo           ConversationTransfer[]    @relation("TransferToUser")
@@ -182,6 +183,7 @@ model Contact {
   company        Company?        @relation(fields: [companyId], references: [id])
   conversations  Conversation[]
   cards          Card[]
+  cardLinks      CardContact[]
   sentMessages   Message[]       @relation("MessageSender")
   tasks          Task[]
   calendarEvents CalendarEvent[]
@@ -394,9 +396,10 @@ model Board {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
-  workspace Workspace    @relation(fields: [workspaceId], references: [id])
-  columns   Column[]
-  shares    BoardShare[]
+  workspace  Workspace        @relation(fields: [workspaceId], references: [id])
+  columns    Column[]
+  shares     BoardShare[]
+  teamShares BoardTeamShare[]
 
   @@index([workspaceId])
   @@index([workspaceId, ownerId])
@@ -411,6 +414,50 @@ model BoardShare {
   board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
 
   @@unique([boardId, userId])
+  @@index([userId])
+}
+
+// Compartilhamento de board com um setor inteiro. Membros do setor ganham
+// acesso de uso (ver/criar/mover cards); LEADERS do setor podem gerenciar
+// (criar colunas, deletar, mudar visibilidade) — checado no endpoint.
+model BoardTeamShare {
+  id        String   @id @default(cuid())
+  boardId   String
+  teamId    String
+  createdAt DateTime @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  team  Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, teamId])
+  @@index([teamId])
+}
+
+// M2M Card ↔ Contact. O contactId legado no Card é mantido como
+// "contato principal" para compat (busca/filtros antigos).
+model CardContact {
+  cardId    String
+  contactId String
+  createdAt DateTime @default(now())
+
+  card    Card    @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([cardId, contactId])
+  @@index([contactId])
+}
+
+// M2M Card ↔ User (responsáveis). O assigneeId legado no Card é mantido
+// como o "responsável principal" para compat; aqui adicionamos os demais.
+model CardAssignee {
+  cardId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@id([cardId, userId])
   @@index([userId])
 }
 
@@ -449,12 +496,14 @@ model Card {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  workspace    Workspace     @relation(fields: [workspaceId], references: [id])
-  column       Column        @relation(fields: [columnId], references: [id])
-  contact      Contact?      @relation(fields: [contactId], references: [id])
-  company      Company?      @relation("CardCompany", fields: [companyId], references: [id])
-  conversation Conversation? @relation(fields: [conversationId], references: [id])
-  creator      User?         @relation("CardCreator", fields: [createdByUserId], references: [id])
+  workspace    Workspace      @relation(fields: [workspaceId], references: [id])
+  column       Column         @relation(fields: [columnId], references: [id])
+  contact      Contact?       @relation(fields: [contactId], references: [id])
+  company      Company?       @relation("CardCompany", fields: [companyId], references: [id])
+  conversation Conversation?  @relation(fields: [conversationId], references: [id])
+  creator      User?          @relation("CardCreator", fields: [createdByUserId], references: [id])
+  contacts     CardContact[]
+  assignees    CardAssignee[]
   history      CardHistory[]
   comments     CardComment[]
   attachments  Attachment[]
@@ -981,6 +1030,7 @@ model Team {
   transfersFrom ConversationTransfer[] @relation("TransferFromTeam")
   transfersTo   ConversationTransfer[] @relation("TransferToTeam")
   routingRules  RoutingRule[]          @relation("RuleAssignTeam")
+  boardShares   BoardTeamShare[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, isActive])

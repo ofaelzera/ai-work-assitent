@@ -53,6 +53,8 @@ interface CardDetail {
   company: { id: string; name: string; color: string } | null
   conversation: { id: string; externalId: string } | null
   creator: { id: string; name: string | null; email: string } | null
+  contacts: Array<{ id: string; name: string | null; phone: string | null }>
+  assignees: Array<{ id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null }>
   comments: { id: string; userId: string | null; body: string; createdAt: string }[]
   column: { id: string; name: string; boardId: string }
 }
@@ -158,6 +160,233 @@ function EntityPicker<T extends { id: string; name?: string | null; phone?: stri
                   {opt.phone && opt.name && <span className="text-[10px] text-muted-foreground font-mono shrink-0">{opt.phone}</span>}
                 </button>
               ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Multi-picker: contatos vinculados ao card ─────────────────────────────
+function MultiContactsPicker({ cardId, contacts }: {
+  cardId: string
+  contacts: Array<{ id: string; name: string | null; phone: string | null }>
+}) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+  const linkedIds = new Set(contacts.map(c => c.id))
+
+  const { data: options = [], isFetching } = useQuery({
+    queryKey: ['contact-search', query],
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: '30', excludeLid: 'true' })
+      if (query) params.set('q', query)
+      const res = await apiFetch<{ items: Array<{ id: string; name: string | null; phone: string | null }> }>(`/contacts?${params}`)
+      return res.items
+    },
+    enabled: open,
+    staleTime: 30_000,
+  })
+
+  const add = useMutation({
+    mutationFn: (contactId: string) => apiFetch(`/kanban/cards/${cardId}/contacts`, {
+      method: 'POST', body: JSON.stringify({ contactId }),
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['card', cardId] }),
+  })
+  const remove = useMutation({
+    mutationFn: (contactId: string) => apiFetch(`/kanban/cards/${cardId}/contacts/${contactId}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['card', cardId] }),
+  })
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={containerRef}>
+      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+        <User className="h-3 w-3" /> Contatos ({contacts.length})
+      </p>
+      <div className="space-y-1.5">
+        {contacts.map(c => (
+          <div key={c.id} className="bg-muted/60 rounded-lg px-3 py-1.5 flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium truncate">{c.name ?? c.phone ?? '(sem nome)'}</p>
+              {c.phone && c.name && <p className="text-[10px] text-muted-foreground font-mono">{c.phone}</p>}
+            </div>
+            <button onClick={() => remove.mutate(c.id)} className="text-muted-foreground hover:text-red-500 shrink-0">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-accent/40 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
+        >
+          + Vincular contato
+        </button>
+      </div>
+      {open && (
+        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1">
+          <div className="relative">
+            <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              autoFocus
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Buscar contato..."
+              className="w-full rounded-md border bg-background pl-7 pr-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+          <div className="max-h-56 overflow-y-auto space-y-0.5">
+            {isFetching ? (
+              <p className="text-[11px] text-muted-foreground italic px-2 py-1">Buscando...</p>
+            ) : options.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground italic px-2 py-1">Nenhum resultado</p>
+            ) : (
+              options.map(opt => {
+                const already = linkedIds.has(opt.id)
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => !already && add.mutate(opt.id)}
+                    disabled={already}
+                    className={cn(
+                      'w-full text-left px-2 py-1.5 rounded-md text-xs flex items-center gap-2',
+                      already ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent',
+                    )}
+                  >
+                    <span className="truncate flex-1">{opt.name ?? opt.phone ?? '(sem nome)'}</span>
+                    {opt.phone && opt.name && <span className="text-[10px] text-muted-foreground font-mono shrink-0">{opt.phone}</span>}
+                    {already && <Check className="h-3 w-3 text-emerald-500 shrink-0" />}
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Multi-picker: usuários responsáveis (respeita visibility do board) ─────
+function MultiAssigneesPicker({ cardId, boardId, assignees }: {
+  cardId: string
+  boardId: string
+  assignees: Array<{ id: string; name: string | null; email: string }>
+}) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+  const linkedIds = new Set(assignees.map(a => a.id))
+
+  const { data: eligible = [] } = useQuery<Array<{ id: string; name: string | null; email: string }>>({
+    queryKey: ['board-eligible-users', boardId],
+    queryFn: () => apiFetch(`/kanban/boards/${boardId}/eligible-users`),
+    enabled: open,
+    staleTime: 60_000,
+  })
+
+  const filtered = query
+    ? eligible.filter(u => (u.name ?? u.email).toLowerCase().includes(query.toLowerCase()))
+    : eligible
+
+  const add = useMutation({
+    mutationFn: (userId: string) => apiFetch(`/kanban/cards/${cardId}/assignees`, {
+      method: 'POST', body: JSON.stringify({ userId }),
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['card', cardId] }),
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao vincular usuário'),
+  })
+  const remove = useMutation({
+    mutationFn: (userId: string) => apiFetch(`/kanban/cards/${cardId}/assignees/${userId}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['card', cardId] }),
+  })
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={containerRef}>
+      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+        <User className="h-3 w-3" /> Responsáveis ({assignees.length})
+      </p>
+      <div className="space-y-1.5">
+        {assignees.map(u => (
+          <div key={u.id} className="bg-muted/60 rounded-lg px-3 py-1.5 flex items-center gap-2">
+            <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-semibold text-primary shrink-0">
+              {(u.name ?? u.email)[0].toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium truncate">{u.name ?? u.email}</p>
+            </div>
+            <button onClick={() => remove.mutate(u.id)} className="text-muted-foreground hover:text-red-500 shrink-0">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-accent/40 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
+        >
+          + Vincular responsável
+        </button>
+      </div>
+      {open && (
+        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1">
+          <div className="relative">
+            <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              autoFocus
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Buscar usuário..."
+              className="w-full rounded-md border bg-background pl-7 pr-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+          <div className="max-h-56 overflow-y-auto space-y-0.5">
+            {filtered.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground italic px-2 py-1">
+                {eligible.length === 0 ? 'Nenhum usuário com acesso a este board' : 'Nenhum resultado'}
+              </p>
+            ) : (
+              filtered.map(u => {
+                const already = linkedIds.has(u.id)
+                return (
+                  <button
+                    key={u.id}
+                    onClick={() => !already && add.mutate(u.id)}
+                    disabled={already}
+                    className={cn(
+                      'w-full text-left px-2 py-1.5 rounded-md text-xs flex items-center gap-2',
+                      already ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent',
+                    )}
+                  >
+                    <div className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-semibold text-primary shrink-0">
+                      {(u.name ?? u.email)[0].toUpperCase()}
+                    </div>
+                    <span className="truncate flex-1">{u.name ?? u.email}</span>
+                    {already && <Check className="h-3 w-3 text-emerald-500 shrink-0" />}
+                  </button>
+                )
+              })
             )}
           </div>
         </div>
@@ -669,11 +898,6 @@ export default function CardModal({
 
   const priority = priorityOptions.find((p) => p.value === card.priority)!
 
-  // Contact display
-  const contactName = card.contact?.name
-  const contactPhone = card.contact?.phone
-  const isPhoneAsName = contactName && contactPhone && contactName === contactPhone
-
   return (
     <div
       className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-8 pb-4 overflow-y-auto"
@@ -934,37 +1158,9 @@ export default function CardModal({
               placeholder="Buscar empresa..."
             />
 
-            {/* Contato */}
-            <EntityPicker
-              label="Contato"
-              icon={<User className="h-3 w-3" />}
-              current={card.contact}
-              fetchOptions={async (q) => {
-                const params = new URLSearchParams({ limit: '50' })
-                if (q) params.set('q', q)
-                const res = await apiFetch<{ items: Array<{ id: string; name: string | null; phone: string | null }> }>(`/contacts?${params}`)
-                return res.items
-              }}
-              onPick={(id) => patchMutation.mutate({ contactId: id })}
-              onClear={() => patchMutation.mutate({ contactId: null })}
-              displayCurrent={(c) => (
-                <div className="space-y-0.5 min-w-0">
-                  {!isPhoneAsName && contactName && (
-                    <p className="text-sm font-medium leading-snug truncate">{contactName}</p>
-                  )}
-                  {contactPhone && (
-                    <div className="flex items-center gap-1.5">
-                      <Phone className="h-3 w-3 text-muted-foreground shrink-0" />
-                      <p className="text-xs text-muted-foreground font-mono truncate">{contactPhone}</p>
-                    </div>
-                  )}
-                  {isPhoneAsName && (
-                    <p className="text-[10px] text-muted-foreground italic">Nome não cadastrado</p>
-                  )}
-                </div>
-              )}
-              placeholder="Buscar contato..."
-            />
+            {/* Contatos (multi) + Responsáveis (multi) — abaixo, em componentes próprios */}
+            <MultiContactsPicker cardId={cardId} contacts={card.contacts} />
+            <MultiAssigneesPicker cardId={cardId} boardId={card.column.boardId} assignees={card.assignees} />
 
             {/* Conversa */}
             {card.conversationId && (

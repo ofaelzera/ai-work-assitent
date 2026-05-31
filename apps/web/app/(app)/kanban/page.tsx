@@ -159,6 +159,8 @@ function NewBoardModal({ onClose, onCreated }: { onClose: () => void; onCreated:
 
 // ─── Modal de editar board ───────────────────────────────────────────────────
 interface BoardShareRow { id: string; userId: string; user: WorkspaceUser | null; createdAt: string }
+interface TeamLite { id: string; name: string; slug: string; color: string; icon?: string | null }
+interface BoardTeamShareRow { id: string; teamId: string; team: TeamLite; createdAt: string }
 
 function EditBoardModal({ board, onClose, onSaved }: { board: Board; onClose: () => void; onSaved: () => void }) {
   const canShareBoard = usePermission('boards.manage')
@@ -172,12 +174,43 @@ function EditBoardModal({ board, onClose, onSaved }: { board: Board; onClose: ()
     staleTime: 60_000,
   })
 
+  const { data: teams = [] } = useQuery<TeamLite[]>({
+    queryKey: ['teams'],
+    queryFn: () => apiFetch('/teams'),
+    staleTime: 60_000,
+  })
+
   const { data: shares = [] } = useQuery<BoardShareRow[]>({
     queryKey: ['board-shares', board.id],
     queryFn: () => apiFetch(`/kanban/boards/${board.id}/shares`),
   })
 
+  const { data: teamShares = [] } = useQuery<BoardTeamShareRow[]>({
+    queryKey: ['board-team-shares', board.id],
+    queryFn: () => apiFetch(`/kanban/boards/${board.id}/team-shares`),
+  })
+
   const sharedIds = new Set(shares.map(s => s.userId))
+  const sharedTeamIds = new Set(teamShares.map(s => s.teamId))
+
+  const addTeamShare = useMutation({
+    mutationFn: (teamId: string) => apiFetch(`/kanban/boards/${board.id}/team-shares`, {
+      method: 'POST', body: JSON.stringify({ teamId }),
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['board-team-shares', board.id] }),
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao compartilhar setor'),
+  })
+
+  const removeTeamShare = useMutation({
+    mutationFn: (teamId: string) => apiFetch(`/kanban/boards/${board.id}/team-shares/${teamId}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['board-team-shares', board.id] }),
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao remover'),
+  })
+
+  const toggleTeam = (id: string) => {
+    if (sharedTeamIds.has(id)) removeTeamShare.mutate(id)
+    else addTeamShare.mutate(id)
+  }
 
   const addShare = useMutation({
     mutationFn: (userId: string) => apiFetch(`/kanban/boards/${board.id}/shares`, {
@@ -297,6 +330,37 @@ function EditBoardModal({ board, onClose, onSaved }: { board: Board; onClose: ()
                 })}
               </div>
               <p className="text-[10px] text-muted-foreground">Mudanças nos compartilhamentos são salvas na hora.</p>
+            </div>
+          )}
+
+          {(visibility === 'SHARED' || sharedTeamIds.size > 0) && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium flex items-center gap-1">
+                <Users className="h-3 w-3" /> Compartilhar com setores ({sharedTeamIds.size})
+              </label>
+              <div className="rounded-lg border max-h-48 overflow-y-auto divide-y">
+                {teams.length === 0 ? (
+                  <p className="text-xs text-muted-foreground p-3 text-center">Nenhum setor cadastrado</p>
+                ) : (
+                  teams.map(t => {
+                    const selected = sharedTeamIds.has(t.id)
+                    return (
+                      <button key={t.id} type="button"
+                        onClick={() => toggleTeam(t.id)}
+                        disabled={addTeamShare.isPending || removeTeamShare.isPending}
+                        className={cn('w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left',
+                          selected && 'bg-primary/5')}>
+                        <input type="checkbox" checked={selected} readOnly className="accent-primary shrink-0 pointer-events-none" />
+                        <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: t.color }} />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium truncate">{t.name}</p>
+                        </div>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+              <p className="text-[10px] text-muted-foreground">Todos os membros do setor veem o board. Líderes podem gerenciá-lo.</p>
             </div>
           )}
         </div>
