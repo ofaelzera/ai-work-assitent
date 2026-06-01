@@ -1088,6 +1088,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const [showPollModal, setShowPollModal] = useState(false)
   const [isBlocked, setIsBlocked] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const presenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1445,6 +1446,21 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const presence = usePresence(conversationId, lastSSEEvent)
   const presenceTxt = presenceLabel(presence)
 
+  // Rola até o fim ao trocar de conversa (instantâneo) — usa scrollTop direto no
+  // container, mais confiável que scrollIntoView quando mídias carregam depois e
+  // empurram o conteúdo. Retentativas curtas cobrem imagens/áudios com lazy-load.
+  useEffect(() => {
+    const jump = () => {
+      const el = scrollContainerRef.current
+      if (el) el.scrollTop = el.scrollHeight
+      else bottomRef.current?.scrollIntoView({ block: 'end' })
+    }
+    jump()
+    const timers = [50, 150, 350, 700].map(d => setTimeout(jump, d))
+    return () => timers.forEach(clearTimeout)
+  }, [conversationId])
+
+  // Mensagens novas (durante a conversa aberta): rolagem suave até o fim.
   useEffect(() => {
     const timer = setTimeout(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -1757,6 +1773,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         {/* ── Área de mensagens com padrão de fundo ── */}
         <MentionProvider resolver={mentionResolver}>
         <div
+          ref={scrollContainerRef}
           className="flex-1 overflow-y-auto px-4 py-3 space-y-0.5 relative"
           style={{
             backgroundColor: 'var(--chat-bg)',

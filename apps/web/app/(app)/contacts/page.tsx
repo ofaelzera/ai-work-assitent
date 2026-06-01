@@ -297,10 +297,14 @@ function MergeModal({ contact, onClose, onMerge, isPending }: {
 }) {
   const [search, setSearch] = useState('')
 
-  const { data: contacts = [] } = useQuery({
+  const { data: contactsData } = useQuery({
     queryKey: ['contacts', search, 'merge'],
-    queryFn: () => apiFetch<Contact[]>(`/contacts?q=${encodeURIComponent(search)}&limit=30`),
+    queryFn: () => apiFetch<{ items: Contact[]; hiddenCount: number } | Contact[]>(
+      `/contacts?q=${encodeURIComponent(search)}&limit=30`,
+    ),
   })
+  // A API devolve { items, hiddenCount }; tolera array por segurança.
+  const contacts: Contact[] = Array.isArray(contactsData) ? contactsData : contactsData?.items ?? []
 
   const others = contacts.filter(c => c.id !== contact.id)
   const displayName = contact.name ?? displayPhone(contact) ?? contact.email ?? 'Sem nome'
