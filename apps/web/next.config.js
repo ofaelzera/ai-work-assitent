@@ -45,7 +45,14 @@ const nextConfig = {
     if (dev) {
       config.watchOptions = {
         ...(config.watchOptions || {}),
-        ignored: ['**/node_modules/**', '**/.git/**', '**/.next/**', '**/dist/**', '**/logs/**'],
+        // RegExp única (não array de globs): o Watchpack respeita de forma
+        // confiável e evita varrer node_modules + symlinks do pnpm, que
+        // estouram o EMFILE ("too many open files") no macOS.
+        ignored: /[\\/](node_modules|\.git|\.next|dist|logs|storage)[\\/]/,
+        // O polling em si é ligado globalmente via WATCHPACK_POLLING (script dev),
+        // pois assim atinge também o watcher interno do Next (roteamento do app/),
+        // que não passa por esta config.
+        aggregateTimeout: 300,
       }
     }
     return config

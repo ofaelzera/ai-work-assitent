@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "ulimit -n 61440 2>/dev/null; next dev --port 3000",
+    "dev": "ulimit -n 61440 2>/dev/null; WATCHPACK_POLLING=1000 next dev --port 3000",
     "build": "next build",
     "start": "next start"
   },
