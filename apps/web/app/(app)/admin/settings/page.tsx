@@ -5,11 +5,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { maskPhone, maskCNPJ } from '@/lib/masks'
 import { toast } from 'sonner'
-import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2 } from 'lucide-react'
+import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2, Clock, CalendarDays, Trash2, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 import { AdminSection } from '@/components/admin/AdminSection'
+import { WeeklyHoursEditor, type HoursRow } from '@/components/WeeklyHoursEditor'
 
 interface Channel {
   id: string
@@ -332,6 +333,121 @@ function AiSettingsPanel({ isAdmin }: { isAdmin: boolean }) {
   )
 }
 
+// ─── Horário de funcionamento da empresa ───────────────────────────────────────
+function CompanyHoursPanel() {
+  const qc = useQueryClient()
+  const { data: rows = [], isLoading } = useQuery<HoursRow[]>({
+    queryKey: ['company-hours'],
+    queryFn: () => apiFetch('/calendar/company-hours'),
+  })
+  const save = useMutation({
+    mutationFn: (r: HoursRow[]) => apiFetch('/calendar/company-hours', { method: 'PUT', body: JSON.stringify({ rows: r }) }),
+    onSuccess: () => {
+      toast.success('Horário da empresa salvo')
+      qc.invalidateQueries({ queryKey: ['company-hours'] })
+    },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao salvar'),
+  })
+  if (isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>
+  return <WeeklyHoursEditor rows={rows} onSave={(r) => save.mutate(r)} saving={save.isPending} />
+}
+
+// ─── Feriados e datas especiais ─────────────────────────────────────────────────
+interface Holiday {
+  id: string
+  date: string
+  name: string
+  closed: boolean
+}
+
+function HolidaysPanel() {
+  const qc = useQueryClient()
+  const { data: holidays = [] } = useQuery<Holiday[]>({
+    queryKey: ['holidays'],
+    queryFn: () => apiFetch('/calendar/holidays'),
+  })
+  const [newDate, setNewDate] = useState('')
+  const [newName, setNewName] = useState('')
+
+  const add = useMutation({
+    mutationFn: () => apiFetch('/calendar/holidays', { method: 'POST', body: JSON.stringify({ date: newDate, name: newName, closed: true }) }),
+    onSuccess: () => {
+      toast.success('Feriado adicionado')
+      setNewDate(''); setNewName('')
+      qc.invalidateQueries({ queryKey: ['holidays'] })
+    },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao adicionar'),
+  })
+  const del = useMutation({
+    mutationFn: (id: string) => apiFetch(`/calendar/holidays/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Feriado removido')
+      qc.invalidateQueries({ queryKey: ['holidays'] })
+    },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao remover'),
+  })
+  const sync = useMutation({
+    mutationFn: () => apiFetch<{ imported: number }>('/calendar/holidays/sync', { method: 'POST', body: JSON.stringify({}) }),
+    onSuccess: ({ imported }) => {
+      toast.success(`${imported} feriados nacionais sincronizados`)
+      qc.invalidateQueries({ queryKey: ['holidays'] })
+    },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao sincronizar'),
+  })
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          Datas em que a empresa fica fechada. Use a sincronização para importar os feriados nacionais automaticamente.
+        </p>
+        <button
+          onClick={() => sync.mutate()}
+          disabled={sync.isPending}
+          className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50 shrink-0"
+        >
+          <RefreshCw className={cn('h-4 w-4', sync.isPending && 'animate-spin')} />
+          Sincronizar feriados nacionais
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        {holidays.length === 0 && <p className="text-sm text-muted-foreground">Nenhum feriado cadastrado.</p>}
+        {holidays.map((h) => (
+          <div key={h.id} className="flex items-center gap-3 border rounded-lg px-3 py-2 text-sm">
+            <span className="font-medium">{new Date(h.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</span>
+            <span className="flex-1">{h.name}</span>
+            <span className="text-xs text-muted-foreground">{h.closed ? 'Fechado' : 'Horário especial'}</span>
+            <button onClick={() => del.mutate(h.id)} className="text-muted-foreground hover:text-destructive">
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-end gap-2">
+        <div>
+          <label className="text-xs">Data</label>
+          <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)}
+            className="mt-1 block rounded-lg border bg-transparent px-3 py-1.5 text-sm" />
+        </div>
+        <div className="flex-1">
+          <label className="text-xs">Nome</label>
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Ex: Aniversário da cidade"
+            className="mt-1 block w-full rounded-lg border bg-transparent px-3 py-1.5 text-sm" />
+        </div>
+        <button
+          onClick={() => add.mutate()}
+          disabled={!newDate || !newName.trim() || add.isPending}
+          className="flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-1.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+        >
+          <Plus className="h-4 w-4" /> Adicionar
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { user } = useAuthStore()
   const isAdmin = user?.role === 'ADMIN'
@@ -402,6 +518,16 @@ export default function SettingsPage() {
       {/* Dados da empresa */}
       <AdminSection title="Dados da empresa" icon={Building2} description="Informações usadas nos templates de mensagem automática">
         <CompanyDataPanel isAdmin={isAdmin} />
+      </AdminSection>
+
+      {/* Horário de funcionamento */}
+      <AdminSection title="Horário de funcionamento" icon={Clock} description="Define quando a empresa está aberta — usado em agendamentos e fluxos de atendimento">
+        <CompanyHoursPanel />
+      </AdminSection>
+
+      {/* Feriados */}
+      <AdminSection title="Feriados e datas especiais" icon={CalendarDays} description="Datas em que a empresa fica fechada. Sincronize os feriados nacionais automaticamente">
+        <HolidaysPanel />
       </AdminSection>
 
       {/* Inteligência Artificial */}

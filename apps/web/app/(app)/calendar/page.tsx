@@ -2,7 +2,6 @@
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { Settings } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, ApiError } from '@/lib/api'
 import { usePermission } from '@/lib/usePermission'
@@ -1098,14 +1097,6 @@ export default function CalendarPage() {
               onChange={setViewOwnerIds}
             />
           )}
-
-          <Link
-            href="/calendar/settings"
-            title="Configurar horários"
-            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent transition-colors"
-          >
-            <Settings className="h-4 w-4" />
-          </Link>
 
           <button
             onClick={() => syncMutation.mutate()}

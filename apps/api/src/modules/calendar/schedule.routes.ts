@@ -256,6 +256,57 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
+  // Sincroniza feriados nacionais via BrasilAPI (gratuita, sem chave).
+  // https://brasilapi.com.br/api/feriados/v1/{ano}
+  app.post(
+    '/calendar/holidays/sync',
+    {
+      onRequest: [app.authenticate, requirePerm('calendar.manageCompanyHours')],
+      schema: {
+        body: z.object({
+          // Anos a sincronizar. Default: ano atual + próximo.
+          years: z.array(z.number().int().min(2000).max(2100)).optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const currentYear = new Date().getFullYear()
+      const years = req.body.years && req.body.years.length > 0
+        ? req.body.years
+        : [currentYear, currentYear + 1]
+
+      let imported = 0
+      for (const year of years) {
+        let items: { date: string; name: string }[]
+        try {
+          const res = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`)
+          if (!res.ok) {
+            req.log.warn({ status: res.status, year }, 'BrasilAPI feriados falhou')
+            continue
+          }
+          items = (await res.json()) as { date: string; name: string }[]
+        } catch (err) {
+          req.log.error({ err, year }, 'Erro ao buscar feriados na BrasilAPI')
+          continue
+        }
+
+        for (const item of items) {
+          if (!item.date || !item.name) continue
+          const day = new Date(`${item.date}T00:00:00`)
+          await prisma.holiday.upsert({
+            where: { workspaceId_date: { workspaceId: req.user.workspaceId, date: day } },
+            create: { workspaceId: req.user.workspaceId, date: day, name: item.name, closed: true },
+            // Não sobrescreve customizações (closed/janela) de feriados já existentes.
+            update: { name: item.name },
+          })
+          imported++
+        }
+      }
+
+      return { imported, years }
+    },
+  )
+
   app.delete(
     '/calendar/holidays/:id',
     {
