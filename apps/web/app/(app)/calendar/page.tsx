@@ -419,6 +419,42 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
 
   const isForOther = ownerId !== currentUserId
 
+  // Ao abrir (ou mudar o dia clicado), reseta data/dono — corrige o modal que
+  // ficava preso na data inicial.
+  useEffect(() => {
+    if (open) {
+      setDate(defaultDate)
+      setOwnerId(currentUserId)
+    }
+  }, [open, defaultDate, currentUserId])
+
+  // ── Disponibilidade ao vivo ───────────────────────────────────────────────
+  const startISO = !allDay && date && startTime ? new Date(`${date}T${startTime}:00`).toISOString() : null
+  const endISO = !allDay && date && endTime ? new Date(`${date}T${endTime}:00`).toISOString() : null
+  const validRange = !!(startISO && endISO && new Date(endISO) > new Date(startISO))
+
+  const { data: availability } = useQuery<{ ok: boolean; reason: string | null; conflict: boolean; companyOpen: boolean; userAvailable: boolean }>({
+    queryKey: ['availability', ownerId, startISO, endISO],
+    queryFn: () =>
+      apiFetch(`/calendar/availability?userId=${ownerId}&start=${encodeURIComponent(startISO!)}&end=${encodeURIComponent(endISO!)}`),
+    enabled: open && validRange,
+  })
+
+  // Horários livres do dia selecionado (chips de sugestão)
+  const durationMin = validRange ? Math.round((new Date(endISO!).getTime() - new Date(startISO!).getTime()) / 60000) : 60
+  const dayFrom = date ? new Date(`${date}T00:00:00`).toISOString() : null
+  const dayTo = date ? new Date(`${date}T23:59:59`).toISOString() : null
+  const { data: freeSlots = [] } = useQuery<{ start: string; end: string }[]>({
+    queryKey: ['free-slots-modal', ownerId, date, durationMin],
+    queryFn: () =>
+      apiFetch(`/calendar/free-slots?userId=${ownerId}&from=${encodeURIComponent(dayFrom!)}&to=${encodeURIComponent(dayTo!)}&durationMin=${durationMin}`),
+    enabled: open && !allDay && !!date && durationMin > 0,
+  })
+
+  // Bloqueio "duro": fora do expediente da empresa ou do usuário. Conflito pode
+  // ser forçado (via confirm), então não trava o botão.
+  const blockedHard = !!availability && (!availability.companyOpen || !availability.userAvailable)
+
   const mutation = useMutation({
     mutationFn: async (opts?: { force?: boolean }) => {
       const startAt = allDay
@@ -466,6 +502,10 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           return
         }
         toast.error('Conflito de horário — agendamento cancelado')
+        return
+      }
+      if (err instanceof ApiError && err.status === 422) {
+        toast.error(err.message ?? 'Horário indisponível para agendamento')
         return
       }
       toast.error(err.message ?? 'Erro ao criar evento')
@@ -568,6 +608,51 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
             </div>
           )}
 
+          {/* Horários livres (sugestões clicáveis) */}
+          {!allDay && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">
+                Horários livres ({durationMin} min)
+              </label>
+              {freeSlots.length === 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground">Nenhum horário disponível neste dia.</p>
+              ) : (
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {freeSlots.slice(0, 12).map((s) => {
+                    const d = new Date(s.start)
+                    const e = new Date(s.end)
+                    const hhmm = (x: Date) => `${pad(x.getHours())}:${pad(x.getMinutes())}`
+                    const active = startTime === hhmm(d)
+                    return (
+                      <button
+                        key={s.start}
+                        type="button"
+                        onClick={() => { setStartTime(hhmm(d)); setEndTime(hhmm(e)) }}
+                        className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+                          active ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-accent'
+                        }`}
+                      >
+                        {hhmm(d)}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Aviso de disponibilidade */}
+          {!allDay && validRange && availability && !availability.ok && (
+            <div className={`rounded-md border px-3 py-2 text-xs ${
+              blockedHard
+                ? 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400'
+                : 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+            }`}>
+              {availability.reason}
+              {!blockedHard && availability.conflict && ' — você pode agendar mesmo assim (confirmação).'}
+            </div>
+          )}
+
           {/* Location */}
           <div>
             <label className="text-sm font-medium flex items-center gap-1.5">
@@ -652,7 +737,8 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           </button>
           <button
             onClick={() => mutation.mutate({})}
-            disabled={!title.trim() || mutation.isPending}
+            disabled={!title.trim() || mutation.isPending || blockedHard}
+            title={blockedHard ? (availability?.reason ?? 'Horário indisponível') : undefined}
             className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             {mutation.isPending ? 'Criando...' : 'Criar evento'}

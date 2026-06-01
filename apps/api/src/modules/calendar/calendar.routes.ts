@@ -17,6 +17,7 @@ import {
   updateCalendarEvent,
   CalendarConflictError,
 } from './calendar.service.js'
+import { isWithinCompanyHours, isWithinWorkingHours } from './availability.service.js'
 
 // ─── Types locais ─────────────────────────────────────────────────────────────
 
@@ -319,6 +320,18 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
       if (ownerId !== req.user.sub) {
         const ok = await hasPermission(req.user, 'calendar.createForOthers')
         if (!ok) return reply.forbidden('Sem permissão para criar compromissos para terceiros')
+      }
+
+      // Bloqueia agendamento fora do horário de funcionamento / de trabalho
+      // (a menos que force). Conflito é tratado pelo service (409).
+      if (!req.body.force && !allDay) {
+        const start = new Date(startAt)
+        const [companyOpen, userAvailable] = await Promise.all([
+          isWithinCompanyHours(req.user.workspaceId, start),
+          isWithinWorkingHours(req.user.workspaceId, ownerId, start),
+        ])
+        if (!companyOpen) return reply.code(422).send({ statusCode: 422, error: 'Unprocessable Entity', message: 'Fora do horário de funcionamento da empresa' })
+        if (!userAvailable) return reply.code(422).send({ statusCode: 422, error: 'Unprocessable Entity', message: 'Fora do horário de trabalho do usuário' })
       }
 
       // Para o próprio: respeita accountId do body (omitido = local).

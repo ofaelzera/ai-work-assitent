@@ -85,10 +85,15 @@ export async function isWithinCompanyHours(workspaceId: string, at: Date): Promi
     return false
   }
 
+  // Verifica se há QUALQUER configuração de horário da empresa. Sem nenhuma
+  // configurada → sem restrição (sempre aberto). Configurada → respeita o dia.
+  const anyConfigured = await prisma.companyHours.count({ where: { workspaceId, isActive: true } })
+  if (anyConfigured === 0) return true
+
   const rows = await prisma.companyHours.findMany({
     where: { workspaceId, weekday: weekdayOf(at), isActive: true },
   })
-  if (rows.length === 0) return false
+  if (rows.length === 0) return false // tem expediente configurado, mas não nesse dia
   const m = minuteOfDay(at)
   return rows.some((r) => m >= r.startMin && m < r.endMin)
 }
@@ -102,13 +107,17 @@ export async function isWithinWorkingHours(
   userId: string,
   at: Date,
 ): Promise<boolean> {
-  const rows = await prisma.userWorkingHours.findMany({
-    where: { workspaceId, userId, weekday: weekdayOf(at), isActive: true },
-  })
-  if (rows.length === 0) return false
-  const m = minuteOfDay(at)
-  const inHours = rows.some((r) => m >= r.startMin && m < r.endMin)
-  if (!inHours) return false
+  // Sem nenhum horário de trabalho configurado para o usuário → sem restrição
+  // de expediente (disponível), respeitando apenas bloqueios pontuais.
+  const anyConfigured = await prisma.userWorkingHours.count({ where: { workspaceId, userId, isActive: true } })
+  if (anyConfigured > 0) {
+    const rows = await prisma.userWorkingHours.findMany({
+      where: { workspaceId, userId, weekday: weekdayOf(at), isActive: true },
+    })
+    const m = minuteOfDay(at)
+    const inHours = rows.some((r) => m >= r.startMin && m < r.endMin)
+    if (!inHours) return false
+  }
 
   const block = await prisma.scheduleBlock.findFirst({
     where: {

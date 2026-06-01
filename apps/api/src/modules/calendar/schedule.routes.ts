@@ -10,7 +10,12 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
 import { hasPermission, requirePerm } from '../../lib/acl.js'
-import { findFreeSlots } from './availability.service.js'
+import {
+  findFreeSlots,
+  isWithinCompanyHours,
+  isWithinWorkingHours,
+  hasConflict,
+} from './availability.service.js'
 
 const hoursRowSchema = z.object({
   weekday: z.number().int().min(0).max(6),
@@ -350,6 +355,47 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
         req.query.durationMin,
       )
       return slots
+    },
+  )
+
+  // ─── Checagem de disponibilidade (para validação no front antes de agendar) ──
+  app.get(
+    '/calendar/availability',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        querystring: z.object({
+          userId: z.string().optional(),
+          start: z.string().datetime(),
+          end: z.string().datetime(),
+          ignoreEventId: z.string().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const userId = req.query.userId ?? req.user.sub
+      if (userId !== req.user.sub) {
+        const ok = await hasPermission(req.user, 'calendar.viewOthers')
+        if (!ok) return reply.forbidden('Sem permissão para ver a agenda de terceiros')
+      }
+      const start = new Date(req.query.start)
+      const end = new Date(req.query.end)
+      if (end <= start) return reply.badRequest('end deve ser maior que start')
+
+      const ws = req.user.workspaceId
+      const [companyOpen, userAvailable, conflict] = await Promise.all([
+        isWithinCompanyHours(ws, start),
+        isWithinWorkingHours(ws, userId, start),
+        hasConflict(ws, userId, start, end, req.query.ignoreEventId),
+      ])
+
+      // Motivo legível pro front.
+      let reason: string | null = null
+      if (!companyOpen) reason = 'Fora do horário de funcionamento da empresa'
+      else if (!userAvailable) reason = 'Fora do horário de trabalho do usuário'
+      else if (conflict) reason = 'Conflito com outro compromisso'
+
+      return { companyOpen, userAvailable, conflict, ok: companyOpen && userAvailable && !conflict, reason }
     },
   )
 }
