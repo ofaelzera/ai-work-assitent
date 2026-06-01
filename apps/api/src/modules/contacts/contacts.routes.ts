@@ -19,6 +19,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
           q: z.string().optional(),
           companyId: z.string().optional(),
           excludeLid: z.coerce.boolean().optional(),
+          hasPhone: z.coerce.boolean().optional(),
           limit: z.coerce.number().default(50),
           offset: z.coerce.number().default(0),
         }),
@@ -26,11 +27,17 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req) => {
       const { workspaceId, sub: userId } = req.user
-      const { q, companyId, excludeLid, limit, offset } = req.query
+      const { q, companyId, excludeLid, hasPhone, limit, offset } = req.query
 
       // excludeLid=true esconde LIDs SEM nome (LIDs com nome continuam visíveis)
       const hiddenLidFilter = excludeLid
         ? { NOT: { AND: [{ phoneType: 'LID' as const }, { name: null }] } }
+        : {}
+
+      // hasPhone=true traz apenas contatos com número de telefone cadastrado
+      // (usado na criação de conversa WhatsApp, onde contatos sem número são inúteis)
+      const hasPhoneFilter = hasPhone
+        ? { phone: { not: null } }
         : {}
 
       // Filtro de visibilidade por role:
@@ -45,6 +52,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         workspaceId,
         mergedIntoId: null,
         ...hiddenLidFilter,
+        ...hasPhoneFilter,
         ...visibilityFilter,
         ...(companyId && { companyId }),
         ...(q && {

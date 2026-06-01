@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { X, Search, MessageSquare, Mail, Phone, UserPlus, CheckCircle2, AlertCircle, Loader2, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { maskPhone } from '@/lib/masks'
+import { ChatInput } from '@/components/ChatInput'
 
 interface Channel { id: string; type: string; label: string; status: string }
 interface Contact {
@@ -66,12 +67,16 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
   })
   const connectedChannels = channels.filter(c => c.status === 'CONNECTED')
 
+  // Em canais WhatsApp (ou sem canal definido), só faz sentido mostrar contatos
+  // com número cadastrado — quem não tem telefone não pode receber a mensagem.
+  const wantPhoneOnly = connectedChannels.find(c => c.id === selectedChannelId)?.type !== 'IMAP_SMTP'
+
   // Só busca quando tem termo de pesquisa (evita listar 500 contatos sem nome)
   // Backend já filtra LIDs sem nome por padrão via excludeLid=true
   const { data: contactsData, isLoading } = useQuery({
-    queryKey: ['contacts', search],
+    queryKey: ['contacts', search, wantPhoneOnly],
     queryFn: () => apiFetch<{ items: Contact[] } | Contact[]>(
-      `/contacts?q=${encodeURIComponent(search)}&excludeLid=true&limit=20`,
+      `/contacts?q=${encodeURIComponent(search)}&excludeLid=true&limit=20${wantPhoneOnly ? '&hasPhone=true' : ''}`,
     ),
     enabled: search.trim().length >= 2,
   })
@@ -457,12 +462,12 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
           {/* Mensagem */}
           <div>
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">Mensagem</label>
-            <textarea
+            <ChatInput
               value={text}
-              onChange={e => setText(e.target.value)}
+              onChange={setText}
+              onSend={() => { if (canSend && !sendMutation.isPending) sendMutation.mutate() }}
+              disabled={sendMutation.isPending}
               placeholder="Digite sua mensagem..."
-              rows={4}
-              className="w-full rounded-md border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none"
             />
           </div>
         </div>

@@ -6,6 +6,7 @@ import { getClientForChannel } from '../evolution-servers/evolution-servers.serv
 import { makeMetaClient } from '../channels/meta.client.js'
 import { sendEmail, moveImapMessage } from '../channels/email.client.js'
 import { dedupConversations } from './dedup.service.js'
+import { parseJid } from '../../lib/phone.js'
 import { routeNewConversation } from './routing.service.js'
 import { resolveTeamEligibility, getUserTeamIds } from '../teams/teams.service.js'
 import { loadGroupsCache, refreshGroupsCache, GROUPS_TTL_MS } from '../channels/groups-sync.service.js'
@@ -1007,7 +1008,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         externalId = groupJid!
       } else if (channel.type === 'WHATSAPP') {
         const rawPhone = phone ?? contact?.phone ?? ''
-        const digits = rawPhone.replace(/\D/g, '')
+        // Normaliza com regra BR: número local sem DDI (10/11 dígitos) recebe +55.
+        // Números internacionais (com DDI próprio) passam intactos.
+        const parsed = parseJid(rawPhone)
+        const digits = parsed.kind === 'pn' && parsed.phone ? parsed.phone : rawPhone.replace(/\D/g, '')
         externalId = `${digits}@s.whatsapp.net`
       } else {
         const toEmail = email ?? contact?.email ?? ''
@@ -2754,17 +2758,28 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           }),
         },
         select: { id: true, externalId: true, subject: true },
+        // Sobre-busca pra compensar o dedup por externalId logo abaixo —
+        // o modelo de ticket cria múltiplas conversations para o mesmo grupo.
         orderBy: { lastMessageAt: 'desc' },
-        take: limit,
+        take: limit * 3,
       })
 
       type GroupItem = { id: string; subject: string; conversationId?: string; pictureUrl: string | null }
-      const items: GroupItem[] = dbConvs.map(c => ({
-        id: c.externalId,
-        subject: c.subject ?? c.externalId,
-        conversationId: c.id,
-        pictureUrl: null,
-      }))
+      // Dedup por externalId (groupJid): mantém a conversa mais recente de cada grupo
+      // (já ordenado por lastMessageAt desc). Evita o mesmo grupo aparecer repetido.
+      const seenGroupJid = new Set<string>()
+      const items: GroupItem[] = []
+      for (const c of dbConvs) {
+        if (seenGroupJid.has(c.externalId)) continue
+        seenGroupJid.add(c.externalId)
+        items.push({
+          id: c.externalId,
+          subject: c.subject ?? c.externalId,
+          conversationId: c.id,
+          pictureUrl: null,
+        })
+        if (items.length >= limit) break
+      }
 
       // Normaliza pra comparação tolerante a acento/pontuação/caixa
       const norm = (s: string) =>

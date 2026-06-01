@@ -19,6 +19,7 @@ import { getSmtpConfig } from './channels.service.js'
 import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
 import { env } from '../../config/env.js'
 import { addImapPoller, removeImapPoller } from './imap.poller.js'
+import { parseJid } from '../../lib/phone.js'
 
 export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get('/channels', { onRequest: [app.authenticate] }, async (req) => {
@@ -319,7 +320,13 @@ export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
       if (channel.type !== 'WHATSAPP') return reply.badRequest('Apenas canais WhatsApp')
       const { instanceName } = await getChannelConfig(req.params.id)
       const client = await getClientForChannel(req.params.id)
-      return client.checkIsWhatsApp(instanceName, req.body.numbers)
+      // Normaliza com regra BR: número local sem DDI (10/11 dígitos) recebe +55.
+      // Assim a verificação encontra o número mesmo sem o usuário digitar o código do país.
+      const numbers = req.body.numbers.map((n: string) => {
+        const parsed = parseJid(n)
+        return parsed.kind === 'pn' && parsed.phone ? parsed.phone : n.replace(/\D/g, '')
+      })
+      return client.checkIsWhatsApp(instanceName, numbers)
     },
   )
 
