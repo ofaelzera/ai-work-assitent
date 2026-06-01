@@ -95,21 +95,29 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         querystring: z.object({
           userId: z.string().optional(),
+          ownerIds: z.union([z.string(), z.array(z.string())]).optional(),
           from: z.string().datetime().optional(),
           to: z.string().datetime().optional(),
         }),
       },
     },
     async (req, reply) => {
-      const userId = req.query.userId ?? req.user.sub
-      if (userId !== req.user.sub) {
+      // Aceita userId (único) ou ownerIds (vários, p/ agenda compartilhada).
+      const requested = req.query.ownerIds
+        ? (Array.isArray(req.query.ownerIds) ? req.query.ownerIds : [req.query.ownerIds])
+        : req.query.userId
+          ? [req.query.userId]
+          : [req.user.sub]
+      const userIds = Array.from(new Set(requested))
+
+      if (userIds.some((id) => id !== req.user.sub)) {
         const ok = await hasPermission(req.user, 'calendar.viewOthers')
         if (!ok) return reply.forbidden('Sem permissão para ver bloqueios de terceiros')
       }
       return prisma.scheduleBlock.findMany({
         where: {
           workspaceId: req.user.workspaceId,
-          OR: [{ userId }, { userId: null }],
+          OR: [{ userId: { in: userIds } }, { userId: null }],
           ...(req.query.from ? { endAt: { gt: new Date(req.query.from) } } : {}),
           ...(req.query.to ? { startAt: { lt: new Date(req.query.to) } } : {}),
         },

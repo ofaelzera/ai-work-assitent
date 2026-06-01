@@ -672,6 +672,7 @@ model CalendarEvent {
   id                String   @id @default(cuid())
   workspaceId       String
   ownerId           String // user dono do evento (sempre obrigatório; eventos são por usuário)
+  createdById       String? // quem criou (pode diferir do dono em agenda compartilhada)
   calendarAccountId String? // nullable: evento local (sem Google sync). Quando preenchido, está sincronizado.
   externalId        String? // nullable: ID no Google Calendar quando sincronizado
   title             String

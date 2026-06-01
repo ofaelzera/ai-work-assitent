@@ -49,6 +49,8 @@ interface Attendee {
 interface CalendarEvent {
   id: string
   title: string
+  ownerId?: string
+  createdById?: string | null
   startAt: string
   endAt: string
   description?: string | null
@@ -98,6 +100,9 @@ const GOOGLE_COLORS: Record<string, string> = {
   '5': '#fbd75b', '6': '#ffb878', '7': '#46d6db', '8': '#e1e1e1',
   '9': '#5484ed', '10': '#51b749', '11': '#dc2127',
 }
+
+// Paleta para diferenciar donos na visualização de agenda compartilhada.
+const OWNER_PALETTE = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#ef4444', '#14b8a6']
 
 function pad(n: number) {
   return String(n).padStart(2, '0')
@@ -762,6 +767,9 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
 
 interface EventDetailSheetProps {
   event: CalendarEvent | null
+  currentUserId: string
+  canCancelOthers: boolean
+  users: WorkspaceUser[]
   onClose: () => void
   onDeleted: () => void
 }
@@ -778,7 +786,7 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 line-through',
 }
 
-function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) {
+function EventDetailSheet({ event, currentUserId, canCancelOthers, users, onClose, onDeleted }: EventDetailSheetProps) {
   const deleteMutation = useMutation({
     mutationFn: () => apiFetch(`/calendar/events/${event!.id}`, { method: 'DELETE' }),
     onSuccess: () => {
@@ -794,6 +802,13 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
   if (!event) return null
 
   const colorHex = event.color ? GOOGLE_COLORS[event.color] : null
+  // Pode remover se é dono da agenda, se criou o evento, ou se tem permissão.
+  const canDelete =
+    event.ownerId === currentUserId ||
+    event.createdById === currentUserId ||
+    canCancelOthers
+  const isOwnAgenda = !event.ownerId || event.ownerId === currentUserId
+  const ownerLabel = isOwnAgenda ? 'Sua agenda' : (users.find((u) => u.id === event.ownerId)?.name ?? 'Outro usuário')
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -809,11 +824,16 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1.5 flex-1">
               <h2 className="text-lg font-semibold leading-tight">{event.title}</h2>
-              {event.status && (
-                <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[event.status] ?? 'bg-muted text-muted-foreground'}`}>
-                  {STATUS_LABELS[event.status] ?? event.status}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                  <User className="h-3 w-3" /> {ownerLabel}
                 </span>
-              )}
+                {event.status && (
+                  <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[event.status] ?? 'bg-muted text-muted-foreground'}`}>
+                    {STATUS_LABELS[event.status] ?? event.status}
+                  </span>
+                )}
+              </div>
             </div>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground shrink-0 mt-0.5">
               <X className="h-4 w-4" />
@@ -926,15 +946,21 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
         </div>
 
         {/* Footer */}
-        <div className="p-6 pt-0 border-t shrink-0">
-          <button
-            onClick={() => deleteMutation.mutate()}
-            disabled={deleteMutation.isPending}
-            className="flex items-center gap-2 rounded-md border border-destructive text-destructive px-4 py-2 text-sm hover:bg-destructive/10 disabled:opacity-50 transition-colors w-full justify-center"
-          >
-            <Trash2 className="h-4 w-4" />
-            {deleteMutation.isPending ? 'Removendo...' : 'Remover evento'}
-          </button>
+        <div className="p-6 pt-4 border-t shrink-0">
+          {canDelete ? (
+            <button
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              className="flex items-center gap-2 rounded-md border border-destructive text-destructive px-4 py-2 text-sm hover:bg-destructive/10 disabled:opacity-50 transition-colors w-full justify-center"
+            >
+              <Trash2 className="h-4 w-4" />
+              {deleteMutation.isPending ? 'Removendo...' : 'Remover evento'}
+            </button>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center">
+              Só o dono da agenda ou quem criou o evento pode removê-lo.
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -1098,6 +1124,7 @@ export default function CalendarPage() {
   const currentUserId = useAuthStore((s) => s.user?.sub ?? '')
   const canViewOthers = usePermission('calendar.viewOthers')
   const canCreateForOthers = usePermission('calendar.createForOthers')
+  const canCancelOthers = usePermission('calendar.cancelOthers')
   // Donos selecionados pra visualizar. Vazio = só o próprio.
   const [viewOwnerIds, setViewOwnerIds] = useState<string[]>([])
 
@@ -1195,8 +1222,15 @@ export default function CalendarPage() {
   const [blockDate, setBlockDate] = useState(toLocalDateStr(today))
 
   const { data: blocks = [] } = useQuery<{ id: string; title: string | null; startAt: string; endAt: string; userId: string | null }[]>({
-    queryKey: ['schedule-blocks', year, month],
-    queryFn: () => apiFetch(`/calendar/blocks?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    queryKey: ['schedule-blocks', year, month, ownerKey],
+    queryFn: () => {
+      const params = new URLSearchParams({ from, to })
+      if (viewOwnerIds.length > 0) {
+        params.append('ownerIds', currentUserId)
+        for (const id of viewOwnerIds) params.append('ownerIds', id)
+      }
+      return apiFetch(`/calendar/blocks?${params.toString()}`)
+    },
   })
 
   const blocksByDay = useMemo(() => {
@@ -1230,6 +1264,17 @@ export default function CalendarPage() {
     }
     return map
   }, [events])
+
+  // Cor por dono (agenda compartilhada): self + colegas visualizados.
+  const multiOwner = viewOwnerIds.length > 0
+  const ownerColor = useMemo(() => {
+    const ids = [currentUserId, ...viewOwnerIds]
+    const map: Record<string, string> = {}
+    ids.forEach((id, i) => { map[id] = OWNER_PALETTE[i % OWNER_PALETTE.length] })
+    return map
+  }, [currentUserId, viewOwnerIds])
+  const ownerName = (id?: string | null) =>
+    id === currentUserId ? 'Você' : (users.find((u) => u.id === id)?.name ?? 'Outro')
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
@@ -1361,6 +1406,17 @@ export default function CalendarPage() {
 
       {/* ── Calendar grid ── */}
       <div className="flex-1 overflow-auto p-4">
+        {/* Legenda de cores por dono (agenda compartilhada) */}
+        {multiOwner && (
+          <div className="flex flex-wrap items-center gap-3 mb-3 text-xs">
+            {[currentUserId, ...viewOwnerIds].map((id) => (
+              <span key={id} className="inline-flex items-center gap-1.5">
+                <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: ownerColor[id] }} />
+                {ownerName(id)}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="min-w-[640px]">
           {/* Day header row */}
           <div className="grid grid-cols-7 mb-1">
@@ -1430,21 +1486,21 @@ export default function CalendarPage() {
                   {/* Events */}
                   <div className="space-y-0.5">
                     {shown.map((ev) => {
-                      const colorHex = ev.color ? GOOGLE_COLORS[ev.color] : null
+                      // Em modo multi-usuário, cor por dono; senão, cor do Google.
+                      const colorHex = multiOwner
+                        ? (ownerColor[ev.ownerId ?? ''] ?? '#6366f1')
+                        : (ev.color ? GOOGLE_COLORS[ev.color] : null)
                       return (
                         <button
                           key={ev.id}
                           onClick={(e) => { e.stopPropagation(); setSelectedEvent(ev) }}
-                          className="w-full text-left rounded px-1 py-0.5 text-xs truncate block transition-colors hover:opacity-80"
+                          className="w-full text-left rounded px-1 py-0.5 text-xs truncate flex items-center gap-1 transition-colors hover:opacity-80"
                           style={colorHex
-                            ? { backgroundColor: `${colorHex}33`, color: colorHex.replace('#', '').length === 6 ? undefined : colorHex }
+                            ? { backgroundColor: `${colorHex}22`, borderLeft: `3px solid ${colorHex}` }
                             : undefined}
-                          title={ev.title}
+                          title={multiOwner ? `${ev.title} — ${ownerName(ev.ownerId)}` : ev.title}
                         >
-                          <span
-                            className={!colorHex ? 'bg-primary/10 text-primary' : ''}
-                            style={!colorHex ? undefined : { color: colorHex }}
-                          >
+                          <span className={`truncate ${!colorHex ? 'bg-primary/10 text-primary px-1 rounded' : ''}`} style={colorHex ? { color: colorHex } : undefined}>
                             <span className="text-muted-foreground mr-1">
                               {ev.allDay ? '◆' : formatTime(ev.startAt)}
                             </span>
@@ -1490,6 +1546,9 @@ export default function CalendarPage() {
 
       <EventDetailSheet
         event={selectedEvent}
+        currentUserId={currentUserId}
+        canCancelOthers={canCancelOthers}
+        users={users}
         onClose={() => setSelectedEvent(null)}
         onDeleted={invalidateEvents}
       />

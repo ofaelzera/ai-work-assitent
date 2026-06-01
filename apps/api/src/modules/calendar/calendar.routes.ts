@@ -342,6 +342,7 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
         const event = await createCalendarEvent({
           workspaceId: req.user.workspaceId,
           ownerId,
+          createdById: req.user.sub,
           accountId: accountParam,
           title,
           startAt: new Date(startAt),
@@ -433,11 +434,13 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
 
       if (!event) return reply.notFound('Calendar event not found')
 
-      const isOwner = event.ownerId === req.user.sub
+      // Pode remover: dono da agenda, quem criou o evento, ou quem tem permissão.
+      const isOwnerOrCreator = event.ownerId === req.user.sub
+        || event.createdById === req.user.sub
         || (event.calendarAccount && event.calendarAccount.userId === req.user.sub)
-      if (!isOwner) {
+      if (!isOwnerOrCreator) {
         const ok = await hasPermission(req.user, 'calendar.cancelOthers')
-        if (!ok) return reply.forbidden('Sem permissão para cancelar compromissos de terceiros')
+        if (!ok) return reply.forbidden('Você só pode remover eventos da sua agenda ou que você criou')
       }
 
       if (event.calendarAccount && event.externalId) {

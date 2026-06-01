@@ -39,6 +39,8 @@ export interface CreateEventInput {
   contactId?: string
   conversationId?: string
   messageId?: string
+  /** Quem está criando (para auditoria/permissão de remoção em agenda compartilhada). */
+  createdById?: string | null
   /** Quando true, ignora conflito de horário. */
   force?: boolean
 }
@@ -141,6 +143,7 @@ export async function createCalendarEvent(input: CreateEventInput): Promise<Cale
     data: {
       workspaceId,
       ownerId,
+      createdById: input.createdById ?? null,
       calendarAccountId: validAccountId,
       externalId,
       title,
