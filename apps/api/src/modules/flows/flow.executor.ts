@@ -25,6 +25,12 @@ import { logger } from '../../lib/logger.js'
 import { eventBus } from '../../lib/eventBus.js'
 import { sendSystemMessage, createInternalEvent } from '../../lib/systemMessages.js'
 import { resolveTeamEligibility } from '../teams/teams.service.js'
+import {
+  isWithinCompanyHours,
+  isWithinWorkingHours,
+  findFreeSlots,
+} from '../calendar/availability.service.js'
+import { createCalendarEvent, CalendarConflictError } from '../calendar/calendar.service.js'
 import type {
   FlowEdge,
   FlowGraph,
@@ -37,6 +43,9 @@ import type {
   TagNodeData,
   MessageNodeData,
   FlowContext,
+  CheckUserAvailableNodeData,
+  FindFreeSlotsNodeData,
+  CreateAppointmentNodeData,
 } from './flow.types.js'
 
 interface RunFlowArgs {
@@ -99,8 +108,19 @@ export async function startFlowForConversation(args: {
     return null
   }
 
+  // Carrega o canal pra disponibilizar channelType no contexto (usado por
+  // condições de horário/fora-do-expediente que variam por canal).
+  const convForCtx = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { channel: { select: { type: true, label: true } } },
+  })
+
   const ctx: FlowContext = {
-    vars: {},
+    vars: {
+      ...(convForCtx?.channel
+        ? { channelType: convForCtx.channel.type, channelLabel: convForCtx.channel.label }
+        : {}),
+    },
     ...args.initialContext,
   }
 
@@ -479,10 +499,93 @@ async function executeNode(
       return { advance: true }
     }
 
+    case 'check_company_hours': {
+      const open = await isWithinCompanyHours(workspaceId, new Date())
+      return { advance: true, nextHandle: open ? 'true' : 'false' }
+    }
+
+    case 'check_user_available': {
+      const data = node.data as CheckUserAvailableNodeData
+      if (!data.userId) return { advance: true, nextHandle: 'false' }
+      const available = await isWithinWorkingHours(workspaceId, data.userId, new Date())
+      return { advance: true, nextHandle: available ? 'true' : 'false' }
+    }
+
+    case 'find_free_slots': {
+      const data = node.data as FindFreeSlotsNodeData
+      if (!data.userId) return { advance: true, nextHandle: 'false' }
+      const durationMin = data.durationMin ?? 30
+      const daysAhead = data.daysAhead ?? 7
+      const maxSlots = data.maxSlots ?? 5
+      const from = new Date()
+      const to = new Date(from.getTime() + daysAhead * 24 * 60 * 60 * 1000)
+
+      const slots = await findFreeSlots(workspaceId, data.userId, { from, to }, durationMin)
+      const top = slots.slice(0, maxSlots)
+      ctx.vars.freeSlots = top.map((s) => s.start.toISOString())
+      ctx.vars.freeSlot = top[0]?.start.toISOString() ?? null
+      ctx.vars.freeSlotsText = top
+        .map((s, i) => {
+          const d = s.start
+          return `${i + 1}) ${pad2(d.getDate())}/${pad2(d.getMonth() + 1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+        })
+        .join('\n')
+      return { advance: true, nextHandle: top.length > 0 ? 'true' : 'false' }
+    }
+
+    case 'create_appointment': {
+      const data = node.data as CreateAppointmentNodeData
+      const startVar = data.startVar ?? 'freeSlot'
+      const startIso = ctx.vars[startVar]
+      if (typeof startIso !== 'string') {
+        logger.warn({ startVar }, 'create_appointment sem horário no contexto — pulando')
+        return { advance: true }
+      }
+      const durationMin = data.durationMin ?? 30
+      const startAt = new Date(startIso)
+      const endAt = new Date(startAt.getTime() + durationMin * 60_000)
+
+      const conv = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { contactId: true },
+      })
+      const link = data.linkToConversation ?? true
+
+      try {
+        const event = await createCalendarEvent({
+          workspaceId,
+          ownerId: data.ownerId,
+          accountId: 'auto',
+          title: data.title || 'Compromisso',
+          startAt,
+          endAt,
+          ...(link ? { conversationId, contactId: conv?.contactId ?? undefined } : {}),
+        })
+        ctx.vars.appointmentId = event.id
+        await eventBus.audit(workspaceId, 'flow.create_appointment', {
+          targetType: 'conversation',
+          targetId: conversationId,
+          payload: { eventId: event.id, ownerId: data.ownerId },
+        })
+      } catch (err) {
+        if (err instanceof CalendarConflictError) {
+          ctx.vars.appointmentConflict = true
+          logger.info({ conversationId }, 'create_appointment: conflito de horário')
+        } else {
+          logger.error({ err }, 'Erro ao criar compromisso no flow')
+        }
+      }
+      return { advance: true }
+    }
+
     default:
       logger.warn({ nodeType: (node as any).type }, 'Tipo de nó desconhecido — pulando')
       return { advance: true }
   }
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
 }
 
 function pickNextNodeId(fromNodeId: string, handle: string | null, edges: FlowEdge[]): string | null {

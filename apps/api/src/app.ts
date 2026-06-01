@@ -23,6 +23,7 @@ import { aiRoutes } from './modules/ai/ai.routes.js'
 import { tasksRoutes } from './modules/tasks/tasks.routes.js'
 import { vaultRoutes } from './modules/vault/vault.routes.js'
 import { calendarRoutes } from './modules/calendar/calendar.routes.js'
+import { scheduleRoutes } from './modules/calendar/schedule.routes.js'
 import { eventsRoutes } from './modules/events/events.routes.js'
 import { usersRoutes } from './modules/users/users.routes.js'
 import { workspaceRoutes } from './modules/workspaces/workspace.routes.js'
@@ -211,6 +212,7 @@ export async function buildApp() {
   await app.register(tasksRoutes)
   await app.register(vaultRoutes)
   await app.register(calendarRoutes)
+  await app.register(scheduleRoutes)
   await app.register(eventsRoutes)
   await app.register(usersRoutes)
   await app.register(workspaceRoutes)

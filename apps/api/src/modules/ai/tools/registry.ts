@@ -3,6 +3,8 @@ import { notifyTool } from './notify.tool.js'
 import { createCardTool } from './createCard.tool.js'
 import { createTaskTool } from './createTask.tool.js'
 import { createCalendarEventTool } from './createCalendarEvent.tool.js'
+import { findFreeSlotsTool } from './findFreeSlots.tool.js'
+import { checkAvailabilityTool } from './checkAvailability.tool.js'
 import { moveEmailTool } from './moveEmail.tool.js'
 import { logger } from '../../../lib/logger.js'
 
@@ -12,6 +14,8 @@ const ALL_TOOLS: ToolDef<any>[] = [
   createCardTool,
   createTaskTool,
   createCalendarEventTool,
+  findFreeSlotsTool,
+  checkAvailabilityTool,
   moveEmailTool,
 ]
 

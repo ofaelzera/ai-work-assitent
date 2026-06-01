@@ -15,12 +15,14 @@ import '@xyflow/react/dist/style.css'
 import {
   ArrowLeft, Play, Save, Plus, Trash2, MessageSquare,
   ListChecks, GitFork, Users2, User, Bot, Hand, Tag, Square, CircleDot,
+  Clock, CalendarClock, CalendarSearch, CalendarPlus,
 } from 'lucide-react'
 
 type NodeType =
   | 'start' | 'message' | 'menu' | 'condition'
   | 'assign_team' | 'assign_user' | 'start_bot'
   | 'wait_for_human' | 'tag' | 'end'
+  | 'check_company_hours' | 'check_user_available' | 'find_free_slots' | 'create_appointment'
 
 const NODE_META: Record<NodeType, { label: string; icon: any; color: string }> = {
   start:          { label: 'Início',                icon: CircleDot,    color: '#10b981' },
@@ -33,9 +35,16 @@ const NODE_META: Record<NodeType, { label: string; icon: any; color: string }> =
   wait_for_human: { label: 'Aguardar atendente',    icon: Hand,         color: '#f97316' },
   tag:            { label: 'Adicionar tag',         icon: Tag,          color: '#64748b' },
   end:            { label: 'Fim',                   icon: Square,       color: '#ef4444' },
+  check_company_hours:  { label: 'Empresa aberta?',     icon: Clock,          color: '#14b8a6' },
+  check_user_available: { label: 'Usuário disponível?', icon: CalendarClock,  color: '#14b8a6' },
+  find_free_slots:      { label: 'Buscar horários',     icon: CalendarSearch, color: '#0d9488' },
+  create_appointment:   { label: 'Agendar compromisso', icon: CalendarPlus,   color: '#0d9488' },
 }
 
-const PALETTE: NodeType[] = ['message', 'menu', 'condition', 'assign_team', 'assign_user', 'start_bot', 'wait_for_human', 'tag', 'end']
+const PALETTE: NodeType[] = [
+  'message', 'menu', 'condition', 'assign_team', 'assign_user', 'start_bot', 'wait_for_human', 'tag', 'end',
+  'check_company_hours', 'check_user_available', 'find_free_slots', 'create_appointment',
+]
 
 function makeId(prefix: string) { return `${prefix}-${Math.random().toString(36).slice(2, 8)}` }
 
@@ -52,6 +61,10 @@ function defaultData(type: NodeType): any {
     case 'start_bot':      return { agentId: '', awaitReply: false }
     case 'wait_for_human': return { teamId: null }
     case 'tag':            return { conversationTags: [], contactTags: [] }
+    case 'check_company_hours':  return {}
+    case 'check_user_available': return { userId: '' }
+    case 'find_free_slots':      return { userId: '', durationMin: 30, daysAhead: 7, maxSlots: 5 }
+    case 'create_appointment':   return { ownerId: '', title: 'Compromisso', durationMin: 30, startVar: 'freeSlot', linkToConversation: true }
     default: return {}
   }
 }
@@ -72,10 +85,24 @@ function CustomNode({ data, selected }: { data: any; selected: boolean }) {
       <div className="px-3 py-2 text-[11px] text-muted-foreground line-clamp-2">
         {data.summary || '(configure...)'}
       </div>
-      {data.type !== 'end' && <Handle type="source" position={Position.Bottom} className="w-2.5 h-2.5 bg-primary border-2 border-background" />}
+      {DUAL_HANDLE_TYPES.has(data.type) ? (
+        <>
+          <Handle id="true" type="source" position={Position.Bottom} style={{ left: '30%' }}
+            className="w-2.5 h-2.5 bg-emerald-500 border-2 border-background" />
+          <Handle id="false" type="source" position={Position.Bottom} style={{ left: '70%' }}
+            className="w-2.5 h-2.5 bg-red-500 border-2 border-background" />
+        </>
+      ) : (
+        data.type !== 'end' && <Handle type="source" position={Position.Bottom} className="w-2.5 h-2.5 bg-primary border-2 border-background" />
+      )}
     </div>
   )
 }
+
+// Nós de agenda que ramificam por sourceHandle 'true' / 'false'.
+const DUAL_HANDLE_TYPES = new Set<string>([
+  'check_company_hours', 'check_user_available', 'find_free_slots',
+])
 
 function summarize(type: NodeType, d: any): string {
   switch (type) {
@@ -89,6 +116,10 @@ function summarize(type: NodeType, d: any): string {
     case 'tag':            return `tags: ${(d.conversationTags ?? []).join(', ')}`
     case 'end':            return 'Fim'
     case 'start':          return 'Início'
+    case 'check_company_hours':  return 'Sim / Não'
+    case 'check_user_available': return d.userId ? `user ${d.userId} (sim/não)` : '(escolha usuário)'
+    case 'find_free_slots':      return d.userId ? `${d.durationMin ?? 30}min · ${d.daysAhead ?? 7}d` : '(escolha usuário)'
+    case 'create_appointment':   return d.ownerId ? `${d.title} (${d.durationMin ?? 30}min)` : '(configure)'
     default: return ''
   }
 }
@@ -285,6 +316,102 @@ function NodeInspector({
               onChange={(e) => update({ contactTags: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
               className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs" />
           </div>
+        </>
+      )}
+
+      {type === 'check_company_hours' && (
+        <p className="text-[10px] text-muted-foreground">
+          Verifica o horário de funcionamento da empresa agora.
+          Saídas: <code>true</code> (aberto) / <code>false</code> (fechado).
+        </p>
+      )}
+
+      {type === 'check_user_available' && (
+        <>
+          <div className="space-y-1.5">
+            <label className="text-xs">Usuário</label>
+            <select value={data.userId ?? ''} onChange={(e) => update({ userId: e.target.value })}
+              className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs">
+              <option value="">— selecione —</option>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Saídas: <code>true</code> (disponível) / <code>false</code>.
+          </p>
+        </>
+      )}
+
+      {type === 'find_free_slots' && (
+        <>
+          <div className="space-y-1.5">
+            <label className="text-xs">Usuário (agenda)</label>
+            <select value={data.userId ?? ''} onChange={(e) => update({ userId: e.target.value })}
+              className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs">
+              <option value="">— selecione —</option>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="space-y-1.5">
+              <label className="text-xs">Duração (min)</label>
+              <input type="number" value={data.durationMin ?? 30} onChange={(e) => update({ durationMin: Number(e.target.value) })}
+                className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs">Dias à frente</label>
+              <input type="number" value={data.daysAhead ?? 7} onChange={(e) => update({ daysAhead: Number(e.target.value) })}
+                className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs">Máx. slots</label>
+              <input type="number" value={data.maxSlots ?? 5} onChange={(e) => update({ maxSlots: Number(e.target.value) })}
+                className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs" />
+            </div>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Grava <code>{'{{freeSlotsText}}'}</code> e <code>freeSlot</code> no contexto.
+            Saídas: <code>true</code> (achou) / <code>false</code>.
+          </p>
+        </>
+      )}
+
+      {type === 'create_appointment' && (
+        <>
+          <div className="space-y-1.5">
+            <label className="text-xs">Dono da agenda</label>
+            <select value={data.ownerId ?? ''} onChange={(e) => update({ ownerId: e.target.value })}
+              className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs">
+              <option value="">— selecione —</option>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs">Título</label>
+            <input value={data.title ?? ''} onChange={(e) => update({ title: e.target.value })}
+              className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <label className="text-xs">Duração (min)</label>
+              <input type="number" value={data.durationMin ?? 30} onChange={(e) => update({ durationMin: Number(e.target.value) })}
+                className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs">Var. de início</label>
+              <input value={data.startVar ?? 'freeSlot'} onChange={(e) => update({ startVar: e.target.value })}
+                className="w-full rounded-lg border bg-transparent px-2 py-2 text-xs" />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={data.linkToConversation ?? true}
+              onChange={(e) => update({ linkToConversation: e.target.checked })} className="h-3.5 w-3.5" />
+            Vincular à conversa/contato atual
+          </label>
+          <p className="text-[10px] text-muted-foreground">
+            Usa <code>ctx.vars.{data.startVar ?? 'freeSlot'}</code> (ISO) como início.
+            Sincroniza no Google do dono se conectado.
+          </p>
         </>
       )}
     </div>

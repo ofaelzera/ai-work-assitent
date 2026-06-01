@@ -4,8 +4,9 @@ import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, UserRound, MessageSquare, KeyRound, Calendar as CalendarIcon, Plug, Trash2, Camera, Upload } from 'lucide-react'
+import { Save, UserRound, MessageSquare, KeyRound, Calendar as CalendarIcon, Plug, Trash2, Camera, Upload, Clock } from 'lucide-react'
 import MessageTemplateField from '@/components/MessageTemplateField'
+import { WeeklyHoursEditor, type HoursRow } from '@/components/WeeklyHoursEditor'
 import { useAuthStore } from '@/store/auth'
 
 interface MeProfile {
@@ -470,6 +471,27 @@ function MessageTemplates() {
 }
 
 // ─── Página ──────────────────────────────────────────────────────────────────
+// ─── Horário de trabalho ──────────────────────────────────────────────────────
+function WorkingHoursPanel({ userId }: { userId: string }) {
+  const qc = useQueryClient()
+  const { data: rows = [], isLoading } = useQuery<HoursRow[]>({
+    queryKey: ['working-hours', userId],
+    queryFn: () => apiFetch(`/calendar/working-hours/${userId}`),
+    enabled: !!userId,
+  })
+  const save = useMutation({
+    mutationFn: (r: HoursRow[]) =>
+      apiFetch(`/calendar/working-hours/${userId}`, { method: 'PUT', body: JSON.stringify({ rows: r }) }),
+    onSuccess: () => {
+      toast.success('Horário de trabalho salvo')
+      qc.invalidateQueries({ queryKey: ['working-hours', userId] })
+    },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao salvar'),
+  })
+  if (isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>
+  return <WeeklyHoursEditor rows={rows} onSave={(r) => save.mutate(r)} saving={save.isPending} />
+}
+
 export default function ProfilePage() {
   // Mount guard: evita hydration mismatch — várias subseções dependem de estado
   // assíncrono (auth, queries, OAuth account list) que diverge entre SSR e CSR.
@@ -540,6 +562,13 @@ export default function ProfilePage() {
           {isLoading || !profile
             ? <p className="text-sm text-muted-foreground">Carregando...</p>
             : <GoogleAccounts profile={profile} />}
+        </Section>
+
+        <Section title="Horário de trabalho" icon={Clock}
+          description="Define sua disponibilidade. Usado no cálculo de horários livres e agendamentos.">
+          {isLoading || !profile
+            ? <p className="text-sm text-muted-foreground">Carregando...</p>
+            : <WorkingHoursPanel userId={profile.id} />}
         </Section>
 
         <Section title="Mensagens automáticas" icon={MessageSquare}

@@ -3,7 +3,9 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
+import { usePermission } from '@/lib/usePermission'
+import { useAuthStore } from '@/store/auth'
 import { toast } from 'sonner'
 import {
   ChevronLeft,
@@ -12,6 +14,8 @@ import {
   Plus,
   Wifi,
   X,
+  Lock,
+  Ban,
   Clock,
   Trash2,
   MessageSquare,
@@ -45,6 +49,8 @@ interface Attendee {
 interface CalendarEvent {
   id: string
   title: string
+  ownerId?: string
+  createdById?: string | null
   startAt: string
   endAt: string
   description?: string | null
@@ -94,6 +100,9 @@ const GOOGLE_COLORS: Record<string, string> = {
   '5': '#fbd75b', '6': '#ffb878', '7': '#46d6db', '8': '#e1e1e1',
   '9': '#5484ed', '10': '#51b749', '11': '#dc2127',
 }
+
+// Paleta para diferenciar donos na visualização de agenda compartilhada.
+const OWNER_PALETTE = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#ef4444', '#14b8a6']
 
 function pad(n: number) {
   return String(n).padStart(2, '0')
@@ -395,11 +404,14 @@ interface NewEventModalProps {
   open: boolean
   defaultDate: string
   accounts: CalendarAccount[]
+  users: WorkspaceUser[]
+  currentUserId: string
+  canCreateForOthers: boolean
   onClose: () => void
   onCreated: () => void
 }
 
-function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewEventModalProps) {
+function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canCreateForOthers, onClose, onCreated }: NewEventModalProps) {
   const [title, setTitle] = useState('')
   const [date, setDate] = useState(defaultDate)
   const [startTime, setStartTime] = useState('09:00')
@@ -410,9 +422,88 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
   const [createMeetLink, setCreateMeetLink] = useState(false)
   const [allDay, setAllDay] = useState(false)
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
+  const [ownerId, setOwnerId] = useState(currentUserId)
+
+  const isForOther = ownerId !== currentUserId
+
+  // Ao abrir (ou mudar o dia clicado), reseta data/dono — corrige o modal que
+  // ficava preso na data inicial.
+  useEffect(() => {
+    if (open) {
+      setDate(defaultDate)
+      setOwnerId(currentUserId)
+    }
+  }, [open, defaultDate, currentUserId])
+
+  // ── Horários disponíveis (selects derivados dos intervalos livres) ─────────
+  const STEP = 15 // granularidade dos horários (min)
+  const dayFrom = date ? new Date(`${date}T00:00:00`).toISOString() : null
+  const dayTo = date ? new Date(`${date}T23:59:59`).toISOString() : null
+  const { data: freeIntervals = [] } = useQuery<{ start: string; end: string }[]>({
+    queryKey: ['free-intervals', ownerId, date],
+    queryFn: () =>
+      apiFetch(`/calendar/free-intervals?userId=${ownerId}&from=${encodeURIComponent(dayFrom!)}&to=${encodeURIComponent(dayTo!)}`),
+    enabled: open && !allDay && !!date,
+  })
+
+  const toMin = (hhmm: string) => { const [h, m] = hhmm.split(':').map(Number); return (h || 0) * 60 + (m || 0) }
+  const toHHMM = (min: number) => `${pad(Math.floor(min / 60))}:${pad(min % 60)}`
+
+  // Intervalos livres em minutos-do-dia
+  const intervalMins = useMemo(
+    () => freeIntervals.map((i) => {
+      const s = new Date(i.start), e = new Date(i.end)
+      return { startMin: s.getHours() * 60 + s.getMinutes(), endMin: e.getHours() * 60 + e.getMinutes() }
+    }),
+    [freeIntervals],
+  )
+
+  // Opções de início: cada STEP dentro de um intervalo com pelo menos STEP livre
+  const startOptions = useMemo(() => {
+    const opts = new Set<number>()
+    for (const itv of intervalMins) {
+      for (let m = itv.startMin; m + STEP <= itv.endMin; m += STEP) opts.add(m)
+    }
+    return Array.from(opts).sort((a, b) => a - b)
+  }, [intervalMins])
+
+  const startMin = startTime ? toMin(startTime) : null
+  const activeInterval = intervalMins.find((itv) => startMin != null && startMin >= itv.startMin && startMin < itv.endMin)
+  // Opções de fim: só horários depois do início, dentro do mesmo intervalo livre
+  const endOptions = useMemo(() => {
+    if (startMin == null || !activeInterval) return []
+    const opts: number[] = []
+    for (let m = startMin + STEP; m <= activeInterval.endMin; m += STEP) opts.push(m)
+    return opts
+  }, [startMin, activeInterval])
+
+  // Auto-seleciona um horário válido quando o dia muda / opções carregam
+  useEffect(() => {
+    if (!open || allDay || startOptions.length === 0) return
+    const cur = startTime ? toMin(startTime) : null
+    if (cur == null || !startOptions.includes(cur)) {
+      const s = startOptions[0]
+      const itv = intervalMins.find((i) => s >= i.startMin && s < i.endMin)
+      const e = Math.min(s + 60, itv?.endMin ?? s + STEP)
+      setStartTime(toHHMM(s))
+      setEndTime(toHHMM(e > s ? e : s + STEP))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startOptions, open, allDay, date, ownerId])
+
+  function onChangeStart(v: string) {
+    setStartTime(v)
+    const sm = toMin(v)
+    const itv = intervalMins.find((i) => sm >= i.startMin && sm < i.endMin)
+    const e = Math.min(sm + 60, itv?.endMin ?? sm + STEP)
+    setEndTime(toHHMM(e > sm ? e : sm + STEP))
+  }
+
+  const noSlots = !allDay && !!date && startOptions.length === 0
+  const timeInvalid = !allDay && (!startTime || !endTime || toMin(endTime) <= toMin(startTime))
 
   const mutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (opts?: { force?: boolean }) => {
       const startAt = allDay
         ? new Date(`${date}T00:00:00`).toISOString()
         : new Date(`${date}T${startTime}:00`).toISOString()
@@ -423,7 +514,10 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
       return apiFetch('/calendar/events', {
         method: 'POST',
         body: JSON.stringify({
-          accountId: accountId || undefined,
+          // Para terceiros o backend resolve a conta Google do dono automaticamente.
+          accountId: isForOther ? undefined : (accountId || undefined),
+          ownerId: isForOther ? ownerId : undefined,
+          force: opts?.force || undefined,
           title,
           startAt,
           endAt,
@@ -449,6 +543,18 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
       setAllDay(false)
     },
     onError: (err: Error) => {
+      if (err instanceof ApiError && err.status === 409) {
+        if (typeof window !== 'undefined' && window.confirm('Há conflito de horário na agenda. Deseja agendar mesmo assim?')) {
+          mutation.mutate({ force: true })
+          return
+        }
+        toast.error('Conflito de horário — agendamento cancelado')
+        return
+      }
+      if (err instanceof ApiError && err.status === 422) {
+        toast.error(err.message ?? 'Horário indisponível para agendamento')
+        return
+      }
       toast.error(err.message ?? 'Erro ao criar evento')
     },
   })
@@ -479,6 +585,27 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
             />
           </div>
 
+          {/* Owner (agenda compartilhada) */}
+          {canCreateForOthers && (
+            <div>
+              <label className="text-sm font-medium">Para quem (dono da agenda)</label>
+              <select
+                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                value={ownerId}
+                onChange={(e) => setOwnerId(e.target.value)}
+              >
+                <option value={currentUserId}>Minha agenda</option>
+                {users
+                  .filter((u) => u.id !== currentUserId)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name ?? u.email}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
+
           {/* All-day toggle */}
           <div className="flex items-center gap-2">
             <input
@@ -504,28 +631,40 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
             />
           </div>
 
-          {/* Time */}
+          {/* Horários (selects derivados dos intervalos livres — evita escolher hora indisponível) */}
           {!allDay && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-sm font-medium">Início</label>
-                <input
-                  type="time"
-                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                />
+            noSlots ? (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                Nenhum horário disponível neste dia para {isForOther ? 'este usuário' : 'você'}.
               </div>
-              <div>
-                <label className="text-sm font-medium">Fim</label>
-                <input
-                  type="time"
-                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                />
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium">Início</label>
+                  <select
+                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    value={startTime}
+                    onChange={(e) => onChangeStart(e.target.value)}
+                  >
+                    {startOptions.map((m) => (
+                      <option key={m} value={toHHMM(m)}>{toHHMM(m)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Fim</label>
+                  <select
+                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                  >
+                    {endOptions.map((m) => (
+                      <option key={m} value={toHHMM(m)}>{toHHMM(m)}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            </div>
+            )
           )}
 
           {/* Location */}
@@ -611,8 +750,9 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
             Cancelar
           </button>
           <button
-            onClick={() => mutation.mutate()}
-            disabled={!title.trim() || mutation.isPending}
+            onClick={() => mutation.mutate({})}
+            disabled={!title.trim() || mutation.isPending || noSlots || timeInvalid}
+            title={noSlots ? 'Nenhum horário disponível neste dia' : undefined}
             className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             {mutation.isPending ? 'Criando...' : 'Criar evento'}
@@ -627,6 +767,9 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
 
 interface EventDetailSheetProps {
   event: CalendarEvent | null
+  currentUserId: string
+  canCancelOthers: boolean
+  users: WorkspaceUser[]
   onClose: () => void
   onDeleted: () => void
 }
@@ -643,7 +786,7 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 line-through',
 }
 
-function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) {
+function EventDetailSheet({ event, currentUserId, canCancelOthers, users, onClose, onDeleted }: EventDetailSheetProps) {
   const deleteMutation = useMutation({
     mutationFn: () => apiFetch(`/calendar/events/${event!.id}`, { method: 'DELETE' }),
     onSuccess: () => {
@@ -659,6 +802,13 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
   if (!event) return null
 
   const colorHex = event.color ? GOOGLE_COLORS[event.color] : null
+  // Pode remover se é dono da agenda, se criou o evento, ou se tem permissão.
+  const canDelete =
+    event.ownerId === currentUserId ||
+    event.createdById === currentUserId ||
+    canCancelOthers
+  const isOwnAgenda = !event.ownerId || event.ownerId === currentUserId
+  const ownerLabel = isOwnAgenda ? 'Sua agenda' : (users.find((u) => u.id === event.ownerId)?.name ?? 'Outro usuário')
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -674,11 +824,16 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1.5 flex-1">
               <h2 className="text-lg font-semibold leading-tight">{event.title}</h2>
-              {event.status && (
-                <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[event.status] ?? 'bg-muted text-muted-foreground'}`}>
-                  {STATUS_LABELS[event.status] ?? event.status}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                  <User className="h-3 w-3" /> {ownerLabel}
                 </span>
-              )}
+                {event.status && (
+                  <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[event.status] ?? 'bg-muted text-muted-foreground'}`}>
+                    {STATUS_LABELS[event.status] ?? event.status}
+                  </span>
+                )}
+              </div>
             </div>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground shrink-0 mt-0.5">
               <X className="h-4 w-4" />
@@ -791,15 +946,21 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
         </div>
 
         {/* Footer */}
-        <div className="p-6 pt-0 border-t shrink-0">
-          <button
-            onClick={() => deleteMutation.mutate()}
-            disabled={deleteMutation.isPending}
-            className="flex items-center gap-2 rounded-md border border-destructive text-destructive px-4 py-2 text-sm hover:bg-destructive/10 disabled:opacity-50 transition-colors w-full justify-center"
-          >
-            <Trash2 className="h-4 w-4" />
-            {deleteMutation.isPending ? 'Removendo...' : 'Remover evento'}
-          </button>
+        <div className="p-6 pt-4 border-t shrink-0">
+          {canDelete ? (
+            <button
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              className="flex items-center gap-2 rounded-md border border-destructive text-destructive px-4 py-2 text-sm hover:bg-destructive/10 disabled:opacity-50 transition-colors w-full justify-center"
+            >
+              <Trash2 className="h-4 w-4" />
+              {deleteMutation.isPending ? 'Removendo...' : 'Remover evento'}
+            </button>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center">
+              Só o dono da agenda ou quem criou o evento pode removê-lo.
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -807,6 +968,147 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
 }
 
 // ─── Main Page ───────────────────────────────────────────────────────────────
+
+// ─── Owner picker (agenda compartilhada) ──────────────────────────────────────
+
+function OwnerPicker({
+  users,
+  selected,
+  onChange,
+}: {
+  users: WorkspaceUser[]
+  selected: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [])
+
+  function toggle(id: string) {
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id])
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent transition-colors"
+      >
+        <Users className="h-4 w-4" />
+        {selected.length > 0 ? `Agendas (${selected.length + 1})` : 'Ver agenda de'}
+      </button>
+      {open && (
+        <div className="absolute right-0 z-50 mt-1 w-64 max-h-72 overflow-y-auto rounded-md border bg-popover shadow-lg p-1">
+          {users.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">Nenhum outro usuário</p>
+          ) : (
+            users.map((u) => (
+              <label
+                key={u.id}
+                className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent rounded cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.includes(u.id)}
+                  onChange={() => toggle(u.id)}
+                  className="h-4 w-4 rounded border"
+                />
+                <span className="truncate">{u.name ?? u.email}</span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Modal de bloqueio de agenda ───────────────────────────────────────────────
+function BlockModal({
+  open, defaultDate, userId, onClose, onCreated,
+}: {
+  open: boolean
+  defaultDate: string
+  userId: string
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [date, setDate] = useState(defaultDate)
+  const [startTime, setStartTime] = useState('08:00')
+  const [endTime, setEndTime] = useState('12:00')
+  const [title, setTitle] = useState('')
+
+  useEffect(() => {
+    if (open) { setDate(defaultDate); setStartTime('08:00'); setEndTime('12:00'); setTitle('') }
+  }, [open, defaultDate])
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      apiFetch('/calendar/blocks', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId, // bloqueia a própria agenda
+          title: title || undefined,
+          startAt: new Date(`${date}T${startTime}:00`).toISOString(),
+          endAt: new Date(`${date}T${endTime}:00`).toISOString(),
+        }),
+      }),
+    onSuccess: () => { toast.success('Período bloqueado'); onCreated(); onClose() },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao bloquear'),
+  })
+
+  if (!open) return null
+  const invalid = !date || new Date(`${date}T${endTime}:00`) <= new Date(`${date}T${startTime}:00`)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative bg-card border rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold flex items-center gap-2"><Ban className="h-4 w-4" /> Bloquear agenda</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+        </div>
+        <p className="text-xs text-muted-foreground">Impede agendamentos no período (ex: consulta, reunião interna, almoço estendido).</p>
+        <div>
+          <label className="text-sm font-medium">Motivo (opcional)</label>
+          <input className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm" value={title}
+            onChange={(e) => setTitle(e.target.value)} placeholder="Ex: Dentista" autoFocus />
+        </div>
+        <div>
+          <label className="text-sm font-medium">Data</label>
+          <input type="date" className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm" value={date}
+            onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-sm font-medium">Início</label>
+            <input type="time" className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm" value={startTime}
+              onChange={(e) => setStartTime(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Fim</label>
+            <input type="time" className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm" value={endTime}
+              onChange={(e) => setEndTime(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="rounded-md border px-4 py-2 text-sm hover:bg-accent">Cancelar</button>
+          <button onClick={() => mutation.mutate()} disabled={invalid || mutation.isPending}
+            className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
+            {mutation.isPending ? 'Bloqueando...' : 'Bloquear'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function CalendarPage() {
   const queryClient = useQueryClient()
@@ -817,6 +1119,21 @@ export default function CalendarPage() {
   const [newEventOpen, setNewEventOpen] = useState(false)
   const [newEventDate, setNewEventDate] = useState(toLocalDateStr(today))
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
+
+  // ── Agenda compartilhada ────────────────────────────────────────────────────
+  const currentUserId = useAuthStore((s) => s.user?.sub ?? '')
+  const canViewOthers = usePermission('calendar.viewOthers')
+  const canCreateForOthers = usePermission('calendar.createForOthers')
+  const canCancelOthers = usePermission('calendar.cancelOthers')
+  // Donos selecionados pra visualizar. Vazio = só o próprio.
+  const [viewOwnerIds, setViewOwnerIds] = useState<string[]>([])
+
+  const { data: users = [] } = useQuery<WorkspaceUser[]>({
+    queryKey: ['workspace-users'],
+    queryFn: () => apiFetch<WorkspaceUser[]>('/users'),
+    staleTime: 5 * 60 * 1000,
+    enabled: canViewOthers || canCreateForOthers,
+  })
 
   // ── Accounts ──────────────────────────────────────────────────────────────
 
@@ -847,21 +1164,91 @@ export default function CalendarPage() {
   const from = new Date(year, month, 1).toISOString()
   const to = new Date(year, month + 1, 0, 23, 59, 59).toISOString()
 
+  const ownerKey = viewOwnerIds.join(',')
   const { data: events = [] } = useQuery<CalendarEvent[]>({
-    queryKey: ['calendar-events', year, month],
-    queryFn: () =>
-      apiFetch<CalendarEvent[]>(
-        `/calendar/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-      ),
+    queryKey: ['calendar-events', year, month, ownerKey],
+    queryFn: () => {
+      const params = new URLSearchParams({ from, to })
+      // Vazio = só a própria agenda. Com seleção, sempre inclui a própria + os colegas.
+      if (viewOwnerIds.length > 0) {
+        params.append('ownerIds', currentUserId)
+        for (const id of viewOwnerIds) params.append('ownerIds', id)
+      }
+      return apiFetch<CalendarEvent[]>(`/calendar/events?${params.toString()}`)
+    },
   })
 
   const syncMutation = useMutation({
     mutationFn: () => apiFetch<{ synced: number }>('/calendar/sync', { method: 'POST', body: JSON.stringify({}) }),
     onSuccess: ({ synced }) => {
       toast.success(`${synced} evento${synced !== 1 ? 's' : ''} sincronizado${synced !== 1 ? 's' : ''}`)
-      queryClient.invalidateQueries({ queryKey: ['calendar-events', year, month] })
+      queryClient.invalidateQueries({ queryKey: ['calendar-events'] })
     },
     onError: (err: Error) => toast.error(err.message ?? 'Erro ao sincronizar'),
+  })
+
+  // ── Dias fechados (empresa não atende) ──────────────────────────────────────
+  // Bloqueia clique em fim de semana/dias fora do expediente e feriados.
+  const { data: companyHours = [] } = useQuery<{ weekday: number }[]>({
+    queryKey: ['company-hours'],
+    queryFn: () => apiFetch('/calendar/company-hours'),
+    staleTime: 5 * 60 * 1000,
+  })
+  const { data: holidays = [] } = useQuery<{ date: string; closed: boolean }[]>({
+    queryKey: ['holidays'],
+    queryFn: () => apiFetch('/calendar/holidays'),
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const openWeekdays = useMemo(() => new Set(companyHours.map((h) => h.weekday)), [companyHours])
+  const companyConfigured = companyHours.length > 0
+  const closedHolidays = useMemo(
+    () => new Set(holidays.filter((h) => h.closed).map((h) => h.date.slice(0, 10))),
+    [holidays],
+  )
+
+  // Dia fechado = feriado fechado OU (empresa configurada e o weekday não está aberto).
+  const isDayClosed = useCallback(
+    (day: Date) => {
+      if (closedHolidays.has(toLocalDateStr(day))) return true
+      if (companyConfigured && !openWeekdays.has(day.getDay())) return true
+      return false
+    },
+    [closedHolidays, companyConfigured, openWeekdays],
+  )
+
+  // ── Bloqueios de agenda (do próprio usuário) ─────────────────────────────────
+  const [blockModalOpen, setBlockModalOpen] = useState(false)
+  const [blockDate, setBlockDate] = useState(toLocalDateStr(today))
+
+  const { data: blocks = [] } = useQuery<{ id: string; title: string | null; startAt: string; endAt: string; userId: string | null }[]>({
+    queryKey: ['schedule-blocks', year, month, ownerKey],
+    queryFn: () => {
+      const params = new URLSearchParams({ from, to })
+      if (viewOwnerIds.length > 0) {
+        params.append('ownerIds', currentUserId)
+        for (const id of viewOwnerIds) params.append('ownerIds', id)
+      }
+      return apiFetch(`/calendar/blocks?${params.toString()}`)
+    },
+  })
+
+  const blocksByDay = useMemo(() => {
+    const map: Record<string, typeof blocks> = {}
+    for (const b of blocks) {
+      const key = toLocalDateStr(new Date(b.startAt))
+      ;(map[key] ??= []).push(b)
+    }
+    return map
+  }, [blocks])
+
+  const deleteBlock = useMutation({
+    mutationFn: (id: string) => apiFetch(`/calendar/blocks/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Bloqueio removido')
+      queryClient.invalidateQueries({ queryKey: ['schedule-blocks'] })
+    },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao remover'),
   })
 
   // ── Calendar grid ─────────────────────────────────────────────────────────
@@ -877,6 +1264,17 @@ export default function CalendarPage() {
     }
     return map
   }, [events])
+
+  // Cor por dono (agenda compartilhada): self + colegas visualizados.
+  const multiOwner = viewOwnerIds.length > 0
+  const ownerColor = useMemo(() => {
+    const ids = [currentUserId, ...viewOwnerIds]
+    const map: Record<string, string> = {}
+    ids.forEach((id, i) => { map[id] = OWNER_PALETTE[i % OWNER_PALETTE.length] })
+    return map
+  }, [currentUserId, viewOwnerIds])
+  const ownerName = (id?: string | null) =>
+    id === currentUserId ? 'Você' : (users.find((u) => u.id === id)?.name ?? 'Outro')
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
@@ -901,7 +1299,7 @@ export default function CalendarPage() {
   }
 
   const invalidateEvents = () =>
-    queryClient.invalidateQueries({ queryKey: ['calendar-events', year, month] })
+    queryClient.invalidateQueries({ queryKey: ['calendar-events'] })
 
   const todayStr = toLocalDateStr(today)
 
@@ -969,6 +1367,14 @@ export default function CalendarPage() {
             </button>
           )}
 
+          {canViewOthers && (
+            <OwnerPicker
+              users={users.filter((u) => u.id !== currentUserId)}
+              selected={viewOwnerIds}
+              onChange={setViewOwnerIds}
+            />
+          )}
+
           <button
             onClick={() => syncMutation.mutate()}
             disabled={syncMutation.isPending}
@@ -977,6 +1383,15 @@ export default function CalendarPage() {
           >
             <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
             Sincronizar
+          </button>
+
+          <button
+            onClick={() => { setBlockDate(toLocalDateStr(today)); setBlockModalOpen(true) }}
+            title="Bloquear um período da sua agenda"
+            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent transition-colors"
+          >
+            <Ban className="h-4 w-4" />
+            Bloquear
           </button>
 
           <button
@@ -991,6 +1406,17 @@ export default function CalendarPage() {
 
       {/* ── Calendar grid ── */}
       <div className="flex-1 overflow-auto p-4">
+        {/* Legenda de cores por dono (agenda compartilhada) */}
+        {multiOwner && (
+          <div className="flex flex-wrap items-center gap-3 mb-3 text-xs">
+            {[currentUserId, ...viewOwnerIds].map((id) => (
+              <span key={id} className="inline-flex items-center gap-1.5">
+                <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: ownerColor[id] }} />
+                {ownerName(id)}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="min-w-[640px]">
           {/* Day header row */}
           <div className="grid grid-cols-7 mb-1">
@@ -1010,14 +1436,18 @@ export default function CalendarPage() {
               const dayEvents = eventsByDay[dayStr] ?? []
               const shown = dayEvents.slice(0, 3)
               const overflow = dayEvents.length - 3
+              const closed = isDayClosed(day)
 
               return (
                 <div
                   key={idx}
-                  onClick={() => openNewEvent(day)}
-                  className={`border-r border-b min-h-[96px] p-1.5 cursor-pointer hover:bg-accent/30 transition-colors ${
-                    !isCurrentMonth ? 'bg-muted/30' : ''
-                  }`}
+                  onClick={() => { if (!closed) openNewEvent(day) }}
+                  title={closed ? 'Empresa fechada neste dia' : undefined}
+                  className={`border-r border-b min-h-[96px] p-1.5 transition-colors ${
+                    closed
+                      ? 'bg-muted/40 cursor-not-allowed'
+                      : 'cursor-pointer hover:bg-accent/30'
+                  } ${!isCurrentMonth ? 'bg-muted/30' : ''}`}
                 >
                   {/* Day number */}
                   <div className="flex justify-end mb-1">
@@ -1034,24 +1464,43 @@ export default function CalendarPage() {
                     </span>
                   </div>
 
+                  {/* Bloqueios do dia */}
+                  <div className="space-y-0.5">
+                    {(blocksByDay[dayStr] ?? []).map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (window.confirm('Remover este bloqueio de agenda?')) deleteBlock.mutate(b.id)
+                        }}
+                        className="w-full text-left rounded px-1 py-0.5 text-xs truncate block bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
+                        title={`Bloqueado${b.title ? `: ${b.title}` : ''} — clique para remover`}
+                      >
+                        <Lock className="h-2.5 w-2.5 inline mr-1 opacity-70" />
+                        <span className="mr-1">{formatTime(b.startAt)}</span>
+                        {b.title ?? 'Bloqueado'}
+                      </button>
+                    ))}
+                  </div>
+
                   {/* Events */}
                   <div className="space-y-0.5">
                     {shown.map((ev) => {
-                      const colorHex = ev.color ? GOOGLE_COLORS[ev.color] : null
+                      // Em modo multi-usuário, cor por dono; senão, cor do Google.
+                      const colorHex = multiOwner
+                        ? (ownerColor[ev.ownerId ?? ''] ?? '#6366f1')
+                        : (ev.color ? GOOGLE_COLORS[ev.color] : null)
                       return (
                         <button
                           key={ev.id}
                           onClick={(e) => { e.stopPropagation(); setSelectedEvent(ev) }}
-                          className="w-full text-left rounded px-1 py-0.5 text-xs truncate block transition-colors hover:opacity-80"
+                          className="w-full text-left rounded px-1 py-0.5 text-xs truncate flex items-center gap-1 transition-colors hover:opacity-80"
                           style={colorHex
-                            ? { backgroundColor: `${colorHex}33`, color: colorHex.replace('#', '').length === 6 ? undefined : colorHex }
+                            ? { backgroundColor: `${colorHex}22`, borderLeft: `3px solid ${colorHex}` }
                             : undefined}
-                          title={ev.title}
+                          title={multiOwner ? `${ev.title} — ${ownerName(ev.ownerId)}` : ev.title}
                         >
-                          <span
-                            className={!colorHex ? 'bg-primary/10 text-primary' : ''}
-                            style={!colorHex ? undefined : { color: colorHex }}
-                          >
+                          <span className={`truncate ${!colorHex ? 'bg-primary/10 text-primary px-1 rounded' : ''}`} style={colorHex ? { color: colorHex } : undefined}>
                             <span className="text-muted-foreground mr-1">
                               {ev.allDay ? '◆' : formatTime(ev.startAt)}
                             </span>
@@ -1077,12 +1526,29 @@ export default function CalendarPage() {
         open={newEventOpen}
         defaultDate={newEventDate}
         accounts={accounts}
+        users={users}
+        currentUserId={currentUserId}
+        canCreateForOthers={canCreateForOthers}
         onClose={() => setNewEventOpen(false)}
         onCreated={invalidateEvents}
       />
 
+      <BlockModal
+        open={blockModalOpen}
+        defaultDate={blockDate}
+        userId={currentUserId}
+        onClose={() => setBlockModalOpen(false)}
+        onCreated={() => {
+          queryClient.invalidateQueries({ queryKey: ['schedule-blocks'] })
+          queryClient.invalidateQueries({ queryKey: ['free-intervals'] })
+        }}
+      />
+
       <EventDetailSheet
         event={selectedEvent}
+        currentUserId={currentUserId}
+        canCancelOthers={canCancelOthers}
+        users={users}
         onClose={() => setSelectedEvent(null)}
         onDeleted={invalidateEvents}
       />

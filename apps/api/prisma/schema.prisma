@@ -42,6 +42,10 @@ model Workspace {
   flows                 Flow[]
   flowExecutions        FlowExecution[]
   conversationTransfers ConversationTransfer[]
+  userWorkingHours      UserWorkingHours[]
+  scheduleBlocks        ScheduleBlock[]
+  companyHours          CompanyHours[]
+  holidays              Holiday[]
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -668,6 +672,7 @@ model CalendarEvent {
   id                String   @id @default(cuid())
   workspaceId       String
   ownerId           String // user dono do evento (sempre obrigatório; eventos são por usuário)
+  createdById       String? // quem criou (pode diferir do dono em agenda compartilhada)
   calendarAccountId String? // nullable: evento local (sem Google sync). Quando preenchido, está sincronizado.
   externalId        String? // nullable: ID no Google Calendar quando sincronizado
   title             String
@@ -697,6 +702,73 @@ model CalendarEvent {
   @@index([workspaceId, ownerId, startAt])
   @@index([contactId])
   @@index([conversationId])
+}
+
+// ─── Horários de trabalho / disponibilidade ─────────────────────────────────────
+model UserWorkingHours {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  weekday     Int // 0=domingo .. 6=sábado
+  startMin    Int // minutos desde 00:00 (ex: 480 = 08:00)
+  endMin      Int // ex: 720 = 12:00 — múltiplas linhas/dia cobrem manhã/tarde
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, userId, weekday])
+}
+
+// Bloqueios pontuais/recorrentes (férias, almoço extra, reunião interna).
+model ScheduleBlock {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String? // null = bloqueio global da empresa
+  title       String?
+  startAt     DateTime
+  endAt       DateTime
+  recurrence  String? // null = pontual | "WEEKLY" (futuro: RRULE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, userId, startAt])
+}
+
+// Horário de funcionamento da empresa (global por workspace).
+model CompanyHours {
+  id          String   @id @default(cuid())
+  workspaceId String
+  weekday     Int
+  startMin    Int
+  endMin      Int
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, weekday])
+}
+
+// Feriados e datas especiais.
+model Holiday {
+  id          String   @id @default(cuid())
+  workspaceId String
+  date        DateTime @db.Date
+  name        String
+  closed      Boolean  @default(true) // true = fechado; false = horário especial
+  startMin    Int? // quando closed=false, janela especial
+  endMin      Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, date])
 }
 
 // ─── Vault ───────────────────────────────────────────────────────────────────

@@ -39,6 +39,17 @@ const nextConfig = {
   experimental: {
     optimizePackageImports: ['lucide-react', '@aiwa/shared', '@xyflow/react'],
   },
+  // Reduz o nº de arquivos observados pelo watcher em dev (evita EMFILE:
+  // "too many open files" no monorepo + symlinks do pnpm no macOS).
+  webpack(config, { dev }) {
+    if (dev) {
+      config.watchOptions = {
+        ...(config.watchOptions || {}),
+        ignored: ['**/node_modules/**', '**/.git/**', '**/.next/**', '**/dist/**', '**/logs/**'],
+      }
+    }
+    return config
+  },
 }
 
 module.exports = nextConfig
