@@ -29,15 +29,23 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
       const { workspaceId, sub: userId } = req.user
       const { q, companyId, excludeLid, hasPhone, limit, offset } = req.query
 
-      // excludeLid=true esconde LIDs SEM nome (LIDs com nome continuam visíveis)
-      const hiddenLidFilter = excludeLid
-        ? { NOT: { AND: [{ phoneType: 'LID' as const }, { name: null }] } }
-        : {}
+      // "Sem número real": contato sem telefone utilizável no WhatsApp.
+      // Cobre os 3 casos que aparecem na base:
+      //  • phone ausente (null)
+      //  • phone guardando um jid (ex.: "1635...@lid") em vez de um PN
+      //  • phoneType === 'LID' (número protegido pela privacidade do WhatsApp)
+      const noRealPhone = {
+        OR: [
+          { phone: null },
+          { phone: { contains: '@' } },
+          { phoneType: 'LID' as const },
+        ],
+      }
 
-      // hasPhone=true traz apenas contatos com número de telefone cadastrado
-      // (usado na criação de conversa WhatsApp, onde contatos sem número são inúteis)
-      const hasPhoneFilter = hasPhone
-        ? { phone: { not: null } }
+      // excludeLid=true (botão "Sem número" desligado) e hasPhone=true (busca para
+      // iniciar conversa WhatsApp) ambos escondem quem não tem número real utilizável.
+      const requireRealPhone = (excludeLid || hasPhone)
+        ? { NOT: noRealPhone }
         : {}
 
       // Filtro de visibilidade por role:
@@ -51,8 +59,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
       const baseWhere = {
         workspaceId,
         mergedIntoId: null,
-        ...hiddenLidFilter,
-        ...hasPhoneFilter,
+        ...requireRealPhone,
         ...visibilityFilter,
         ...(companyId && { companyId }),
         ...(q && {
