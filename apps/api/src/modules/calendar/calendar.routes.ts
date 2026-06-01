@@ -434,11 +434,13 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
 
       if (!event) return reply.notFound('Calendar event not found')
 
-      // Só pode remover: o dono da agenda ou quem criou o evento.
+      // Pode remover: dono da agenda, quem criou o evento, ou quem tem permissão.
       const isOwnerOrCreator = event.ownerId === req.user.sub
         || event.createdById === req.user.sub
+        || (event.calendarAccount && event.calendarAccount.userId === req.user.sub)
       if (!isOwnerOrCreator) {
-        return reply.forbidden('Você só pode remover eventos da sua agenda ou que você criou')
+        const ok = await hasPermission(req.user, 'calendar.cancelOthers')
+        if (!ok) return reply.forbidden('Você só pode remover eventos da sua agenda ou que você criou')
       }
 
       if (event.calendarAccount && event.externalId) {

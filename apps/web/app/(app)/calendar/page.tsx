@@ -768,6 +768,7 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
 interface EventDetailSheetProps {
   event: CalendarEvent | null
   currentUserId: string
+  canCancelOthers: boolean
   users: WorkspaceUser[]
   onClose: () => void
   onDeleted: () => void
@@ -785,7 +786,7 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 line-through',
 }
 
-function EventDetailSheet({ event, currentUserId, users, onClose, onDeleted }: EventDetailSheetProps) {
+function EventDetailSheet({ event, currentUserId, canCancelOthers, users, onClose, onDeleted }: EventDetailSheetProps) {
   const deleteMutation = useMutation({
     mutationFn: () => apiFetch(`/calendar/events/${event!.id}`, { method: 'DELETE' }),
     onSuccess: () => {
@@ -801,10 +802,11 @@ function EventDetailSheet({ event, currentUserId, users, onClose, onDeleted }: E
   if (!event) return null
 
   const colorHex = event.color ? GOOGLE_COLORS[event.color] : null
-  // Só remove quem é dono da agenda ou quem criou o evento.
+  // Pode remover se é dono da agenda, se criou o evento, ou se tem permissão.
   const canDelete =
     event.ownerId === currentUserId ||
-    event.createdById === currentUserId
+    event.createdById === currentUserId ||
+    canCancelOthers
   const isOwnAgenda = !event.ownerId || event.ownerId === currentUserId
   const ownerLabel = isOwnAgenda ? 'Sua agenda' : (users.find((u) => u.id === event.ownerId)?.name ?? 'Outro usuário')
 
@@ -1122,6 +1124,7 @@ export default function CalendarPage() {
   const currentUserId = useAuthStore((s) => s.user?.sub ?? '')
   const canViewOthers = usePermission('calendar.viewOthers')
   const canCreateForOthers = usePermission('calendar.createForOthers')
+  const canCancelOthers = usePermission('calendar.cancelOthers')
   // Donos selecionados pra visualizar. Vazio = só o próprio.
   const [viewOwnerIds, setViewOwnerIds] = useState<string[]>([])
 
@@ -1463,26 +1466,21 @@ export default function CalendarPage() {
 
                   {/* Bloqueios do dia */}
                   <div className="space-y-0.5">
-                    {(blocksByDay[dayStr] ?? []).map((b) => {
-                      const mine = b.userId === currentUserId // só o dono remove o próprio bloqueio
-                      const whose = b.userId === currentUserId ? '' : b.userId === null ? ' (empresa)' : ` — ${ownerName(b.userId)}`
-                      return (
-                        <button
-                          key={b.id}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (!mine) return
-                            if (window.confirm('Remover este bloqueio de agenda?')) deleteBlock.mutate(b.id)
-                          }}
-                          className={`w-full text-left rounded px-1 py-0.5 text-xs truncate block bg-muted text-muted-foreground transition-colors ${mine ? 'hover:bg-muted/70 cursor-pointer' : 'cursor-default'}`}
-                          title={mine ? `Bloqueado${b.title ? `: ${b.title}` : ''} — clique para remover` : `Bloqueado${whose}`}
-                        >
-                          <Lock className="h-2.5 w-2.5 inline mr-1 opacity-70" />
-                          <span className="mr-1">{formatTime(b.startAt)}</span>
-                          {b.title ?? 'Bloqueado'}
-                        </button>
-                      )
-                    })}
+                    {(blocksByDay[dayStr] ?? []).map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (window.confirm('Remover este bloqueio de agenda?')) deleteBlock.mutate(b.id)
+                        }}
+                        className="w-full text-left rounded px-1 py-0.5 text-xs truncate block bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
+                        title={`Bloqueado${b.title ? `: ${b.title}` : ''} — clique para remover`}
+                      >
+                        <Lock className="h-2.5 w-2.5 inline mr-1 opacity-70" />
+                        <span className="mr-1">{formatTime(b.startAt)}</span>
+                        {b.title ?? 'Bloqueado'}
+                      </button>
+                    ))}
                   </div>
 
                   {/* Events */}
@@ -1549,6 +1547,7 @@ export default function CalendarPage() {
       <EventDetailSheet
         event={selectedEvent}
         currentUserId={currentUserId}
+        canCancelOthers={canCancelOthers}
         users={users}
         onClose={() => setSelectedEvent(null)}
         onDeleted={invalidateEvents}

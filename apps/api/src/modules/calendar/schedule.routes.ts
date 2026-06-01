@@ -180,12 +180,11 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!block) return reply.notFound('Bloqueio não encontrado')
 
       if (block.userId === null) {
-        // Bloqueio global da empresa
         const ok = await hasPermission(req.user, 'calendar.manageCompanyHours')
         if (!ok) return reply.forbidden('Sem permissão')
       } else if (block.userId !== req.user.sub) {
-        // Bloqueio pessoal de outro usuário: só o próprio pode remover.
-        return reply.forbidden('Você só pode remover bloqueios da sua própria agenda')
+        const ok = await hasPermission(req.user, 'calendar.manageWorkingHours')
+        if (!ok) return reply.forbidden('Sem permissão')
       }
       await prisma.scheduleBlock.delete({ where: { id: block.id } })
       return reply.code(204).send()
