@@ -107,15 +107,16 @@ export async function isWithinWorkingHours(
   userId: string,
   at: Date,
 ): Promise<boolean> {
-  // Sem nenhum horário de trabalho configurado para o usuário → sem restrição
-  // de expediente (disponível), respeitando apenas bloqueios pontuais.
-  const anyConfigured = await prisma.userWorkingHours.count({ where: { workspaceId, userId, isActive: true } })
-  if (anyConfigured > 0) {
-    const rows = await prisma.userWorkingHours.findMany({
-      where: { workspaceId, userId, weekday: weekdayOf(at), isActive: true },
-    })
+  // Fallback POR DIA: se o usuário configurou horário para ESTE dia da semana,
+  // respeita-o; se não configurou esse dia, herda o horário da empresa (sem
+  // restrição própria — a janela da empresa é validada à parte). Assim, deixar
+  // um dia "Fechado" no horário pessoal não bloqueia o dia: ele segue a empresa.
+  const rowsForDay = await prisma.userWorkingHours.findMany({
+    where: { workspaceId, userId, weekday: weekdayOf(at), isActive: true },
+  })
+  if (rowsForDay.length > 0) {
     const m = minuteOfDay(at)
-    const inHours = rows.some((r) => m >= r.startMin && m < r.endMin)
+    const inHours = rowsForDay.some((r) => m >= r.startMin && m < r.endMin)
     if (!inHours) return false
   }
 
@@ -213,8 +214,6 @@ export async function findFreeIntervals(
   ])
 
   const holidayByDay = new Map(holidays.map((h) => [startOfDay(h.date).getTime(), h]))
-  // Hierarquia: usuário sem horário próprio herda o horário da empresa.
-  const hasUserHours = workRows.length > 0
   const hasCompanyHours = companyRows.length > 0
 
   for (let day = startOfDay(range.from); day <= range.to; day = new Date(day.getTime() + DAY_MIN * 60_000)) {
@@ -240,16 +239,12 @@ export async function findFreeIntervals(
       companyIntervals = [{ startMin: 0, endMin: DAY_MIN }]
     }
 
-    // Janela de trabalho do usuário nesse dia (hierarquia: herda da empresa se não configurou)
-    let workIntervals: Interval[]
-    if (hasUserHours) {
-      workIntervals = workRows
-        .filter((r) => r.weekday === wd)
-        .map((r) => ({ startMin: r.startMin, endMin: r.endMin }))
-      if (workIntervals.length === 0) continue // usuário não trabalha nesse dia
-    } else {
-      workIntervals = companyIntervals // herda o horário da empresa
-    }
+    // Janela de trabalho do usuário nesse dia — fallback POR DIA:
+    // tem horário pessoal nesse weekday → usa; senão → herda o da empresa.
+    const userForDay = workRows
+      .filter((r) => r.weekday === wd)
+      .map((r) => ({ startMin: r.startMin, endMin: r.endMin }))
+    const workIntervals = userForDay.length > 0 ? userForDay : companyIntervals
 
     // Interseção trabalho ∩ empresa
     let free: Interval[] = []
