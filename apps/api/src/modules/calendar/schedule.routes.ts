@@ -16,6 +16,7 @@ import {
   isWithinCompanyHours,
   isWithinWorkingHours,
   hasConflict,
+  listNationalHolidays,
 } from './availability.service.js'
 
 const hoursRowSchema = z.object({
@@ -229,7 +230,20 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
-  // ─── Feriados ─────────────────────────────────────────────────────────────
+  // ─── Feriados nacionais (automáticos, calculados — somente leitura) ──────────
+  app.get(
+    '/calendar/national-holidays',
+    {
+      onRequest: [app.authenticate],
+      schema: { querystring: z.object({ year: z.coerce.number().int().min(2000).max(2100).optional() }) },
+    },
+    async (req) => {
+      const year = req.query.year ?? new Date().getFullYear()
+      return listNationalHolidays(year)
+    },
+  )
+
+  // ─── Feriados personalizados (municipais, férias coletivas, etc.) ────────────
   app.get('/calendar/holidays', { onRequest: [app.authenticate] }, async (req) => {
     return prisma.holiday.findMany({
       where: { workspaceId: req.user.workspaceId },
@@ -243,7 +257,8 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
       onRequest: [app.authenticate, requirePerm('calendar.manageCompanyHours')],
       schema: {
         body: z.object({
-          date: z.string(), // YYYY-MM-DD
+          date: z.string(), // YYYY-MM-DD (início)
+          endDate: z.string().optional(), // YYYY-MM-DD (fim, p/ férias coletivas / período)
           name: z.string().min(1),
           closed: z.boolean().optional(),
           startMin: z.number().int().min(0).max(1440).nullable().optional(),
@@ -252,72 +267,30 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req, reply) => {
-      const { date, name, closed, startMin, endMin } = req.body
-      const day = new Date(`${date}T00:00:00`)
-      const holiday = await prisma.holiday.upsert({
-        where: { workspaceId_date: { workspaceId: req.user.workspaceId, date: day } },
-        create: {
-          workspaceId: req.user.workspaceId,
-          date: day,
-          name,
-          closed: closed ?? true,
-          startMin: startMin ?? null,
-          endMin: endMin ?? null,
-        },
-        update: { name, closed: closed ?? true, startMin: startMin ?? null, endMin: endMin ?? null },
-      })
-      return reply.code(201).send(holiday)
-    },
-  )
+      const { date, endDate, name, closed, startMin, endMin } = req.body
+      const start = new Date(`${date}T00:00:00`)
+      const end = endDate ? new Date(`${endDate}T00:00:00`) : start
+      if (end < start) return reply.badRequest('endDate deve ser igual ou após date')
 
-  // Sincroniza feriados nacionais via BrasilAPI (gratuita, sem chave).
-  // https://brasilapi.com.br/api/feriados/v1/{ano}
-  app.post(
-    '/calendar/holidays/sync',
-    {
-      onRequest: [app.authenticate, requirePerm('calendar.manageCompanyHours')],
-      schema: {
-        body: z.object({
-          // Anos a sincronizar. Default: ano atual + próximo.
-          years: z.array(z.number().int().min(2000).max(2100)).optional(),
-        }),
-      },
-    },
-    async (req, reply) => {
-      const currentYear = new Date().getFullYear()
-      const years = req.body.years && req.body.years.length > 0
-        ? req.body.years
-        : [currentYear, currentYear + 1]
-
-      let imported = 0
-      for (const year of years) {
-        let items: { date: string; name: string }[]
-        try {
-          const res = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`)
-          if (!res.ok) {
-            req.log.warn({ status: res.status, year }, 'BrasilAPI feriados falhou')
-            continue
-          }
-          items = (await res.json()) as { date: string; name: string }[]
-        } catch (err) {
-          req.log.error({ err, year }, 'Erro ao buscar feriados na BrasilAPI')
-          continue
-        }
-
-        for (const item of items) {
-          if (!item.date || !item.name) continue
-          const day = new Date(`${item.date}T00:00:00`)
-          await prisma.holiday.upsert({
-            where: { workspaceId_date: { workspaceId: req.user.workspaceId, date: day } },
-            create: { workspaceId: req.user.workspaceId, date: day, name: item.name, closed: true },
-            // Não sobrescreve customizações (closed/janela) de feriados já existentes.
-            update: { name: item.name },
-          })
-          imported++
-        }
+      // Cria uma entrada por dia no período (férias coletivas = vários dias).
+      const created = []
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const day = new Date(d)
+        const h = await prisma.holiday.upsert({
+          where: { workspaceId_date: { workspaceId: req.user.workspaceId, date: day } },
+          create: {
+            workspaceId: req.user.workspaceId,
+            date: day,
+            name,
+            closed: closed ?? true,
+            startMin: startMin ?? null,
+            endMin: endMin ?? null,
+          },
+          update: { name, closed: closed ?? true, startMin: startMin ?? null, endMin: endMin ?? null },
+        })
+        created.push(h)
       }
-
-      return { imported, years }
+      return reply.code(201).send({ count: created.length, items: created })
     },
   )
 

@@ -1,16 +1,17 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { maskPhone, maskCNPJ } from '@/lib/masks'
 import { toast } from 'sonner'
-import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2, Clock, CalendarDays, Trash2, Plus } from 'lucide-react'
+import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2, Clock, CalendarDays, Trash2, Plus, Palette, Server, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
-import { usePermission } from '@/lib/usePermission'
-import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 import { AdminSection } from '@/components/admin/AdminSection'
+import { BrandingPanel } from '@/components/admin/BrandingPanel'
+import { EvolutionServersPanel } from '@/components/admin/EvolutionServersPanel'
 import { WeeklyHoursEditor, type HoursRow } from '@/components/WeeklyHoursEditor'
 
 interface Channel {
@@ -363,18 +364,32 @@ interface Holiday {
 
 function HolidaysPanel() {
   const qc = useQueryClient()
+  const year = new Date().getFullYear()
+  const [viewYear, setViewYear] = useState(year)
+
+  const { data: national = [] } = useQuery<{ date: string; name: string }[]>({
+    queryKey: ['national-holidays', viewYear],
+    queryFn: () => apiFetch(`/calendar/national-holidays?year=${viewYear}`),
+    staleTime: 60 * 60 * 1000,
+  })
   const { data: holidays = [] } = useQuery<Holiday[]>({
     queryKey: ['holidays'],
     queryFn: () => apiFetch('/calendar/holidays'),
   })
+
   const [newDate, setNewDate] = useState('')
+  const [newEndDate, setNewEndDate] = useState('')
   const [newName, setNewName] = useState('')
 
   const add = useMutation({
-    mutationFn: () => apiFetch('/calendar/holidays', { method: 'POST', body: JSON.stringify({ date: newDate, name: newName, closed: true }) }),
+    mutationFn: () =>
+      apiFetch('/calendar/holidays', {
+        method: 'POST',
+        body: JSON.stringify({ date: newDate, endDate: newEndDate || undefined, name: newName, closed: true }),
+      }),
     onSuccess: () => {
-      toast.success('Feriado adicionado')
-      setNewDate(''); setNewName('')
+      toast.success('Data adicionada')
+      setNewDate(''); setNewEndDate(''); setNewName('')
       qc.invalidateQueries({ queryKey: ['holidays'] })
     },
     onError: (e: Error) => toast.error(e.message ?? 'Erro ao adicionar'),
@@ -382,133 +397,94 @@ function HolidaysPanel() {
   const del = useMutation({
     mutationFn: (id: string) => apiFetch(`/calendar/holidays/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
-      toast.success('Feriado removido')
+      toast.success('Removido')
       qc.invalidateQueries({ queryKey: ['holidays'] })
     },
     onError: (e: Error) => toast.error(e.message ?? 'Erro ao remover'),
   })
-  const sync = useMutation({
-    mutationFn: () => apiFetch<{ imported: number }>('/calendar/holidays/sync', { method: 'POST', body: JSON.stringify({}) }),
-    onSuccess: ({ imported }) => {
-      toast.success(`${imported} feriados nacionais sincronizados`)
-      qc.invalidateQueries({ queryKey: ['holidays'] })
-    },
-    onError: (e: Error) => toast.error(e.message ?? 'Erro ao sincronizar'),
-  })
+
+  const fmt = (iso: string) => new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">
-          Datas em que a empresa fica fechada. Use a sincronização para importar os feriados nacionais automaticamente.
-        </p>
-        <button
-          onClick={() => sync.mutate()}
-          disabled={sync.isPending}
-          className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50 shrink-0"
-        >
-          <RefreshCw className={cn('h-4 w-4', sync.isPending && 'animate-spin')} />
-          Sincronizar feriados nacionais
-        </button>
-      </div>
-
-      <div className="space-y-2">
-        {holidays.length === 0 && <p className="text-sm text-muted-foreground">Nenhum feriado cadastrado.</p>}
-        {holidays.map((h) => (
-          <div key={h.id} className="flex items-center gap-3 border rounded-lg px-3 py-2 text-sm">
-            <span className="font-medium">{new Date(h.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</span>
-            <span className="flex-1">{h.name}</span>
-            <span className="text-xs text-muted-foreground">{h.closed ? 'Fechado' : 'Horário especial'}</span>
-            <button onClick={() => del.mutate(h.id)} className="text-muted-foreground hover:text-destructive">
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex items-end gap-2">
-        <div>
-          <label className="text-xs">Data</label>
-          <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)}
-            className="mt-1 block rounded-lg border bg-transparent px-3 py-1.5 text-sm" />
-        </div>
-        <div className="flex-1">
-          <label className="text-xs">Nome</label>
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Ex: Aniversário da cidade"
-            className="mt-1 block w-full rounded-lg border bg-transparent px-3 py-1.5 text-sm" />
-        </div>
-        <button
-          onClick={() => add.mutate()}
-          disabled={!newDate || !newName.trim() || add.isPending}
-          className="flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-1.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
-        >
-          <Plus className="h-4 w-4" /> Adicionar
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ─── Horário de trabalho da equipe (gestor configura o de cada usuário) ─────────
-function TeamWorkingHoursPanel() {
-  const qc = useQueryClient()
-  const { data: users = [] } = useQuery<{ id: string; name: string | null; email: string }[]>({
-    queryKey: ['users-list'],
-    queryFn: () => apiFetch('/users'),
-  })
-  const [userId, setUserId] = useState('')
-  useEffect(() => {
-    if (!userId && users.length > 0) setUserId(users[0].id)
-  }, [users, userId])
-
-  const { data: rows = [], isLoading } = useQuery<HoursRow[]>({
-    queryKey: ['working-hours', userId],
-    queryFn: () => apiFetch(`/calendar/working-hours/${userId}`),
-    enabled: !!userId,
-  })
-  const save = useMutation({
-    mutationFn: (r: HoursRow[]) =>
-      apiFetch(`/calendar/working-hours/${userId}`, { method: 'PUT', body: JSON.stringify({ rows: r }) }),
-    onSuccess: () => {
-      toast.success('Horário de trabalho salvo')
-      qc.invalidateQueries({ queryKey: ['working-hours', userId] })
-    },
-    onError: (e: Error) => toast.error(e.message ?? 'Erro ao salvar'),
-  })
-
-  return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Nacionais — automáticos */}
       <div>
-        <label className="text-xs font-medium">Usuário</label>
-        <select
-          value={userId}
-          onChange={(e) => setUserId(e.target.value)}
-          className="mt-1 block w-full max-w-sm rounded-lg border bg-transparent px-3 py-2 text-sm"
-        >
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>{u.name ?? u.email}</option>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-sm font-medium flex items-center gap-1.5">
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Feriados nacionais (automáticos)
+          </p>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setViewYear((y) => y - 1)} className="rounded border px-2 py-0.5 text-xs hover:bg-accent">‹</button>
+            <span className="text-xs font-medium w-10 text-center">{viewYear}</span>
+            <button onClick={() => setViewYear((y) => y + 1)} className="rounded border px-2 py-0.5 text-xs hover:bg-accent">›</button>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground mb-2">
+          Considerados automaticamente pelo sistema (somente obrigatórios — Carnaval, Corpus Christi e pontos facultativos não entram). Não precisa cadastrar nem atualizar.
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {national.map((h) => (
+            <span key={h.date} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{fmt(h.date)}</span> {h.name}
+            </span>
           ))}
-        </select>
+        </div>
       </div>
-      {isLoading
-        ? <p className="text-sm text-muted-foreground">Carregando...</p>
-        : <WeeklyHoursEditor key={userId} rows={rows} onSave={(r) => save.mutate(r)} saving={save.isPending} />}
+
+      {/* Personalizados — municipais, férias coletivas */}
+      <div>
+        <p className="text-sm font-medium mb-1">Feriados municipais e férias coletivas</p>
+        <p className="text-xs text-muted-foreground mb-3">
+          Cadastre datas específicas em que a empresa fecha. Informe uma data fim para um período (ex: férias coletivas).
+        </p>
+
+        <div className="space-y-2 mb-4">
+          {holidays.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma data cadastrada.</p>}
+          {holidays.map((h) => (
+            <div key={h.id} className="flex items-center gap-3 border rounded-lg px-3 py-2 text-sm">
+              <span className="font-medium">{new Date(h.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</span>
+              <span className="flex-1">{h.name}</span>
+              <span className="text-xs text-muted-foreground">{h.closed ? 'Fechado' : 'Horário especial'}</span>
+              <button onClick={() => del.mutate(h.id)} className="text-muted-foreground hover:text-destructive">
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="text-xs">Início</label>
+            <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)}
+              className="mt-1 block rounded-lg border bg-transparent px-3 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs">Fim (opcional)</label>
+            <input type="date" value={newEndDate} min={newDate} onChange={(e) => setNewEndDate(e.target.value)}
+              className="mt-1 block rounded-lg border bg-transparent px-3 py-1.5 text-sm" />
+          </div>
+          <div className="flex-1 min-w-[160px]">
+            <label className="text-xs">Nome</label>
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Ex: Aniversário da cidade / Férias coletivas"
+              className="mt-1 block w-full rounded-lg border bg-transparent px-3 py-1.5 text-sm" />
+          </div>
+          <button
+            onClick={() => add.mutate()}
+            disabled={!newDate || !newName.trim() || add.isPending}
+            className="flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-1.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4" /> Adicionar
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
-export default function SettingsPage() {
-  const { user } = useAuthStore()
-  const isAdmin = user?.role === 'ADMIN'
-  const canManageWorkingHours = usePermission('calendar.manageWorkingHours')
-
-  // ── Workspace name ──
+// ─── Workspace ────────────────────────────────────────────────────────────────
+function WorkspacePanel({ isAdmin }: { isAdmin: boolean }) {
   const [workspaceName, setWorkspaceName] = useState('')
-
-  const { data: channels = [], isLoading: chLoading } = useQuery({
-    queryKey: ['channels'],
-    queryFn: () => apiFetch<Channel[]>('/channels'),
-  })
+  const user = useAuthStore(s => s.user)
 
   const { data: me } = useQuery({
     queryKey: ['me'],
@@ -525,118 +501,179 @@ export default function SettingsPage() {
     }
   }
 
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="text-xs font-medium">Nome do workspace</label>
+        <div className="mt-1.5 flex gap-2">
+          <input
+            value={workspaceName}
+            onChange={e => setWorkspaceName(e.target.value)}
+            placeholder={`ID: ${me?.workspaceId ?? '...'}`}
+            className="flex-1 rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+          <button
+            onClick={handleSaveWorkspace}
+            disabled={!workspaceName.trim() || !isAdmin}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+          >
+            <Save className="h-3.5 w-3.5" /> Salvar
+          </button>
+        </div>
+        {!isAdmin && (
+          <p className="mt-1.5 text-xs text-muted-foreground">Apenas administradores podem alterar o nome do workspace.</p>
+        )}
+      </div>
+
+      <div className="rounded-lg bg-muted/40 px-3 py-2.5 text-xs space-y-1">
+        <p className="text-muted-foreground">Workspace ID: <span className="font-mono text-foreground">{me?.workspaceId ?? '—'}</span></p>
+        <p className="text-muted-foreground">Seu perfil: <span className="font-semibold text-foreground">{user?.role ?? '—'}</span></p>
+      </div>
+    </div>
+  )
+}
+
+// ─── Integrações ────────────────────────────────────────────────────────────────
+function IntegrationsPanel() {
+  const { data: channels = [], isLoading: chLoading } = useQuery({
+    queryKey: ['channels'],
+    queryFn: () => apiFetch<Channel[]>('/channels'),
+  })
   const connected = channels.filter(c => c.status === 'CONNECTED')
   const disconnected = channels.filter(c => c.status !== 'CONNECTED')
 
   return (
-    <AdminPageLayout
-      title="Configurações"
-      description="Gerencie as configurações do workspace"
-    >
-      {/* Workspace */}
-      <AdminSection title="Workspace" icon={Shield} description="Configurações gerais do espaço de trabalho">
-        <div className="space-y-4">
-          <div>
-            <label className="text-xs font-medium">Nome do workspace</label>
-            <div className="mt-1.5 flex gap-2">
-              <input
-                value={workspaceName}
-                onChange={e => setWorkspaceName(e.target.value)}
-                placeholder={`ID: ${me?.workspaceId ?? '...'}`}
-                className="flex-1 rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-              <button
-                onClick={handleSaveWorkspace}
-                disabled={!workspaceName.trim() || !isAdmin}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
-              >
-                <Save className="h-3.5 w-3.5" /> Salvar
-              </button>
-            </div>
-            {!isAdmin && (
-              <p className="mt-1.5 text-xs text-muted-foreground">Apenas administradores podem alterar o nome do workspace.</p>
-            )}
-          </div>
+    <>
+      {chLoading && <p className="text-sm text-muted-foreground">Carregando...</p>}
 
-          <div className="rounded-lg bg-muted/40 px-3 py-2.5 text-xs space-y-1">
-            <p className="text-muted-foreground">Workspace ID: <span className="font-mono text-foreground">{me?.workspaceId ?? '—'}</span></p>
-            <p className="text-muted-foreground">Seu perfil: <span className="font-semibold text-foreground">{user?.role ?? '—'}</span></p>
+      {!chLoading && channels.length === 0 && (
+        <p className="text-sm text-muted-foreground">Nenhum canal configurado. Vá para Admin → Canais.</p>
+      )}
+
+      {channels.length > 0 && (
+        <div className="space-y-2">
+          {channels.map(ch => (
+            <div key={ch.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
+              <StatusDot status={ch.status} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{ch.label}</p>
+                <p className="text-xs text-muted-foreground">{CHANNEL_TYPE_LABEL[ch.type] ?? ch.type}</p>
+              </div>
+              <div className="flex items-center gap-1 text-xs">
+                {ch.status === 'CONNECTED' ? (
+                  <><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /><span className="text-emerald-600">Conectado</span></>
+                ) : (
+                  <><AlertCircle className="h-3.5 w-3.5 text-yellow-500" /><span className="text-yellow-600">{ch.status === 'ERROR' ? 'Erro' : 'Desconectado'}</span></>
+                )}
+              </div>
+            </div>
+          ))}
+
+          <div className="mt-3 text-xs text-muted-foreground">
+            {connected.length} conectado(s) · {disconnected.length} desconectado(s)
           </div>
         </div>
-      </AdminSection>
-
-      {/* Dados da empresa */}
-      <AdminSection title="Dados da empresa" icon={Building2} description="Informações usadas nos templates de mensagem automática">
-        <CompanyDataPanel isAdmin={isAdmin} />
-      </AdminSection>
-
-      {/* Horário de funcionamento */}
-      <AdminSection title="Horário de funcionamento" icon={Clock} description="Define quando a empresa está aberta — usado em agendamentos e fluxos de atendimento">
-        <CompanyHoursPanel />
-      </AdminSection>
-
-      {/* Feriados */}
-      <AdminSection title="Feriados e datas especiais" icon={CalendarDays} description="Datas em que a empresa fica fechada. Sincronize os feriados nacionais automaticamente">
-        <HolidaysPanel />
-      </AdminSection>
-
-      {/* Horário de trabalho da equipe */}
-      {canManageWorkingHours && (
-        <AdminSection title="Horário de trabalho da equipe" icon={Clock} description="Configure a disponibilidade de cada usuário (cada um também ajusta o próprio no perfil)">
-          <TeamWorkingHoursPanel />
-        </AdminSection>
       )}
+    </>
+  )
+}
 
-      {/* Inteligência Artificial */}
-      {isAdmin && (
-        <AdminSection title="Inteligência Artificial" icon={Users} description="Configurações globais de recursos inteligentes">
-          <AiSettingsPanel isAdmin={isAdmin} />
-        </AdminSection>
-      )}
+// ─── Definição das abas ─────────────────────────────────────────────────────────
+type TabDef = {
+  id: string
+  label: string
+  icon: LucideIcon
+  /** Renderiza o próprio cabeçalho/ações (não envolve em AdminSection). */
+  bare?: boolean
+  /** Título/descrição da seção quando não é `bare`. */
+  title?: string
+  description?: string
+  render: () => React.ReactNode
+}
 
-      {/* Integrações */}
-      <AdminSection title="Integrações" icon={Plug} description="Resumo dos canais conectados">
-        {chLoading && <p className="text-sm text-muted-foreground">Carregando...</p>}
+function SettingsPageInner() {
+  const { user } = useAuthStore()
+  const isAdmin = user?.role === 'ADMIN'
+  const router = useRouter()
+  const searchParams = useSearchParams()
 
-        {!chLoading && channels.length === 0 && (
-          <p className="text-sm text-muted-foreground">Nenhum canal configurado. Vá para Admin → Canais.</p>
-        )}
-
-        {channels.length > 0 && (
-          <div className="space-y-2">
-            {channels.map(ch => (
-              <div key={ch.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
-                <StatusDot status={ch.status} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{ch.label}</p>
-                  <p className="text-xs text-muted-foreground">{CHANNEL_TYPE_LABEL[ch.type] ?? ch.type}</p>
-                </div>
-                <div className="flex items-center gap-1 text-xs">
-                  {ch.status === 'CONNECTED' ? (
-                    <><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /><span className="text-emerald-600">Conectado</span></>
-                  ) : (
-                    <><AlertCircle className="h-3.5 w-3.5 text-yellow-500" /><span className="text-yellow-600">{ch.status === 'ERROR' ? 'Erro' : 'Desconectado'}</span></>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            <div className="mt-3 text-xs text-muted-foreground">
-              {connected.length} conectado(s) · {disconnected.length} desconectado(s)
-            </div>
-          </div>
-        )}
-      </AdminSection>
-
-      {/* Manutenção (admin) */}
-      {isAdmin && (
-        <AdminSection title="Manutenção" icon={RefreshCw} description="Ferramentas de limpeza de dados">
-          <MaintenancePanel />
-        </AdminSection>
-      )}
-
-      {/* Vault Master Key */}
-      <AdminSection title="Vault Master Key" icon={Key} description="Chave mestra de criptografia">
+  const tabs: TabDef[] = [
+    {
+      id: 'workspace',
+      label: 'Workspace',
+      icon: Shield,
+      title: 'Workspace',
+      description: 'Configurações gerais do espaço de trabalho',
+      render: () => <WorkspacePanel isAdmin={isAdmin} />,
+    },
+    {
+      id: 'company',
+      label: 'Dados da empresa',
+      icon: Building2,
+      title: 'Dados da empresa',
+      description: 'Informações usadas nos templates de mensagem automática',
+      render: () => <CompanyDataPanel isAdmin={isAdmin} />,
+    },
+    {
+      id: 'hours',
+      label: 'Horários',
+      icon: Clock,
+      render: () => (
+        <div className="space-y-6">
+          <AdminSection title="Horário de funcionamento" icon={Clock} description="Define quando a empresa está aberta — usado em agendamentos e fluxos de atendimento">
+            <CompanyHoursPanel />
+          </AdminSection>
+          <AdminSection title="Feriados e datas especiais" icon={CalendarDays} description="Feriados nacionais são automáticos. Cadastre aqui os municipais e férias coletivas">
+            <HolidaysPanel />
+          </AdminSection>
+        </div>
+      ),
+    },
+    ...(isAdmin ? [{
+      id: 'ai',
+      label: 'Inteligência Artificial',
+      icon: Users,
+      title: 'Inteligência Artificial',
+      description: 'Configurações globais de recursos inteligentes',
+      render: () => <AiSettingsPanel isAdmin={isAdmin} />,
+    } as TabDef] : []),
+    {
+      id: 'branding',
+      label: 'Marca & White-label',
+      icon: Palette,
+      bare: true,
+      render: () => <BrandingPanel />,
+    },
+    {
+      id: 'evolution',
+      label: 'Servidores Evolution',
+      icon: Server,
+      bare: true,
+      render: () => <EvolutionServersPanel />,
+    },
+    {
+      id: 'integrations',
+      label: 'Integrações',
+      icon: Plug,
+      title: 'Integrações',
+      description: 'Resumo dos canais conectados',
+      render: () => <IntegrationsPanel />,
+    },
+    ...(isAdmin ? [{
+      id: 'maintenance',
+      label: 'Manutenção',
+      icon: RefreshCw,
+      title: 'Manutenção',
+      description: 'Ferramentas de limpeza de dados',
+      render: () => <MaintenancePanel />,
+    } as TabDef] : []),
+    {
+      id: 'vault',
+      label: 'Vault Master Key',
+      icon: Key,
+      title: 'Vault Master Key',
+      description: 'Chave mestra de criptografia',
+      render: () => (
         <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 p-4 text-sm text-amber-800 dark:text-amber-300 space-y-2">
           <p className="font-semibold flex items-center gap-2">
             <Key className="h-4 w-4" /> Configuração via variável de ambiente
@@ -648,7 +685,78 @@ export default function SettingsPage() {
             Para rotacionar a chave, atualize a variável de ambiente e reinicie o servidor. Todos os segredos precisarão ser re-criptografados.
           </p>
         </div>
-      </AdminSection>
-    </AdminPageLayout>
+      ),
+    },
+  ]
+
+  const [activeId, setActiveId] = useState<string>(tabs[0].id)
+
+  // Sincroniza com ?tab= (deep-link vindo de redirecionamentos antigos / menu)
+  useEffect(() => {
+    const q = searchParams.get('tab')
+    if (q && tabs.some(t => t.id === q)) setActiveId(q)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
+  const selectTab = (id: string) => {
+    setActiveId(id)
+    router.replace(`/admin/settings?tab=${id}`, { scroll: false })
+  }
+
+  const active = tabs.find(t => t.id === activeId) ?? tabs[0]
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto h-full overflow-y-auto">
+      <div className="mb-6">
+        <h1 className="text-xl font-bold flex items-center gap-2">
+          <Shield className="h-5 w-5 text-primary" /> Configurações
+        </h1>
+        <p className="text-sm text-muted-foreground mt-0.5">Gerencie as configurações do workspace</p>
+      </div>
+
+      <div className="flex flex-col md:flex-row gap-6">
+        {/* Abas verticais */}
+        <nav className="md:w-60 shrink-0 flex md:flex-col gap-1 overflow-x-auto md:overflow-visible pb-1 md:pb-0">
+          {tabs.map(tab => {
+            const Icon = tab.icon
+            const isActive = tab.id === active.id
+            return (
+              <button
+                key={tab.id}
+                onClick={() => selectTab(tab.id)}
+                className={cn(
+                  'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors text-left shrink-0',
+                  isActive
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="md:truncate">{tab.label}</span>
+              </button>
+            )
+          })}
+        </nav>
+
+        {/* Conteúdo da aba ativa */}
+        <div className="flex-1 min-w-0">
+          {active.bare ? (
+            active.render()
+          ) : (
+            <AdminSection title={active.title ?? active.label} icon={active.icon} description={active.description}>
+              {active.render()}
+            </AdminSection>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Carregando...</div>}>
+      <SettingsPageInner />
+    </Suspense>
   )
 }

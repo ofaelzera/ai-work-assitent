@@ -45,6 +45,79 @@ function atMinute(day: Date, min: number): Date {
   return d
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+function dateKey(at: Date): string {
+  return `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`
+}
+
+// ─── Feriados nacionais obrigatórios (automáticos) ──────────────────────────────
+// Calculados em código — sem API externa, sem botão. NÃO inclui ponto facultativo
+// (Carnaval, Corpus Christi, Dia do Servidor), apenas os feriados nacionais por lei.
+
+/** Domingo de Páscoa (algoritmo de Computus / Gauss-Anônimo). */
+function easterSunday(year: number): Date {
+  const a = year % 19
+  const b = Math.floor(year / 100)
+  const c = year % 100
+  const d = Math.floor(b / 4)
+  const e = b % 4
+  const f = Math.floor((b + 8) / 25)
+  const g = Math.floor((b - f + 1) / 3)
+  const h = (19 * a + b - d - g + 15) % 30
+  const i = Math.floor(c / 4)
+  const k = c % 4
+  const l = (32 + 2 * e + 2 * i - h - k) % 7
+  const m = Math.floor((a + 11 * h + 22 * l) / 451)
+  const month = Math.floor((h + l - 7 * m + 114) / 31) // 3=março, 4=abril
+  const day = ((h + l - 7 * m + 114) % 31) + 1
+  return new Date(year, month - 1, day)
+}
+
+const nationalHolidayCache = new Map<number, Map<string, string>>()
+
+/** Mapa data->nome dos feriados nacionais obrigatórios do ano (cacheado). */
+function nationalHolidaysOf(year: number): Map<string, string> {
+  const cached = nationalHolidayCache.get(year)
+  if (cached) return cached
+
+  const map = new Map<string, string>()
+  const add = (month: number, day: number, name: string) =>
+    map.set(`${year}-${pad2(month)}-${pad2(day)}`, name)
+
+  add(1, 1, 'Confraternização Universal')
+  add(4, 21, 'Tiradentes')
+  add(5, 1, 'Dia do Trabalho')
+  add(9, 7, 'Independência do Brasil')
+  add(10, 12, 'Nossa Senhora Aparecida')
+  add(11, 2, 'Finados')
+  add(11, 15, 'Proclamação da República')
+  if (year >= 2024) add(11, 20, 'Consciência Negra') // nacional desde 2024
+  add(12, 25, 'Natal')
+
+  // Sexta-feira Santa (Paixão de Cristo) = Páscoa − 2 dias. Feriado nacional.
+  const easter = easterSunday(year)
+  const goodFriday = new Date(easter.getTime() - 2 * 86400000)
+  map.set(dateKey(goodFriday), 'Sexta-feira Santa')
+
+  nationalHolidayCache.set(year, map)
+  return map
+}
+
+/** É feriado nacional obrigatório? */
+export function isNationalHoliday(at: Date): boolean {
+  return nationalHolidaysOf(at.getFullYear()).has(dateKey(at))
+}
+
+/** Lista os feriados nacionais obrigatórios de um ano (para exibição). */
+export function listNationalHolidays(year: number): { date: string; name: string }[] {
+  return Array.from(nationalHolidaysOf(year).entries())
+    .map(([date, name]) => ({ date, name }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
+
 /** Subtrai uma lista de intervalos (busy) de uma lista base (free). Tudo em min-do-dia. */
 function subtractIntervals(base: Interval[], busy: Interval[]): Interval[] {
   let result = [...base]
@@ -84,6 +157,9 @@ export async function isWithinCompanyHours(workspaceId: string, at: Date): Promi
     }
     return false
   }
+
+  // Feriado nacional obrigatório (automático) sem override na tabela → fechado.
+  if (isNationalHoliday(at)) return false
 
   // Verifica se há QUALQUER configuração de horário da empresa. Sem nenhuma
   // configurada → sem restrição (sempre aberto). Configurada → respeita o dia.
@@ -229,6 +305,8 @@ export async function findFreeIntervals(
           ? [{ startMin: holiday.startMin, endMin: holiday.endMin }]
           : []
       if (companyIntervals.length === 0) continue
+    } else if (isNationalHoliday(day)) {
+      continue // feriado nacional obrigatório (automático) → fechado
     } else if (hasCompanyHours) {
       companyIntervals = companyRows
         .filter((r) => r.weekday === wd)
