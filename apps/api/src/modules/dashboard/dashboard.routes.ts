@@ -39,14 +39,22 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
           channelBreakdown,
           contactsTotal,
         ] = await Promise.all([
+          // Não lidas do ponto de vista DESTE usuário: só conversas que ele ainda
+          // não abriu (reads none). Ao ler, o ConversationRead some daqui mesmo que
+          // o unreadCount global siga >0 (conversa de outro atendente / fila).
           prisma.conversation.aggregate({
-            where: { workspaceId, archived: false },
+            where: {
+              workspaceId, archived: false,
+              unreadCount: { gt: 0 },
+              reads: { none: { userId } },
+            },
             _sum: { unreadCount: true },
           }),
+          // Demandas abertas: cards que NÃO estão numa coluna de conclusão (isDone).
           prisma.card.count({
             where: {
               workspaceId, deletedAt: null,
-              column: { name: { notIn: ['Concluído', 'Done', 'Finalizado'] } },
+              column: { isDone: false },
             },
           }),
           prisma.calendarEvent.count({

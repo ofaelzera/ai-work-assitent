@@ -35,6 +35,8 @@ import {
   Pencil,
   Trash2,
   Check,
+  CheckCircle2,
+  Circle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import CardModal from './CardModal'
@@ -63,6 +65,7 @@ interface Column {
   id: string
   name: string
   position: number
+  isDone?: boolean
   cards: Card[]
 }
 
@@ -235,6 +238,18 @@ function KanbanColumn({
     onError: () => toast.error('Erro ao renomear'),
   })
 
+  const toggleDone = useMutation({
+    mutationFn: (isDone: boolean) => apiFetch(`/kanban/columns/${column.id}`, {
+      method: 'PATCH', body: JSON.stringify({ isDone }),
+    }),
+    onSuccess: (_d, isDone) => {
+      queryClient.invalidateQueries({ queryKey: ['board'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] })
+      toast.success(isDone ? 'Coluna marcada como concluída' : 'Coluna não conta mais como concluída')
+    },
+    onError: () => toast.error('Erro ao atualizar coluna'),
+  })
+
   const remove = useMutation({
     mutationFn: ({ moveTo }: { moveTo?: string }) =>
       apiFetch(`/kanban/columns/${column.id}${moveTo ? `?moveCardsTo=${moveTo}` : ''}`, {
@@ -303,9 +318,17 @@ function KanbanColumn({
           />
         ) : (
           <div className="flex items-center gap-2 min-w-0 flex-1">
+            {column.isDone && (
+              <span className="shrink-0" title="Coluna de conclusão — cards aqui não contam como demanda aberta">
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+              </span>
+            )}
             <button
               onDoubleClick={() => setEditing(true)}
-              className="font-medium text-sm truncate hover:text-primary transition-colors text-left"
+              className={cn(
+                'font-medium text-sm truncate hover:text-primary transition-colors text-left',
+                column.isDone && 'text-muted-foreground',
+              )}
               title="Duplo-clique para renomear">
               {column.name}
             </button>
@@ -341,6 +364,13 @@ function KanbanColumn({
                     onMouseDown={() => { setEditing(true); setMenuOpen(false) }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
                     <Pencil className="h-3 w-3" /> Renomear
+                  </button>
+                  <button
+                    onMouseDown={() => { toggleDone.mutate(!column.isDone); setMenuOpen(false) }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left border-t">
+                    {column.isDone
+                      ? <><Circle className="h-3 w-3" /> Não é mais conclusão</>
+                      : <><CheckCircle2 className="h-3 w-3 text-emerald-500" /> Marcar como concluído</>}
                   </button>
                   <button
                     onMouseDown={async () => {

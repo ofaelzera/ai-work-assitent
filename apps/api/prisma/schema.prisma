@@ -466,6 +466,9 @@ model Column {
   boardId   String
   name      String
   position  Int
+  // Coluna de conclusão: cards aqui são "encerrados" e não contam como demanda
+  // aberta nos KPIs. Dinâmico — qualquer coluna pode ser marcada como concluída.
+  isDone    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

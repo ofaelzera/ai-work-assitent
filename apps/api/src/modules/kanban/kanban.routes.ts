@@ -119,10 +119,16 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         }
       }
 
-      // Colunas padrão
-      const defaultCols = ['Entrada', 'Em andamento', 'Aguardando', 'Concluído', 'Cancelado']
+      // Colunas padrão — "Concluído" e "Cancelado" já nascem como colunas de conclusão.
+      const defaultCols: Array<{ name: string; isDone: boolean }> = [
+        { name: 'Entrada', isDone: false },
+        { name: 'Em andamento', isDone: false },
+        { name: 'Aguardando', isDone: false },
+        { name: 'Concluído', isDone: true },
+        { name: 'Cancelado', isDone: true },
+      ]
       for (let i = 0; i < defaultCols.length; i++) {
-        await prisma.column.create({ data: { boardId: board.id, name: defaultCols[i], position: i } })
+        await prisma.column.create({ data: { boardId: board.id, name: defaultCols[i].name, isDone: defaultCols[i].isDone, position: i } })
       }
       return reply.code(201).send(board)
     },
@@ -520,18 +526,25 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
-  // PATCH: renomear coluna (não usa pra reorder — ver /move)
+  // PATCH: renomear coluna e/ou marcar como coluna de conclusão (isDone).
   app.patch(
     '/kanban/columns/:id',
     {
       onRequest: [app.authenticate, requirePerm('boards.manage')],
       schema: {
         params: z.object({ id: z.string() }),
-        body: z.object({ name: z.string().min(1) }),
+        body: z.object({
+          name: z.string().min(1).optional(),
+          isDone: z.boolean().optional(),
+        }),
       },
     },
     async (req, reply) => {
       const { workspaceId } = req.user
+      const { name, isDone } = req.body
+      if (name === undefined && isDone === undefined) {
+        return reply.badRequest('Nada para atualizar')
+      }
       const col = await prisma.column.findFirst({
         where: { id: req.params.id, board: { workspaceId } },
         select: { id: true },
@@ -539,7 +552,10 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!col) return reply.notFound()
       const updated = await prisma.column.update({
         where: { id: req.params.id },
-        data: { name: req.body.name.trim() },
+        data: {
+          ...(name !== undefined && { name: name.trim() }),
+          ...(isDone !== undefined && { isDone }),
+        },
       })
       return updated
     },
