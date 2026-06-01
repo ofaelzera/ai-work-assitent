@@ -430,32 +430,72 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
     }
   }, [open, defaultDate, currentUserId])
 
-  // ── Disponibilidade ao vivo ───────────────────────────────────────────────
-  const startISO = !allDay && date && startTime ? new Date(`${date}T${startTime}:00`).toISOString() : null
-  const endISO = !allDay && date && endTime ? new Date(`${date}T${endTime}:00`).toISOString() : null
-  const validRange = !!(startISO && endISO && new Date(endISO) > new Date(startISO))
-
-  const { data: availability } = useQuery<{ ok: boolean; reason: string | null; conflict: boolean; companyOpen: boolean; userAvailable: boolean }>({
-    queryKey: ['availability', ownerId, startISO, endISO],
-    queryFn: () =>
-      apiFetch(`/calendar/availability?userId=${ownerId}&start=${encodeURIComponent(startISO!)}&end=${encodeURIComponent(endISO!)}`),
-    enabled: open && validRange,
-  })
-
-  // Horários livres do dia selecionado (chips de sugestão)
-  const durationMin = validRange ? Math.round((new Date(endISO!).getTime() - new Date(startISO!).getTime()) / 60000) : 60
+  // ── Horários disponíveis (selects derivados dos intervalos livres) ─────────
+  const STEP = 15 // granularidade dos horários (min)
   const dayFrom = date ? new Date(`${date}T00:00:00`).toISOString() : null
   const dayTo = date ? new Date(`${date}T23:59:59`).toISOString() : null
-  const { data: freeSlots = [] } = useQuery<{ start: string; end: string }[]>({
-    queryKey: ['free-slots-modal', ownerId, date, durationMin],
+  const { data: freeIntervals = [] } = useQuery<{ start: string; end: string }[]>({
+    queryKey: ['free-intervals', ownerId, date],
     queryFn: () =>
-      apiFetch(`/calendar/free-slots?userId=${ownerId}&from=${encodeURIComponent(dayFrom!)}&to=${encodeURIComponent(dayTo!)}&durationMin=${durationMin}`),
-    enabled: open && !allDay && !!date && durationMin > 0,
+      apiFetch(`/calendar/free-intervals?userId=${ownerId}&from=${encodeURIComponent(dayFrom!)}&to=${encodeURIComponent(dayTo!)}`),
+    enabled: open && !allDay && !!date,
   })
 
-  // Bloqueio "duro": fora do expediente da empresa ou do usuário. Conflito pode
-  // ser forçado (via confirm), então não trava o botão.
-  const blockedHard = !!availability && (!availability.companyOpen || !availability.userAvailable)
+  const toMin = (hhmm: string) => { const [h, m] = hhmm.split(':').map(Number); return (h || 0) * 60 + (m || 0) }
+  const toHHMM = (min: number) => `${pad(Math.floor(min / 60))}:${pad(min % 60)}`
+
+  // Intervalos livres em minutos-do-dia
+  const intervalMins = useMemo(
+    () => freeIntervals.map((i) => {
+      const s = new Date(i.start), e = new Date(i.end)
+      return { startMin: s.getHours() * 60 + s.getMinutes(), endMin: e.getHours() * 60 + e.getMinutes() }
+    }),
+    [freeIntervals],
+  )
+
+  // Opções de início: cada STEP dentro de um intervalo com pelo menos STEP livre
+  const startOptions = useMemo(() => {
+    const opts = new Set<number>()
+    for (const itv of intervalMins) {
+      for (let m = itv.startMin; m + STEP <= itv.endMin; m += STEP) opts.add(m)
+    }
+    return Array.from(opts).sort((a, b) => a - b)
+  }, [intervalMins])
+
+  const startMin = startTime ? toMin(startTime) : null
+  const activeInterval = intervalMins.find((itv) => startMin != null && startMin >= itv.startMin && startMin < itv.endMin)
+  // Opções de fim: só horários depois do início, dentro do mesmo intervalo livre
+  const endOptions = useMemo(() => {
+    if (startMin == null || !activeInterval) return []
+    const opts: number[] = []
+    for (let m = startMin + STEP; m <= activeInterval.endMin; m += STEP) opts.push(m)
+    return opts
+  }, [startMin, activeInterval])
+
+  // Auto-seleciona um horário válido quando o dia muda / opções carregam
+  useEffect(() => {
+    if (!open || allDay || startOptions.length === 0) return
+    const cur = startTime ? toMin(startTime) : null
+    if (cur == null || !startOptions.includes(cur)) {
+      const s = startOptions[0]
+      const itv = intervalMins.find((i) => s >= i.startMin && s < i.endMin)
+      const e = Math.min(s + 60, itv?.endMin ?? s + STEP)
+      setStartTime(toHHMM(s))
+      setEndTime(toHHMM(e > s ? e : s + STEP))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startOptions, open, allDay, date, ownerId])
+
+  function onChangeStart(v: string) {
+    setStartTime(v)
+    const sm = toMin(v)
+    const itv = intervalMins.find((i) => sm >= i.startMin && sm < i.endMin)
+    const e = Math.min(sm + 60, itv?.endMin ?? sm + STEP)
+    setEndTime(toHHMM(e > sm ? e : sm + STEP))
+  }
+
+  const noSlots = !allDay && !!date && startOptions.length === 0
+  const timeInvalid = !allDay && (!startTime || !endTime || toMin(endTime) <= toMin(startTime))
 
   const mutation = useMutation({
     mutationFn: async (opts?: { force?: boolean }) => {
@@ -586,73 +626,40 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
             />
           </div>
 
-          {/* Time */}
+          {/* Horários (selects derivados dos intervalos livres — evita escolher hora indisponível) */}
           {!allDay && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-sm font-medium">Início</label>
-                <input
-                  type="time"
-                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                />
+            noSlots ? (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                Nenhum horário disponível neste dia para {isForOther ? 'este usuário' : 'você'}.
               </div>
-              <div>
-                <label className="text-sm font-medium">Fim</label>
-                <input
-                  type="time"
-                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Horários livres (sugestões clicáveis) */}
-          {!allDay && (
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">
-                Horários livres ({durationMin} min)
-              </label>
-              {freeSlots.length === 0 ? (
-                <p className="mt-1 text-xs text-muted-foreground">Nenhum horário disponível neste dia.</p>
-              ) : (
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {freeSlots.slice(0, 12).map((s) => {
-                    const d = new Date(s.start)
-                    const e = new Date(s.end)
-                    const hhmm = (x: Date) => `${pad(x.getHours())}:${pad(x.getMinutes())}`
-                    const active = startTime === hhmm(d)
-                    return (
-                      <button
-                        key={s.start}
-                        type="button"
-                        onClick={() => { setStartTime(hhmm(d)); setEndTime(hhmm(e)) }}
-                        className={`rounded-md border px-2 py-1 text-xs transition-colors ${
-                          active ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-accent'
-                        }`}
-                      >
-                        {hhmm(d)}
-                      </button>
-                    )
-                  })}
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium">Início</label>
+                  <select
+                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    value={startTime}
+                    onChange={(e) => onChangeStart(e.target.value)}
+                  >
+                    {startOptions.map((m) => (
+                      <option key={m} value={toHHMM(m)}>{toHHMM(m)}</option>
+                    ))}
+                  </select>
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* Aviso de disponibilidade */}
-          {!allDay && validRange && availability && !availability.ok && (
-            <div className={`rounded-md border px-3 py-2 text-xs ${
-              blockedHard
-                ? 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400'
-                : 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
-            }`}>
-              {availability.reason}
-              {!blockedHard && availability.conflict && ' — você pode agendar mesmo assim (confirmação).'}
-            </div>
+                <div>
+                  <label className="text-sm font-medium">Fim</label>
+                  <select
+                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                  >
+                    {endOptions.map((m) => (
+                      <option key={m} value={toHHMM(m)}>{toHHMM(m)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )
           )}
 
           {/* Location */}
@@ -739,8 +746,8 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           </button>
           <button
             onClick={() => mutation.mutate({})}
-            disabled={!title.trim() || mutation.isPending || blockedHard}
-            title={blockedHard ? (availability?.reason ?? 'Horário indisponível') : undefined}
+            disabled={!title.trim() || mutation.isPending || noSlots || timeInvalid}
+            title={noSlots ? 'Nenhum horário disponível neste dia' : undefined}
             className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             {mutation.isPending ? 'Criando...' : 'Criar evento'}
@@ -1477,8 +1484,7 @@ export default function CalendarPage() {
         onClose={() => setBlockModalOpen(false)}
         onCreated={() => {
           queryClient.invalidateQueries({ queryKey: ['schedule-blocks'] })
-          queryClient.invalidateQueries({ queryKey: ['free-slots-modal'] })
-          queryClient.invalidateQueries({ queryKey: ['availability'] })
+          queryClient.invalidateQueries({ queryKey: ['free-intervals'] })
         }}
       />
 

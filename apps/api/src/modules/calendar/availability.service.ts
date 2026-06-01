@@ -172,14 +172,17 @@ export async function hasConflict(
  * Lista os horários livres do usuário num intervalo, fatiados pela duração.
  * Interseção: horário de trabalho ∩ horário da empresa − (eventos + bloqueios).
  */
-export async function findFreeSlots(
+/**
+ * Lista os INTERVALOS livres contínuos do usuário num período (sem fatiar).
+ * Aplica a hierarquia (horário do usuário ou, na ausência, da empresa),
+ * limita ao funcionamento da empresa/feriados e subtrai eventos + bloqueios.
+ */
+export async function findFreeIntervals(
   workspaceId: string,
   userId: string,
   range: { from: Date; to: Date },
-  durationMin: number,
 ): Promise<Slot[]> {
-  if (durationMin <= 0) return []
-  const slots: Slot[] = []
+  const result: Slot[] = []
 
   // Carrega tudo uma vez e filtra por dia em memória.
   const [workRows, companyRows, holidays, events, blocks] = await Promise.all([
@@ -271,15 +274,36 @@ export async function findFreeSlots(
     const busy = [...toIntervals(events), ...toIntervals(blocks)]
     free = subtractIntervals(free, busy)
 
-    // Fatia cada intervalo livre em blocos de durationMin
+    // Converte cada intervalo livre (min-do-dia) em Date, clampado ao range.
     for (const f of free) {
-      for (let s = f.startMin; s + durationMin <= f.endMin; s += durationMin) {
-        const start = atMinute(day, s)
-        if (start < range.from || start >= range.to) continue
-        slots.push({ start, end: atMinute(day, s + durationMin) })
-      }
+      let start = atMinute(day, f.startMin)
+      let end = atMinute(day, f.endMin)
+      if (start < range.from) start = range.from
+      if (end > range.to) end = range.to
+      if (end > start) result.push({ start, end })
     }
   }
 
+  return result
+}
+
+/**
+ * Lista os horários livres fatiados em blocos de `durationMin`.
+ */
+export async function findFreeSlots(
+  workspaceId: string,
+  userId: string,
+  range: { from: Date; to: Date },
+  durationMin: number,
+): Promise<Slot[]> {
+  if (durationMin <= 0) return []
+  const intervals = await findFreeIntervals(workspaceId, userId, range)
+  const slots: Slot[] = []
+  const stepMs = durationMin * 60_000
+  for (const itv of intervals) {
+    for (let t = itv.start.getTime(); t + stepMs <= itv.end.getTime(); t += stepMs) {
+      slots.push({ start: new Date(t), end: new Date(t + stepMs) })
+    }
+  }
   return slots
 }

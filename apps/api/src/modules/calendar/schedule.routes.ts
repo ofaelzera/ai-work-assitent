@@ -12,6 +12,7 @@ import { prisma } from '../../lib/prisma.js'
 import { hasPermission, requirePerm } from '../../lib/acl.js'
 import {
   findFreeSlots,
+  findFreeIntervals,
   isWithinCompanyHours,
   isWithinWorkingHours,
   hasConflict,
@@ -355,6 +356,32 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
         req.query.durationMin,
       )
       return slots
+    },
+  )
+
+  // ─── Intervalos livres contínuos (para popular selects de início/fim) ────────
+  app.get(
+    '/calendar/free-intervals',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        querystring: z.object({
+          userId: z.string().optional(),
+          from: z.string().datetime(),
+          to: z.string().datetime(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const userId = req.query.userId ?? req.user.sub
+      if (userId !== req.user.sub) {
+        const ok = await hasPermission(req.user, 'calendar.viewOthers')
+        if (!ok) return reply.forbidden('Sem permissão para ver a agenda de terceiros')
+      }
+      return findFreeIntervals(req.user.workspaceId, userId, {
+        from: new Date(req.query.from),
+        to: new Date(req.query.to),
+      })
     },
   )
 
