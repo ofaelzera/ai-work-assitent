@@ -60,6 +60,15 @@ export const PERMISSIONS = {
 
   // ── Relatórios ────────────────────────────────────────────────────────────
   'reports.view':              'Acessar relatórios e métricas',
+
+  // ── Agenda / Calendário ─────────────────────────────────────────────────────
+  'calendar.view':               'Acessar o módulo de agenda',
+  'calendar.viewOthers':         'Ver a agenda de outros usuários',
+  'calendar.createForOthers':    'Criar compromissos na agenda de terceiros',
+  'calendar.editOthers':         'Editar / remarcar compromissos de terceiros',
+  'calendar.cancelOthers':       'Cancelar compromissos de terceiros',
+  'calendar.manageWorkingHours': 'Gerenciar horários de trabalho (próprios e de terceiros)',
+  'calendar.manageCompanyHours': 'Gerenciar horário de funcionamento da empresa (global)',
 } as const
 
 export type PermissionKey = keyof typeof PERMISSIONS
@@ -81,6 +90,7 @@ export const DEFAULT_MEMBER_PERMISSIONS: PermissionKey[] = [
   'conversations.assign',      // pode encaminhar a própria
   'conversations.transferTeam',// pode transferir pra outro setor
   'teams.view',                // vê os setores e a fila do próprio
+  'calendar.view',             // acessa a própria agenda
 ]
 
 /**
@@ -114,6 +124,8 @@ export const SYSTEM_ROLES: SystemRoleTemplate[] = [
       'teams.view', 'teams.viewAll', 'teams.manage',
       'flows.manage',
       'reports.view',
+      'calendar.view', 'calendar.viewOthers', 'calendar.createForOthers',
+      'calendar.editOthers', 'calendar.cancelOthers', 'calendar.manageWorkingHours',
     ],
   },
   {
@@ -124,6 +136,7 @@ export const SYSTEM_ROLES: SystemRoleTemplate[] = [
       'contacts.view', 'contacts.edit',
       'conversations.assign', 'conversations.transferTeam',
       'teams.view',
+      'calendar.view',
     ],
   },
 ]

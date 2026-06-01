@@ -23,6 +23,7 @@ const nodeSchema = z.object({
     'start', 'message', 'menu', 'condition',
     'assign_team', 'assign_user', 'start_bot',
     'wait_for_human', 'tag', 'end',
+    'check_company_hours', 'check_user_available', 'find_free_slots', 'create_appointment',
   ]),
   position: positionSchema,
   data: z.record(z.string(), z.any()),

@@ -18,6 +18,11 @@ export type FlowNodeType =
   | 'wait_for_human'
   | 'tag'
   | 'end'
+  // ── Agenda ──
+  | 'check_company_hours'
+  | 'check_user_available'
+  | 'find_free_slots'
+  | 'create_appointment'
 
 export interface FlowNodeBase<T extends FlowNodeType, D> {
   id: string
@@ -94,6 +99,43 @@ export interface TagNodeData {
   contactTags?: string[]
 }
 
+/**
+ * Nós de agenda.
+ *
+ * `check_*` ramificam por sourceHandle 'true' / 'false'.
+ * `find_free_slots` ramifica 'true' (achou) / 'false' (nada livre) e grava em
+ *   ctx.vars: `freeSlots` (ISO[]), `freeSlotsText` (lista legível), `freeSlot` (1º).
+ * `create_appointment` cria CalendarEvent na agenda do dono; usa
+ *   ctx.vars.freeSlot (ou data.startVar) como início. Avança pela saída default.
+ */
+export interface CheckUserAvailableNodeData {
+  /** ID do usuário cuja disponibilidade será checada. */
+  userId: string
+}
+
+export interface FindFreeSlotsNodeData {
+  userId: string
+  /** Duração de cada slot em minutos. Default 30. */
+  durationMin?: number
+  /** Janela de busca a partir de hoje, em dias. Default 7. */
+  daysAhead?: number
+  /** Máximo de slots listados em freeSlotsText. Default 5. */
+  maxSlots?: number
+}
+
+export interface CreateAppointmentNodeData {
+  /** Dono do evento (agenda). */
+  ownerId: string
+  /** Título do compromisso. Suporta interpolação {{cliente}} etc. */
+  title: string
+  /** Duração em minutos. Default 30. */
+  durationMin?: number
+  /** Chave em ctx.vars com o início (ISO). Default 'freeSlot'. */
+  startVar?: string
+  /** Vincula o evento à conversa/contato atual. Default true. */
+  linkToConversation?: boolean
+}
+
 export type FlowNode =
   | FlowNodeBase<'start', Record<string, never>>
   | FlowNodeBase<'message', MessageNodeData>
@@ -105,6 +147,10 @@ export type FlowNode =
   | FlowNodeBase<'wait_for_human', WaitForHumanNodeData>
   | FlowNodeBase<'tag', TagNodeData>
   | FlowNodeBase<'end', Record<string, never>>
+  | FlowNodeBase<'check_company_hours', Record<string, never>>
+  | FlowNodeBase<'check_user_available', CheckUserAvailableNodeData>
+  | FlowNodeBase<'find_free_slots', FindFreeSlotsNodeData>
+  | FlowNodeBase<'create_appointment', CreateAppointmentNodeData>
 
 export interface FlowEdge {
   id: string

@@ -11,6 +11,12 @@ import {
   type GoogleTokens,
 } from './google.service.js'
 import { syncCalendarAccount } from '../../workers/calendarSync.worker.js'
+import { hasPermission } from '../../lib/acl.js'
+import {
+  createCalendarEvent,
+  updateCalendarEvent,
+  CalendarConflictError,
+} from './calendar.service.js'
 
 // ─── Types locais ─────────────────────────────────────────────────────────────
 
@@ -187,34 +193,36 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
           accountId: z.string().optional(),
           contactId: z.string().optional(),
           conversationId: z.string().optional(),
+          // Agenda compartilhada: ver a agenda de outro(s) usuário(s).
+          ownerId: z.string().optional(),
+          ownerIds: z.union([z.string(), z.array(z.string())]).optional(),
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const { from, to, accountId, contactId, conversationId } = req.query
-      const ownerId = req.user.sub
 
-      const accounts = await prisma.calendarAccount.findMany({
-        where: {
-          workspaceId: req.user.workspaceId,
-          userId: ownerId,
-          ...(accountId ? { id: accountId } : {}),
-        },
-        select: { id: true },
-      })
-      const accountIds = accounts.map((a) => a.id)
+      // Resolve os donos pedidos (default: só o próprio).
+      const requested = req.query.ownerId
+        ? [req.query.ownerId]
+        : Array.isArray(req.query.ownerIds)
+          ? req.query.ownerIds
+          : req.query.ownerIds
+            ? [req.query.ownerIds]
+            : []
+      const ownerIds = requested.length > 0 ? Array.from(new Set(requested)) : [req.user.sub]
 
-      const visibilityFilter = accountId
-        ? { calendarAccountId: accountId }
-        : { OR: [
-            { ownerId, calendarAccountId: null },
-            ...(accountIds.length > 0 ? [{ calendarAccountId: { in: accountIds } }] : []),
-          ] }
+      const viewingOthers = ownerIds.some((id) => id !== req.user.sub)
+      if (viewingOthers) {
+        const ok = await hasPermission(req.user, 'calendar.viewOthers')
+        if (!ok) return reply.forbidden('Sem permissão para ver a agenda de terceiros')
+      }
 
       const events = await prisma.calendarEvent.findMany({
         where: {
           workspaceId: req.user.workspaceId,
-          ...visibilityFilter,
+          ownerId: { in: ownerIds },
+          ...(accountId ? { calendarAccountId: accountId } : {}),
           ...(from ? { startAt: { gte: new Date(from) } } : {}),
           ...(to ? { endAt: { lte: new Date(to) } } : {}),
           ...(contactId ? { contactId } : {}),
@@ -278,6 +286,9 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         body: z.object({
           accountId: z.string().optional(),
+          // Agenda compartilhada: criar na agenda de outro usuário.
+          ownerId: z.string().optional(),
+          force: z.boolean().optional(),
           title: z.string().min(1),
           startAt: z.string().datetime(),
           endAt: z.string().datetime(),
@@ -302,88 +313,95 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
         attendees, createMeetLink, allDay,
         cardId, contactId, conversationId, messageId,
       } = req.body
-      const ownerId = req.user.sub
+      const ownerId = req.body.ownerId ?? req.user.sub
 
-      let externalId: string | null = null
-      let validAccountId: string | null = null
-      let resolvedMeetLink: string | null = null
-
-      if (accountId) {
-        const account = await prisma.calendarAccount.findFirst({
-          where: { id: accountId, workspaceId: req.user.workspaceId, userId: ownerId },
-        })
-        if (!account) return reply.notFound('Conta de calendário não encontrada')
-
-        const accessToken = await getValidToken(account)
-
-        const fullDescription = conversationId
-          ? `${description ?? ''}\n\n— Origem: ${req.protocol}://${req.hostname}/inbox/${conversationId}`.trim()
-          : description
-
-        const googleBody: Record<string, unknown> = {
-          summary: title,
-          description: fullDescription,
-          location: location ?? undefined,
-          start: allDay ? { date: startAt.split('T')[0] } : { dateTime: startAt },
-          end: allDay ? { date: endAt.split('T')[0] } : { dateTime: endAt },
-        }
-
-        if (attendees && attendees.length > 0) {
-          googleBody.attendees = attendees.map((a) => ({ email: a.email, displayName: a.name }))
-        }
-
-        if (createMeetLink) {
-          googleBody.conferenceData = {
-            createRequest: {
-              requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-              conferenceSolutionKey: { type: 'hangoutsMeet' },
-            },
-          }
-        }
-
-        const qs = createMeetLink ? '?conferenceDataVersion=1' : ''
-        const res = await googleCalendarFetch(accessToken, `/calendars/primary/events${qs}`, {
-          method: 'POST',
-          body: JSON.stringify(googleBody),
-        })
-
-        if (!res.ok) {
-          const err = await res.text()
-          return reply.internalServerError(`Google Calendar create error: ${err}`)
-        }
-
-        const created = (await res.json()) as any
-        externalId = created.id
-        validAccountId = account.id
-        resolvedMeetLink = created.hangoutLink
-          ?? created.conferenceData?.entryPoints?.find((e: any) => e.entryPointType === 'video')?.uri
-          ?? null
+      // Criar para terceiros exige permissão; nesse caso sincroniza no Google do dono.
+      if (ownerId !== req.user.sub) {
+        const ok = await hasPermission(req.user, 'calendar.createForOthers')
+        if (!ok) return reply.forbidden('Sem permissão para criar compromissos para terceiros')
       }
 
-      const event = await prisma.calendarEvent.create({
-        data: {
+      // Para o próprio: respeita accountId do body (omitido = local).
+      // Para terceiros: resolve a conta Google do dono automaticamente.
+      const accountParam = ownerId === req.user.sub ? (accountId ?? null) : 'auto'
+
+      try {
+        const event = await createCalendarEvent({
           workspaceId: req.user.workspaceId,
           ownerId,
-          calendarAccountId: validAccountId,
-          externalId,
+          accountId: accountParam,
           title,
-          description: description ?? null,
-          location: location ?? null,
-          meetLink: resolvedMeetLink,
-          attendees: attendees ?? undefined,
-          allDay: allDay ?? false,
           startAt: new Date(startAt),
           endAt: new Date(endAt),
-          ...(cardId && { cardId }),
-          ...(contactId && { contactId }),
-          ...(conversationId && { conversationId }),
-          ...(messageId && { messageId }),
-        },
+          description,
+          location,
+          attendees,
+          createMeetLink,
+          allDay,
+          cardId,
+          contactId,
+          conversationId,
+          messageId,
+          force: req.body.force,
+        })
+        return reply.code(201).send(event)
+      } catch (err) {
+        if (err instanceof CalendarConflictError) {
+          return reply.conflict('Conflito de horário na agenda do usuário')
+        }
+        throw err
+      }
+    },
+  )
+
+  // PATCH /calendar/events/:id — editar / remarcar (revalida conflito + propaga ao Google)
+  app.patch(
+    '/calendar/events/:id',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          title: z.string().min(1).optional(),
+          description: z.string().nullable().optional(),
+          location: z.string().nullable().optional(),
+          startAt: z.string().datetime().optional(),
+          endAt: z.string().datetime().optional(),
+          allDay: z.boolean().optional(),
+          force: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const event = await prisma.calendarEvent.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId },
+        include: { calendarAccount: true },
       })
+      if (!event) return reply.notFound('Calendar event not found')
 
-      eventBus.emit('calendar:event:created', { eventId: event.id })
+      const isOwner = event.ownerId === req.user.sub
+      if (!isOwner) {
+        const ok = await hasPermission(req.user, 'calendar.editOthers')
+        if (!ok) return reply.forbidden('Sem permissão para editar compromissos de terceiros')
+      }
 
-      return reply.code(201).send(event)
+      try {
+        const updated = await updateCalendarEvent(event, {
+          title: req.body.title,
+          description: req.body.description,
+          location: req.body.location,
+          startAt: req.body.startAt ? new Date(req.body.startAt) : undefined,
+          endAt: req.body.endAt ? new Date(req.body.endAt) : undefined,
+          allDay: req.body.allDay,
+          force: req.body.force,
+        })
+        return updated
+      } catch (err) {
+        if (err instanceof CalendarConflictError) {
+          return reply.conflict('Conflito de horário na agenda do usuário')
+        }
+        throw err
+      }
     },
   )
 
@@ -404,7 +422,10 @@ export const calendarRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const isOwner = event.ownerId === req.user.sub
         || (event.calendarAccount && event.calendarAccount.userId === req.user.sub)
-      if (!isOwner) return reply.forbidden('Not authorized')
+      if (!isOwner) {
+        const ok = await hasPermission(req.user, 'calendar.cancelOthers')
+        if (!ok) return reply.forbidden('Sem permissão para cancelar compromissos de terceiros')
+      }
 
       if (event.calendarAccount && event.externalId) {
         try {

@@ -2,8 +2,11 @@
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import Link from 'next/link'
+import { Settings } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
+import { usePermission } from '@/lib/usePermission'
+import { useAuthStore } from '@/store/auth'
 import { toast } from 'sonner'
 import {
   ChevronLeft,
@@ -395,11 +398,14 @@ interface NewEventModalProps {
   open: boolean
   defaultDate: string
   accounts: CalendarAccount[]
+  users: WorkspaceUser[]
+  currentUserId: string
+  canCreateForOthers: boolean
   onClose: () => void
   onCreated: () => void
 }
 
-function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewEventModalProps) {
+function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canCreateForOthers, onClose, onCreated }: NewEventModalProps) {
   const [title, setTitle] = useState('')
   const [date, setDate] = useState(defaultDate)
   const [startTime, setStartTime] = useState('09:00')
@@ -410,9 +416,12 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
   const [createMeetLink, setCreateMeetLink] = useState(false)
   const [allDay, setAllDay] = useState(false)
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
+  const [ownerId, setOwnerId] = useState(currentUserId)
+
+  const isForOther = ownerId !== currentUserId
 
   const mutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (opts?: { force?: boolean }) => {
       const startAt = allDay
         ? new Date(`${date}T00:00:00`).toISOString()
         : new Date(`${date}T${startTime}:00`).toISOString()
@@ -423,7 +432,10 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
       return apiFetch('/calendar/events', {
         method: 'POST',
         body: JSON.stringify({
-          accountId: accountId || undefined,
+          // Para terceiros o backend resolve a conta Google do dono automaticamente.
+          accountId: isForOther ? undefined : (accountId || undefined),
+          ownerId: isForOther ? ownerId : undefined,
+          force: opts?.force || undefined,
           title,
           startAt,
           endAt,
@@ -449,6 +461,14 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
       setAllDay(false)
     },
     onError: (err: Error) => {
+      if (err instanceof ApiError && err.status === 409) {
+        if (typeof window !== 'undefined' && window.confirm('Há conflito de horário na agenda. Deseja agendar mesmo assim?')) {
+          mutation.mutate({ force: true })
+          return
+        }
+        toast.error('Conflito de horário — agendamento cancelado')
+        return
+      }
       toast.error(err.message ?? 'Erro ao criar evento')
     },
   })
@@ -478,6 +498,27 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
               autoFocus
             />
           </div>
+
+          {/* Owner (agenda compartilhada) */}
+          {canCreateForOthers && (
+            <div>
+              <label className="text-sm font-medium">Para quem (dono da agenda)</label>
+              <select
+                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                value={ownerId}
+                onChange={(e) => setOwnerId(e.target.value)}
+              >
+                <option value={currentUserId}>Minha agenda</option>
+                {users
+                  .filter((u) => u.id !== currentUserId)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name ?? u.email}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
 
           {/* All-day toggle */}
           <div className="flex items-center gap-2">
@@ -611,7 +652,7 @@ function NewEventModal({ open, defaultDate, accounts, onClose, onCreated }: NewE
             Cancelar
           </button>
           <button
-            onClick={() => mutation.mutate()}
+            onClick={() => mutation.mutate({})}
             disabled={!title.trim() || mutation.isPending}
             className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
@@ -808,6 +849,67 @@ function EventDetailSheet({ event, onClose, onDeleted }: EventDetailSheetProps) 
 
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
+// ─── Owner picker (agenda compartilhada) ──────────────────────────────────────
+
+function OwnerPicker({
+  users,
+  selected,
+  onChange,
+}: {
+  users: WorkspaceUser[]
+  selected: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [])
+
+  function toggle(id: string) {
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id])
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent transition-colors"
+      >
+        <Users className="h-4 w-4" />
+        {selected.length > 0 ? `Agendas (${selected.length + 1})` : 'Ver agenda de'}
+      </button>
+      {open && (
+        <div className="absolute right-0 z-50 mt-1 w-64 max-h-72 overflow-y-auto rounded-md border bg-popover shadow-lg p-1">
+          {users.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">Nenhum outro usuário</p>
+          ) : (
+            users.map((u) => (
+              <label
+                key={u.id}
+                className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent rounded cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.includes(u.id)}
+                  onChange={() => toggle(u.id)}
+                  className="h-4 w-4 rounded border"
+                />
+                <span className="truncate">{u.name ?? u.email}</span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function CalendarPage() {
   const queryClient = useQueryClient()
   const today = new Date()
@@ -817,6 +919,20 @@ export default function CalendarPage() {
   const [newEventOpen, setNewEventOpen] = useState(false)
   const [newEventDate, setNewEventDate] = useState(toLocalDateStr(today))
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
+
+  // ── Agenda compartilhada ────────────────────────────────────────────────────
+  const currentUserId = useAuthStore((s) => s.user?.sub ?? '')
+  const canViewOthers = usePermission('calendar.viewOthers')
+  const canCreateForOthers = usePermission('calendar.createForOthers')
+  // Donos selecionados pra visualizar. Vazio = só o próprio.
+  const [viewOwnerIds, setViewOwnerIds] = useState<string[]>([])
+
+  const { data: users = [] } = useQuery<WorkspaceUser[]>({
+    queryKey: ['workspace-users'],
+    queryFn: () => apiFetch<WorkspaceUser[]>('/users'),
+    staleTime: 5 * 60 * 1000,
+    enabled: canViewOthers || canCreateForOthers,
+  })
 
   // ── Accounts ──────────────────────────────────────────────────────────────
 
@@ -847,19 +963,25 @@ export default function CalendarPage() {
   const from = new Date(year, month, 1).toISOString()
   const to = new Date(year, month + 1, 0, 23, 59, 59).toISOString()
 
+  const ownerKey = viewOwnerIds.join(',')
   const { data: events = [] } = useQuery<CalendarEvent[]>({
-    queryKey: ['calendar-events', year, month],
-    queryFn: () =>
-      apiFetch<CalendarEvent[]>(
-        `/calendar/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-      ),
+    queryKey: ['calendar-events', year, month, ownerKey],
+    queryFn: () => {
+      const params = new URLSearchParams({ from, to })
+      // Vazio = só a própria agenda. Com seleção, sempre inclui a própria + os colegas.
+      if (viewOwnerIds.length > 0) {
+        params.append('ownerIds', currentUserId)
+        for (const id of viewOwnerIds) params.append('ownerIds', id)
+      }
+      return apiFetch<CalendarEvent[]>(`/calendar/events?${params.toString()}`)
+    },
   })
 
   const syncMutation = useMutation({
     mutationFn: () => apiFetch<{ synced: number }>('/calendar/sync', { method: 'POST', body: JSON.stringify({}) }),
     onSuccess: ({ synced }) => {
       toast.success(`${synced} evento${synced !== 1 ? 's' : ''} sincronizado${synced !== 1 ? 's' : ''}`)
-      queryClient.invalidateQueries({ queryKey: ['calendar-events', year, month] })
+      queryClient.invalidateQueries({ queryKey: ['calendar-events'] })
     },
     onError: (err: Error) => toast.error(err.message ?? 'Erro ao sincronizar'),
   })
@@ -901,7 +1023,7 @@ export default function CalendarPage() {
   }
 
   const invalidateEvents = () =>
-    queryClient.invalidateQueries({ queryKey: ['calendar-events', year, month] })
+    queryClient.invalidateQueries({ queryKey: ['calendar-events'] })
 
   const todayStr = toLocalDateStr(today)
 
@@ -968,6 +1090,22 @@ export default function CalendarPage() {
               {connectMutation.isPending ? 'Conectando...' : 'Conectar Google'}
             </button>
           )}
+
+          {canViewOthers && (
+            <OwnerPicker
+              users={users.filter((u) => u.id !== currentUserId)}
+              selected={viewOwnerIds}
+              onChange={setViewOwnerIds}
+            />
+          )}
+
+          <Link
+            href="/calendar/settings"
+            title="Configurar horários"
+            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent transition-colors"
+          >
+            <Settings className="h-4 w-4" />
+          </Link>
 
           <button
             onClick={() => syncMutation.mutate()}
@@ -1077,6 +1215,9 @@ export default function CalendarPage() {
         open={newEventOpen}
         defaultDate={newEventDate}
         accounts={accounts}
+        users={users}
+        currentUserId={currentUserId}
+        canCreateForOthers={canCreateForOthers}
         onClose={() => setNewEventOpen(false)}
         onCreated={invalidateEvents}
       />
