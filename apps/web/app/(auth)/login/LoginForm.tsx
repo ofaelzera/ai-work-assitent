@@ -101,7 +101,7 @@ export default function LoginForm() {
                 <Bot className="h-6 w-6 text-primary" />
               </div>
             )}
-            <h1 className="text-3xl font-bold tracking-tight text-foreground">{title}</h1>
+            <h4 className="text-3xl font-bold tracking-tight text-foreground">{title}</h4>
             <p className="text-sm text-muted-foreground">Entre na sua conta para continuar</p>
           </div>
 
