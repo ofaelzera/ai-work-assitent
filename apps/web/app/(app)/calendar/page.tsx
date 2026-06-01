@@ -1200,21 +1200,55 @@ export default function CalendarPage() {
     staleTime: 5 * 60 * 1000,
   })
 
+  // Feriados nacionais (automáticos) dos anos visíveis na grade.
+  const gridYears = useMemo(
+    () => Array.from(new Set([year, month === 0 ? year - 1 : year, month === 11 ? year + 1 : year])),
+    [year, month],
+  )
+  const { data: nationalHolidays = [] } = useQuery<{ date: string; name: string }[]>({
+    queryKey: ['national-holidays', gridYears.join(',')],
+    queryFn: async () => {
+      const lists = await Promise.all(
+        gridYears.map((y) => apiFetch<{ date: string; name: string }[]>(`/calendar/national-holidays?year=${y}`)),
+      )
+      return lists.flat()
+    },
+    staleTime: 60 * 60 * 1000,
+  })
+
   const openWeekdays = useMemo(() => new Set(companyHours.map((h) => h.weekday)), [companyHours])
   const companyConfigured = companyHours.length > 0
   const closedHolidays = useMemo(
     () => new Set(holidays.filter((h) => h.closed).map((h) => h.date.slice(0, 10))),
     [holidays],
   )
+  const nationalSet = useMemo(
+    () => new Set(nationalHolidays.map((h) => h.date.slice(0, 10))),
+    [nationalHolidays],
+  )
 
-  // Dia fechado = feriado fechado OU (empresa configurada e o weekday não está aberto).
+  const nationalNameByDate = useMemo(
+    () => new Map(nationalHolidays.map((h) => [h.date.slice(0, 10), h.name])),
+    [nationalHolidays],
+  )
+
+  // Dia fechado = feriado (tabela ou nacional automático) OU empresa não abre nesse weekday.
   const isDayClosed = useCallback(
     (day: Date) => {
-      if (closedHolidays.has(toLocalDateStr(day))) return true
+      const key = toLocalDateStr(day)
+      if (closedHolidays.has(key)) return true
+      if (nationalSet.has(key)) return true
       if (companyConfigured && !openWeekdays.has(day.getDay())) return true
       return false
     },
-    [closedHolidays, companyConfigured, openWeekdays],
+    [closedHolidays, nationalSet, companyConfigured, openWeekdays],
+  )
+  const closedReason = useCallback(
+    (day: Date): string => {
+      const key = toLocalDateStr(day)
+      return nationalNameByDate.get(key) ?? (closedHolidays.has(key) ? 'Feriado / empresa fechada' : 'Empresa fechada neste dia')
+    },
+    [nationalNameByDate, closedHolidays],
   )
 
   // ── Bloqueios de agenda (do próprio usuário) ─────────────────────────────────
@@ -1437,12 +1471,13 @@ export default function CalendarPage() {
               const shown = dayEvents.slice(0, 3)
               const overflow = dayEvents.length - 3
               const closed = isDayClosed(day)
+              const reason = closed ? closedReason(day) : ''
 
               return (
                 <div
                   key={idx}
                   onClick={() => { if (!closed) openNewEvent(day) }}
-                  title={closed ? 'Empresa fechada neste dia' : undefined}
+                  title={closed ? reason : undefined}
                   className={`border-r border-b min-h-[96px] p-1.5 transition-colors ${
                     closed
                       ? 'bg-muted/40 cursor-not-allowed'
@@ -1463,6 +1498,13 @@ export default function CalendarPage() {
                       {day.getDate()}
                     </span>
                   </div>
+
+                  {/* Motivo de dia fechado (feriado nacional, etc.) */}
+                  {closed && (
+                    <p className="text-[10px] leading-tight text-muted-foreground truncate" title={reason}>
+                      {reason}
+                    </p>
+                  )}
 
                   {/* Bloqueios do dia */}
                   <div className="space-y-0.5">
