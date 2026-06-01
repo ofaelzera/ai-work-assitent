@@ -281,10 +281,19 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.forbidden('Só o dono ou quem tem boards.manage pode deletar')
       }
 
-      await prisma.board.updateMany({
-        where: { id: req.params.id, workspaceId: req.user.workspaceId },
-        data: { deletedAt: new Date() },
-      })
+      const now = new Date()
+      // Soft-delete em cascata: marca o board E os cards dele. Sem isso, os cards
+      // continuam com deletedAt=null e seguem contando nos KPIs do workspace.
+      await prisma.$transaction([
+        prisma.board.updateMany({
+          where: { id: req.params.id, workspaceId: req.user.workspaceId },
+          data: { deletedAt: now },
+        }),
+        prisma.card.updateMany({
+          where: { column: { boardId: req.params.id }, deletedAt: null },
+          data: { deletedAt: now },
+        }),
+      ])
       return reply.code(204).send()
     },
   )

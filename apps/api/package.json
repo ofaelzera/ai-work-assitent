@@ -12,6 +12,7 @@
     "migrate:card-multi": "dotenv -e ../../.env -- tsx scripts/migrate-card-multi.ts",
     "migrate:column-done": "dotenv -e ../../.env -- tsx scripts/migrate-column-done.ts",
     "debug:open-cards": "dotenv -e ../../.env -- tsx scripts/debug-open-cards.ts",
+    "cleanup:orphan-cards": "dotenv -e ../../.env -- tsx scripts/cleanup-orphan-cards.ts",
     "db:reset": "dotenv -e ../../.env -- prisma db push --force-reset --accept-data-loss && pnpm db:seed",
     "db:studio": "dotenv -e ../../.env -- prisma studio"
   },

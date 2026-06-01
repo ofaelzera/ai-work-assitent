@@ -50,11 +50,12 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
             },
             _sum: { unreadCount: true },
           }),
-          // Demandas abertas: cards que NÃO estão numa coluna de conclusão (isDone).
+          // Demandas abertas: cards que NÃO estão numa coluna de conclusão (isDone)
+          // e cujo board não foi deletado (board soft-deleted não some os cards).
           prisma.card.count({
             where: {
               workspaceId, deletedAt: null,
-              column: { isDone: false },
+              column: { isDone: false, board: { deletedAt: null } },
             },
           }),
           prisma.calendarEvent.count({
@@ -86,7 +87,7 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
             },
           }),
           prisma.card.findMany({
-            where: { workspaceId, deletedAt: null },
+            where: { workspaceId, deletedAt: null, column: { board: { deletedAt: null } } },
             orderBy: { createdAt: 'desc' },
             take: 5,
             select: {
