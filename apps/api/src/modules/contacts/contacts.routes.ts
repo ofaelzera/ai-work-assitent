@@ -91,10 +91,11 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
             _count: { select: { conversations: true } },
           },
         }),
-        // Conta quantos LIDs sem nome estão ocultos (só quando o filtro está ativo e sem busca textual)
+        // Conta quantos contatos "sem número" estão ocultos (só quando o filtro
+        // está ativo e sem busca textual). Mesma definição usada no filtro acima.
         excludeLid && !q
           ? prisma.contact.count({
-              where: { workspaceId, mergedIntoId: null, phoneType: 'LID', name: null },
+              where: { workspaceId, mergedIntoId: null, ...noRealPhone },
             })
           : Promise.resolve(0),
       ])
