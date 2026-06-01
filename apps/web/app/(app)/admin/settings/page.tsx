@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2, Clock, CalendarDays, Trash2, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
+import { usePermission } from '@/lib/usePermission'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 import { AdminSection } from '@/components/admin/AdminSection'
 import { WeeklyHoursEditor, type HoursRow } from '@/components/WeeklyHoursEditor'
@@ -448,9 +449,58 @@ function HolidaysPanel() {
   )
 }
 
+// ─── Horário de trabalho da equipe (gestor configura o de cada usuário) ─────────
+function TeamWorkingHoursPanel() {
+  const qc = useQueryClient()
+  const { data: users = [] } = useQuery<{ id: string; name: string | null; email: string }[]>({
+    queryKey: ['users-list'],
+    queryFn: () => apiFetch('/users'),
+  })
+  const [userId, setUserId] = useState('')
+  useEffect(() => {
+    if (!userId && users.length > 0) setUserId(users[0].id)
+  }, [users, userId])
+
+  const { data: rows = [], isLoading } = useQuery<HoursRow[]>({
+    queryKey: ['working-hours', userId],
+    queryFn: () => apiFetch(`/calendar/working-hours/${userId}`),
+    enabled: !!userId,
+  })
+  const save = useMutation({
+    mutationFn: (r: HoursRow[]) =>
+      apiFetch(`/calendar/working-hours/${userId}`, { method: 'PUT', body: JSON.stringify({ rows: r }) }),
+    onSuccess: () => {
+      toast.success('Horário de trabalho salvo')
+      qc.invalidateQueries({ queryKey: ['working-hours', userId] })
+    },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao salvar'),
+  })
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="text-xs font-medium">Usuário</label>
+        <select
+          value={userId}
+          onChange={(e) => setUserId(e.target.value)}
+          className="mt-1 block w-full max-w-sm rounded-lg border bg-transparent px-3 py-2 text-sm"
+        >
+          {users.map((u) => (
+            <option key={u.id} value={u.id}>{u.name ?? u.email}</option>
+          ))}
+        </select>
+      </div>
+      {isLoading
+        ? <p className="text-sm text-muted-foreground">Carregando...</p>
+        : <WeeklyHoursEditor key={userId} rows={rows} onSave={(r) => save.mutate(r)} saving={save.isPending} />}
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { user } = useAuthStore()
   const isAdmin = user?.role === 'ADMIN'
+  const canManageWorkingHours = usePermission('calendar.manageWorkingHours')
 
   // ── Workspace name ──
   const [workspaceName, setWorkspaceName] = useState('')
@@ -529,6 +579,13 @@ export default function SettingsPage() {
       <AdminSection title="Feriados e datas especiais" icon={CalendarDays} description="Datas em que a empresa fica fechada. Sincronize os feriados nacionais automaticamente">
         <HolidaysPanel />
       </AdminSection>
+
+      {/* Horário de trabalho da equipe */}
+      {canManageWorkingHours && (
+        <AdminSection title="Horário de trabalho da equipe" icon={Clock} description="Configure a disponibilidade de cada usuário (cada um também ajusta o próprio no perfil)">
+          <TeamWorkingHoursPanel />
+        </AdminSection>
+      )}
 
       {/* Inteligência Artificial */}
       {isAdmin && (
