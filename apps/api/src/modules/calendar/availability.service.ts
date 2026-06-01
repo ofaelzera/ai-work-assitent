@@ -210,32 +210,43 @@ export async function findFreeSlots(
   ])
 
   const holidayByDay = new Map(holidays.map((h) => [startOfDay(h.date).getTime(), h]))
+  // Hierarquia: usuário sem horário próprio herda o horário da empresa.
+  const hasUserHours = workRows.length > 0
+  const hasCompanyHours = companyRows.length > 0
 
   for (let day = startOfDay(range.from); day <= range.to; day = new Date(day.getTime() + DAY_MIN * 60_000)) {
     const wd = day.getDay()
     const holiday = holidayByDay.get(day.getTime())
 
-    // Janela da empresa nesse dia
+    // Janela de funcionamento da empresa nesse dia
     let companyIntervals: Interval[]
     if (holiday) {
-      if (holiday.closed) continue
+      if (holiday.closed) continue // feriado fechado → dia indisponível
       companyIntervals =
         holiday.startMin != null && holiday.endMin != null
           ? [{ startMin: holiday.startMin, endMin: holiday.endMin }]
           : []
       if (companyIntervals.length === 0) continue
-    } else {
+    } else if (hasCompanyHours) {
       companyIntervals = companyRows
         .filter((r) => r.weekday === wd)
         .map((r) => ({ startMin: r.startMin, endMin: r.endMin }))
-      if (companyIntervals.length === 0) continue
+      if (companyIntervals.length === 0) continue // empresa fechada nesse dia
+    } else {
+      // Empresa sem horário configurado → sem restrição (dia todo)
+      companyIntervals = [{ startMin: 0, endMin: DAY_MIN }]
     }
 
-    // Janela de trabalho do usuário nesse dia
-    const workIntervals = workRows
-      .filter((r) => r.weekday === wd)
-      .map((r) => ({ startMin: r.startMin, endMin: r.endMin }))
-    if (workIntervals.length === 0) continue
+    // Janela de trabalho do usuário nesse dia (hierarquia: herda da empresa se não configurou)
+    let workIntervals: Interval[]
+    if (hasUserHours) {
+      workIntervals = workRows
+        .filter((r) => r.weekday === wd)
+        .map((r) => ({ startMin: r.startMin, endMin: r.endMin }))
+      if (workIntervals.length === 0) continue // usuário não trabalha nesse dia
+    } else {
+      workIntervals = companyIntervals // herda o horário da empresa
+    }
 
     // Interseção trabalho ∩ empresa
     let free: Interval[] = []

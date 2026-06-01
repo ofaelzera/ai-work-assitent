@@ -14,6 +14,8 @@ import {
   Plus,
   Wifi,
   X,
+  Lock,
+  Ban,
   Clock,
   Trash2,
   MessageSquare,
@@ -995,6 +997,86 @@ function OwnerPicker({
   )
 }
 
+// ─── Modal de bloqueio de agenda ───────────────────────────────────────────────
+function BlockModal({
+  open, defaultDate, userId, onClose, onCreated,
+}: {
+  open: boolean
+  defaultDate: string
+  userId: string
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [date, setDate] = useState(defaultDate)
+  const [startTime, setStartTime] = useState('08:00')
+  const [endTime, setEndTime] = useState('12:00')
+  const [title, setTitle] = useState('')
+
+  useEffect(() => {
+    if (open) { setDate(defaultDate); setStartTime('08:00'); setEndTime('12:00'); setTitle('') }
+  }, [open, defaultDate])
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      apiFetch('/calendar/blocks', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId, // bloqueia a própria agenda
+          title: title || undefined,
+          startAt: new Date(`${date}T${startTime}:00`).toISOString(),
+          endAt: new Date(`${date}T${endTime}:00`).toISOString(),
+        }),
+      }),
+    onSuccess: () => { toast.success('Período bloqueado'); onCreated(); onClose() },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao bloquear'),
+  })
+
+  if (!open) return null
+  const invalid = !date || new Date(`${date}T${endTime}:00`) <= new Date(`${date}T${startTime}:00`)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative bg-card border rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold flex items-center gap-2"><Ban className="h-4 w-4" /> Bloquear agenda</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+        </div>
+        <p className="text-xs text-muted-foreground">Impede agendamentos no período (ex: consulta, reunião interna, almoço estendido).</p>
+        <div>
+          <label className="text-sm font-medium">Motivo (opcional)</label>
+          <input className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm" value={title}
+            onChange={(e) => setTitle(e.target.value)} placeholder="Ex: Dentista" autoFocus />
+        </div>
+        <div>
+          <label className="text-sm font-medium">Data</label>
+          <input type="date" className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm" value={date}
+            onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-sm font-medium">Início</label>
+            <input type="time" className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm" value={startTime}
+              onChange={(e) => setStartTime(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Fim</label>
+            <input type="time" className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm" value={endTime}
+              onChange={(e) => setEndTime(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="rounded-md border px-4 py-2 text-sm hover:bg-accent">Cancelar</button>
+          <button onClick={() => mutation.mutate()} disabled={invalid || mutation.isPending}
+            className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
+            {mutation.isPending ? 'Bloqueando...' : 'Bloquear'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function CalendarPage() {
   const queryClient = useQueryClient()
   const today = new Date()
@@ -1069,6 +1151,63 @@ export default function CalendarPage() {
       queryClient.invalidateQueries({ queryKey: ['calendar-events'] })
     },
     onError: (err: Error) => toast.error(err.message ?? 'Erro ao sincronizar'),
+  })
+
+  // ── Dias fechados (empresa não atende) ──────────────────────────────────────
+  // Bloqueia clique em fim de semana/dias fora do expediente e feriados.
+  const { data: companyHours = [] } = useQuery<{ weekday: number }[]>({
+    queryKey: ['company-hours'],
+    queryFn: () => apiFetch('/calendar/company-hours'),
+    staleTime: 5 * 60 * 1000,
+  })
+  const { data: holidays = [] } = useQuery<{ date: string; closed: boolean }[]>({
+    queryKey: ['holidays'],
+    queryFn: () => apiFetch('/calendar/holidays'),
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const openWeekdays = useMemo(() => new Set(companyHours.map((h) => h.weekday)), [companyHours])
+  const companyConfigured = companyHours.length > 0
+  const closedHolidays = useMemo(
+    () => new Set(holidays.filter((h) => h.closed).map((h) => h.date.slice(0, 10))),
+    [holidays],
+  )
+
+  // Dia fechado = feriado fechado OU (empresa configurada e o weekday não está aberto).
+  const isDayClosed = useCallback(
+    (day: Date) => {
+      if (closedHolidays.has(toLocalDateStr(day))) return true
+      if (companyConfigured && !openWeekdays.has(day.getDay())) return true
+      return false
+    },
+    [closedHolidays, companyConfigured, openWeekdays],
+  )
+
+  // ── Bloqueios de agenda (do próprio usuário) ─────────────────────────────────
+  const [blockModalOpen, setBlockModalOpen] = useState(false)
+  const [blockDate, setBlockDate] = useState(toLocalDateStr(today))
+
+  const { data: blocks = [] } = useQuery<{ id: string; title: string | null; startAt: string; endAt: string; userId: string | null }[]>({
+    queryKey: ['schedule-blocks', year, month],
+    queryFn: () => apiFetch(`/calendar/blocks?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  })
+
+  const blocksByDay = useMemo(() => {
+    const map: Record<string, typeof blocks> = {}
+    for (const b of blocks) {
+      const key = toLocalDateStr(new Date(b.startAt))
+      ;(map[key] ??= []).push(b)
+    }
+    return map
+  }, [blocks])
+
+  const deleteBlock = useMutation({
+    mutationFn: (id: string) => apiFetch(`/calendar/blocks/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast.success('Bloqueio removido')
+      queryClient.invalidateQueries({ queryKey: ['schedule-blocks'] })
+    },
+    onError: (e: Error) => toast.error(e.message ?? 'Erro ao remover'),
   })
 
   // ── Calendar grid ─────────────────────────────────────────────────────────
@@ -1195,6 +1334,15 @@ export default function CalendarPage() {
           </button>
 
           <button
+            onClick={() => { setBlockDate(toLocalDateStr(today)); setBlockModalOpen(true) }}
+            title="Bloquear um período da sua agenda"
+            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent transition-colors"
+          >
+            <Ban className="h-4 w-4" />
+            Bloquear
+          </button>
+
+          <button
             onClick={() => { setNewEventDate(toLocalDateStr(today)); setNewEventOpen(true) }}
             className="flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:bg-primary/90 transition-colors"
           >
@@ -1225,14 +1373,18 @@ export default function CalendarPage() {
               const dayEvents = eventsByDay[dayStr] ?? []
               const shown = dayEvents.slice(0, 3)
               const overflow = dayEvents.length - 3
+              const closed = isDayClosed(day)
 
               return (
                 <div
                   key={idx}
-                  onClick={() => openNewEvent(day)}
-                  className={`border-r border-b min-h-[96px] p-1.5 cursor-pointer hover:bg-accent/30 transition-colors ${
-                    !isCurrentMonth ? 'bg-muted/30' : ''
-                  }`}
+                  onClick={() => { if (!closed) openNewEvent(day) }}
+                  title={closed ? 'Empresa fechada neste dia' : undefined}
+                  className={`border-r border-b min-h-[96px] p-1.5 transition-colors ${
+                    closed
+                      ? 'bg-muted/40 cursor-not-allowed'
+                      : 'cursor-pointer hover:bg-accent/30'
+                  } ${!isCurrentMonth ? 'bg-muted/30' : ''}`}
                 >
                   {/* Day number */}
                   <div className="flex justify-end mb-1">
@@ -1247,6 +1399,25 @@ export default function CalendarPage() {
                     >
                       {day.getDate()}
                     </span>
+                  </div>
+
+                  {/* Bloqueios do dia */}
+                  <div className="space-y-0.5">
+                    {(blocksByDay[dayStr] ?? []).map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (window.confirm('Remover este bloqueio de agenda?')) deleteBlock.mutate(b.id)
+                        }}
+                        className="w-full text-left rounded px-1 py-0.5 text-xs truncate block bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
+                        title={`Bloqueado${b.title ? `: ${b.title}` : ''} — clique para remover`}
+                      >
+                        <Lock className="h-2.5 w-2.5 inline mr-1 opacity-70" />
+                        <span className="mr-1">{formatTime(b.startAt)}</span>
+                        {b.title ?? 'Bloqueado'}
+                      </button>
+                    ))}
                   </div>
 
                   {/* Events */}
@@ -1297,6 +1468,18 @@ export default function CalendarPage() {
         canCreateForOthers={canCreateForOthers}
         onClose={() => setNewEventOpen(false)}
         onCreated={invalidateEvents}
+      />
+
+      <BlockModal
+        open={blockModalOpen}
+        defaultDate={blockDate}
+        userId={currentUserId}
+        onClose={() => setBlockModalOpen(false)}
+        onCreated={() => {
+          queryClient.invalidateQueries({ queryKey: ['schedule-blocks'] })
+          queryClient.invalidateQueries({ queryKey: ['free-slots-modal'] })
+          queryClient.invalidateQueries({ queryKey: ['availability'] })
+        }}
       />
 
       <EventDetailSheet
