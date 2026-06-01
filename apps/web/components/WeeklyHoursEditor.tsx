@@ -43,7 +43,10 @@ export function WeeklyHoursEditor({
     setDraft((d) => [...d, { weekday, startMin: 480, endMin: 720, isActive: true }])
   }
   function removeRow(idx: number) {
-    setDraft((d) => d.filter((_, i) => i !== idx))
+    const next = draft.filter((_, i) => i !== idx)
+    setDraft(next)
+    // Remoção é destrutiva e o usuário espera efeito imediato → persiste já.
+    onSave(next)
   }
   function updateRow(idx: number, patch: Partial<HoursRow>) {
     setDraft((d) => d.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
