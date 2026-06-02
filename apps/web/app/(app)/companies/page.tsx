@@ -182,17 +182,22 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
   })
   const linkedContacts: Contact[] = linkedContactsData?.items ?? []
 
-  // Contatos para vincular (busca geral)
+  // Contatos para vincular (busca geral) — só contatos com número real (LID não vincula)
   const { data: searchResultsData } = useQuery({
     queryKey: ['contacts', contactSearch, 'assign'],
-    queryFn: () => apiFetch<{ items: Contact[] }>(`/contacts?q=${encodeURIComponent(contactSearch)}&limit=30`),
+    queryFn: () => apiFetch<{ items: Contact[] }>(
+      `/contacts?q=${encodeURIComponent(contactSearch)}&limit=30&hasPhone=true&verified=all`,
+    ),
     enabled: contactSearch.length > 0,
   })
   const searchResults: Contact[] = searchResultsData?.items ?? []
 
+  // Vínculo N:N: link adiciona, unlink remove só esta empresa (não mexe nas outras)
   const assignMutation = useMutation({
-    mutationFn: ({ contactId, companyId }: { contactId: string; companyId: string | null }) =>
-      apiFetch(`/contacts/${contactId}`, { method: 'PATCH', body: JSON.stringify({ companyId }) }),
+    mutationFn: ({ contactId, action }: { contactId: string; action: 'link' | 'unlink' }) =>
+      action === 'link'
+        ? apiFetch(`/contacts/${contactId}/companies`, { method: 'POST', body: JSON.stringify({ companyId: company!.id }) })
+        : apiFetch(`/contacts/${contactId}/companies/${company!.id}`, { method: 'DELETE' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] })
       queryClient.invalidateQueries({ queryKey: ['companies'] })
@@ -479,7 +484,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
                             {displayPhone(c) && <p className="text-xs text-muted-foreground">{displayPhone(c)}</p>}
                           </div>
                           <button
-                            onClick={() => assignMutation.mutate({ contactId: c.id, companyId: company.id })}
+                            onClick={() => assignMutation.mutate({ contactId: c.id, action: 'link' })}
                             disabled={assignMutation.isPending}
                             className="shrink-0 text-xs px-2.5 py-1 rounded-full border border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 disabled:opacity-50">
                             + Vincular
@@ -510,7 +515,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
                         {sub && <p className="text-xs text-muted-foreground truncate">{sub}</p>}
                       </div>
                       <button
-                        onClick={() => assignMutation.mutate({ contactId: c.id, companyId: null })}
+                        onClick={() => assignMutation.mutate({ contactId: c.id, action: 'unlink' })}
                         disabled={assignMutation.isPending}
                         title="Remover da empresa"
                         className="shrink-0 p-1 rounded hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/20 text-muted-foreground opacity-0 group-hover/contact:opacity-100 transition-all">

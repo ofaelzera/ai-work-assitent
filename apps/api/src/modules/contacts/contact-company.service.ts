@@ -22,15 +22,34 @@ export async function linkContactCompany(
   })
 }
 
+/** Remove um vínculo específico contato→empresa e reacerta o mirror `companyId`. */
+export async function unlinkContactCompany(contactId: string, companyId: string): Promise<void> {
+  await prisma.contactCompany.deleteMany({ where: { contactId, companyId } })
+  const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { companyId: true } })
+  if (contact?.companyId === companyId) {
+    const next = await prisma.contactCompany.findFirst({
+      where: { contactId },
+      orderBy: { createdAt: 'asc' },
+      select: { companyId: true },
+    })
+    await prisma.contact.update({ where: { id: contactId }, data: { companyId: next?.companyId ?? null } })
+  }
+}
+
 /**
- * Sincroniza os vínculos MANUAIS de um contato com a lista `companyIds`.
- * Preserva vínculos de origem GROUP_SYNC (gerados pela sincronização de grupos).
+ * Sincroniza os vínculos de empresa de um contato com a lista `companyIds`.
  * Valida que as empresas pertencem ao workspace.
+ *
+ * `opts.replaceGroupLinks` (default false): quando true, a lista representa o
+ * conjunto COMPLETO desejado — remove inclusive vínculos GROUP_SYNC que saíram
+ * (usado pela tela de edição de contato, onde o usuário gerencia tudo). Quando
+ * false, preserva os GROUP_SYNC e reconcilia só os MANUAIS (uso legado).
  */
 export async function setContactCompanies(
   contactId: string,
   workspaceId: string,
   companyIds: string[],
+  opts: { replaceGroupLinks?: boolean } = {},
 ): Promise<void> {
   const unique = Array.from(new Set(companyIds))
 
@@ -47,19 +66,25 @@ export async function setContactCompanies(
     where: { contactId },
     select: { companyId: true, source: true },
   })
-  const manualExisting = new Set(existing.filter((e) => e.source === 'MANUAL').map((e) => e.companyId))
+  // Quais vínculos existentes contam para reconciliação: todos (replaceGroupLinks)
+  // ou apenas os MANUAIS (preservando GROUP_SYNC).
+  const managed = opts.replaceGroupLinks ? existing : existing.filter((e) => e.source === 'MANUAL')
+  const managedExisting = new Set(managed.map((e) => e.companyId))
 
-  // Remove vínculos MANUAIS que saíram da lista (não toca em GROUP_SYNC)
-  const toRemove = [...manualExisting].filter((id) => !validIds.has(id))
+  // Remove vínculos gerenciados que saíram da lista
+  const toRemove = [...managedExisting].filter((id) => !validIds.has(id))
   if (toRemove.length) {
     await prisma.contactCompany.deleteMany({
-      where: { contactId, companyId: { in: toRemove }, source: 'MANUAL' },
+      where: opts.replaceGroupLinks
+        ? { contactId, companyId: { in: toRemove } }
+        : { contactId, companyId: { in: toRemove }, source: 'MANUAL' },
     })
   }
 
-  // Adiciona os novos
+  // Adiciona os novos como MANUAL (os que já existem mantêm o source original)
+  const allExisting = new Set(existing.map((e) => e.companyId))
   for (const id of validIds) {
-    if (!manualExisting.has(id)) await linkContactCompany(contactId, id, 'MANUAL')
+    if (!allExisting.has(id)) await linkContactCompany(contactId, id, 'MANUAL')
   }
 
   // Mirror: empresa principal = primeira manual selecionada (ou null se nenhuma).

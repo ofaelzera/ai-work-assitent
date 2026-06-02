@@ -5,7 +5,7 @@ import { prisma } from '../../lib/prisma.js'
 import { parseJid } from '../../lib/phone.js'
 import { logger } from '../../lib/logger.js'
 import { mergeContacts } from './merge.service.js'
-import { setContactCompanies } from './contact-company.service.js'
+import { setContactCompanies, linkContactCompany, unlinkContactCompany } from './contact-company.service.js'
 import { autoDedupContacts } from '../channels/sync.service.js'
 import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
 import { hasPermission, requirePerm } from '../../lib/acl.js'
@@ -233,7 +233,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         },
         select: { id: true },
       })
-      if (companyIds?.length) await setContactCompanies(contact.id, workspaceId, companyIds)
+      if (companyIds?.length) await setContactCompanies(contact.id, workspaceId, companyIds, { replaceGroupLinks: true })
 
       return reply.code(201).send(
         await prisma.contact.findUniqueOrThrow({ where: { id: contact.id }, select: contactSelect }),
@@ -300,7 +300,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
               where: { workspaceId, phone: parsed.phone, mergedIntoId: null, id: { not: current.id } },
             })
             if (otherPn) {
-              if (companyIds !== undefined) await setContactCompanies(otherPn.id, workspaceId, companyIds)
+              if (companyIds !== undefined) await setContactCompanies(otherPn.id, workspaceId, companyIds, { replaceGroupLinks: true })
               await mergeContacts(current.id, otherPn.id)
               return prisma.contact.findUniqueOrThrow({ where: { id: otherPn.id }, select: contactSelect })
             }
@@ -311,7 +311,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       await prisma.contact.update({ where: { id: req.params.id }, data })
-      if (companyIds !== undefined) await setContactCompanies(req.params.id, workspaceId, companyIds)
+      if (companyIds !== undefined) await setContactCompanies(req.params.id, workspaceId, companyIds, { replaceGroupLinks: true })
 
       return prisma.contact.findUniqueOrThrow({ where: { id: req.params.id }, select: contactSelect })
     },
@@ -352,9 +352,48 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         where: { id: req.params.id },
         data: { ...rest, verified: true, cpf: cpfRes.cpf },
       })
-      if (companyIds !== undefined) await setContactCompanies(req.params.id, workspaceId, companyIds)
+      if (companyIds !== undefined) await setContactCompanies(req.params.id, workspaceId, companyIds, { replaceGroupLinks: true })
 
       return prisma.contact.findUniqueOrThrow({ where: { id: req.params.id }, select: contactSelect })
+    },
+  )
+
+  // ── Vincular contato a uma empresa (N:N — adiciona, não substitui) ────────
+  app.post(
+    '/contacts/:id/companies',
+    {
+      onRequest: [app.authenticate, requirePerm('contacts.edit')],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ companyId: z.string() }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const [contact, company] = await Promise.all([
+        prisma.contact.findFirst({ where: { id: req.params.id, workspaceId }, select: { id: true } }),
+        prisma.company.findFirst({ where: { id: req.body.companyId, workspaceId }, select: { id: true } }),
+      ])
+      if (!contact) return reply.notFound('Contato não encontrado')
+      if (!company) return reply.badRequest('Empresa não encontrada')
+      await linkContactCompany(contact.id, company.id, 'MANUAL')
+      return { ok: true }
+    },
+  )
+
+  // ── Desvincular contato de UMA empresa específica (N:N) ───────────────────
+  app.delete(
+    '/contacts/:id/companies/:companyId',
+    {
+      onRequest: [app.authenticate, requirePerm('contacts.edit')],
+      schema: { params: z.object({ id: z.string(), companyId: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const contact = await prisma.contact.findFirst({ where: { id: req.params.id, workspaceId }, select: { id: true } })
+      if (!contact) return reply.notFound('Contato não encontrado')
+      await unlinkContactCompany(contact.id, req.params.companyId)
+      return reply.code(204).send()
     },
   )
 

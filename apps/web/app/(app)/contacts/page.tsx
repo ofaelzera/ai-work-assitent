@@ -103,10 +103,11 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
   const [email, setEmail]   = useState(contact?.email ?? '')
   const [notes, setNotes]   = useState(contact?.metadata?.notes ?? '')
   const [avatarUrl, setAvatarUrl] = useState(contact?.metadata?.avatarUrl ?? '')
-  // Vínculos de empresa N:N — separa os manuais (editáveis) dos derivados de grupo (read-only)
-  const initialManual = (contact?.companies ?? []).filter(c => c.source === 'MANUAL').map(c => c.company.id)
-  const groupLinks = (contact?.companies ?? []).filter(c => c.source === 'GROUP_SYNC')
-  const [companyIds, setCompanyIds] = useState<string[]>(initialManual)
+  // Vínculos de empresa N:N — todos editáveis (manuais e os automáticos por grupo).
+  // Guarda quais ids vieram de grupo só para marcar o chip como "auto".
+  const groupLinkedIds = new Set((contact?.companies ?? []).filter(c => c.source === 'GROUP_SYNC').map(c => c.company.id))
+  const initialCompanyIds = (contact?.companies ?? []).map(c => c.company.id)
+  const [companyIds, setCompanyIds] = useState<string[]>(initialCompanyIds)
   // Cadastro estendido (RF01)
   const [cpf, setCpf] = useState(contact?.cpf ?? '')
   const [birthDate, setBirthDate] = useState(contact?.birthDate ? contact.birthDate.slice(0, 10) : '')
@@ -203,8 +204,13 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
     })
   }
 
+  // Lookup que mescla as empresas do workspace com as que já vêm no próprio contato
+  // (garante que o chip renderiza mesmo se a empresa não estiver na lista carregada).
+  const companyById = new Map<string, Company>()
+  for (const c of companies) companyById.set(c.id, c)
+  for (const l of contact?.companies ?? []) if (!companyById.has(l.company.id)) companyById.set(l.company.id, l.company)
   const selectedCompanies = companyIds
-    .map(id => companies.find(c => c.id === id))
+    .map(id => companyById.get(id))
     .filter((c): c is Company => !!c)
 
   return (
@@ -336,6 +342,10 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
                       style={{ background: c.color }}>
                       <Building2 className="h-3 w-3" />
                       {c.name}
+                      {groupLinkedIds.has(c.id) && (
+                        <span title="Vínculo automático por grupo de WhatsApp"
+                          className="text-[9px] uppercase font-bold bg-white/25 rounded px-1 leading-tight">auto</span>
+                      )}
                       <button type="button" onClick={() => removeCompany(c.id)} title="Remover" className="ml-0.5 hover:opacity-70">
                         <X className="h-3 w-3" />
                       </button>
@@ -352,10 +362,10 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
-              {groupLinks.length > 0 && (
+              {[...groupLinkedIds].some(id => companyIds.includes(id)) && (
                 <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-                  <Link2Off className="h-3 w-3" />
-                  {groupLinks.length} vínculo(s) automático(s) por grupo de WhatsApp: {groupLinks.map(g => g.company.name).join(', ')}
+                  <Link2Off className="h-3 w-3 shrink-0" />
+                  Empresas marcadas como <b>auto</b> vêm de grupos de WhatsApp. Se o contato ainda for membro do grupo, o vínculo pode voltar na próxima sincronização.
                 </p>
               )}
             </div>

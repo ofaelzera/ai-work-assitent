@@ -378,7 +378,8 @@ export function startIngestWhatsappWorker() {
 
       // RF04 (gancho leve): se a mensagem é de um grupo vinculado a uma empresa,
       // associa o remetente à empresa (N:N, source=GROUP_SYNC). Idempotente.
-      if (isGroup && conversation.companyId) {
+      // Só contatos com número real (PN) — LID não vincula.
+      if (isGroup && conversation.companyId && contact.phoneType === 'PN' && contact.phone) {
         await linkContactCompany(contact.id, conversation.companyId, 'GROUP_SYNC').catch((err) =>
           logger.warn({ err, contactId: contact.id, companyId: conversation.companyId }, 'Falha ao vincular contato à empresa do grupo'),
         )

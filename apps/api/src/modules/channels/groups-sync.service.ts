@@ -67,9 +67,10 @@ export async function refreshGroupsCache(channelId: string): Promise<any[]> {
 }
 
 /**
- * Resolve um participante de grupo (JID) num contato, criando-o como NÃO verificado
- * (RF02) se ainda não existir. Reusa a mesma estratégia PN→LID do sync de mensagens.
- * Retorna o id do contato ou null se o JID for irreconhecível.
+ * Resolve um participante de grupo (JID) num contato com NÚMERO REAL (PN), criando-o
+ * como NÃO verificado (RF02) se ainda não existir.
+ * Participantes LID (sem número real) NÃO são vinculados a empresa — retorna null.
+ * Retorna o id do contato ou null se for LID/irreconhecível.
  */
 async function resolveParticipantContact(workspaceId: string, jid: string): Promise<string | null> {
   const parsed = parseJid(jid)
@@ -85,18 +86,7 @@ async function resolveParticipantContact(workspaceId: string, jid: string): Prom
     })
     return created.id
   }
-  if (parsed.kind === 'lid' && parsed.lid) {
-    const existing = await prisma.contact.findFirst({
-      where: { workspaceId, lid: parsed.lid, mergedIntoId: null },
-      select: { id: true },
-    })
-    if (existing) return existing.id
-    const created = await prisma.contact.create({
-      data: { workspaceId, lid: parsed.lid, phoneType: 'LID', verified: false },
-      select: { id: true },
-    })
-    return created.id
-  }
+  // LID e desconhecidos não viram vínculo de empresa (só contatos com número real).
   return null
 }
 
