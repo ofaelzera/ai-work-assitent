@@ -8,6 +8,7 @@ import { Users, Plus, Trash2, Pencil, X, ShieldCheck, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 interface WorkspaceUser {
   id: string
@@ -175,6 +176,7 @@ function UserModal({ onClose, onSave, isPending, editing }: UserModalProps) {
 
 export default function UsersPage() {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const { user: me } = useAuthStore()
   const isAdmin = me?.role === 'ADMIN'
 
@@ -326,7 +328,7 @@ export default function UsersPage() {
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
                           <button
-                            onClick={() => { if (confirm(`Remover "${u.name}"?`)) deleteMutation.mutate(u.id) }}
+                            onClick={async () => { if (await confirm({ title: 'Remover usuário', message: `Deseja realmente remover o usuário "${u.name}"?`, type: 'danger', confirmLabel: 'Remover' })) deleteMutation.mutate(u.id) }}
                             disabled={u.id === me?.sub}
                             className="p-1.5 rounded-lg hover:bg-accent text-destructive disabled:opacity-30"
                             title={u.id === me?.sub ? 'Não é possível remover a si mesmo' : 'Remover'}

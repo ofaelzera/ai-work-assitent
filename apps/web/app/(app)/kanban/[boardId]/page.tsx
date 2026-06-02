@@ -288,8 +288,8 @@ function KanbanColumn({
   }
 
   return (
-    <div ref={setColRef} style={style} className="flex flex-col w-[300px] shrink-0 bg-accent/20 dark:bg-accent/10 backdrop-blur-sm border border-border/50 rounded-2xl overflow-hidden">
-      <div className="flex items-center justify-between gap-1 px-4 py-3 border-b border-border/30 bg-card/30">
+    <div ref={setColRef} style={style} className="flex flex-col w-[300px] shrink-0 bg-accent/20 dark:bg-accent/10 backdrop-blur-sm border border-border/50 rounded-2xl">
+      <div className="flex items-center justify-between gap-1 px-4 py-3 border-b border-border/30 bg-card/30 rounded-t-2xl">
         {/* Handle pra arrastar coluna */}
         <button
           {...colAttrs}
@@ -359,21 +359,24 @@ function KanbanColumn({
                 <MoreVertical className="h-4 w-4" />
               </button>
               {menuOpen && (
-                <div className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-40">
+                <div 
+                  onMouseDown={(e) => e.preventDefault()}
+                  className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-40"
+                >
                   <button
-                    onMouseDown={() => { setEditing(true); setMenuOpen(false) }}
+                    onClick={() => { setEditing(true); setMenuOpen(false) }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
                     <Pencil className="h-3 w-3" /> Renomear
                   </button>
                   <button
-                    onMouseDown={() => { toggleDone.mutate(!column.isDone); setMenuOpen(false) }}
+                    onClick={() => { toggleDone.mutate(!column.isDone); setMenuOpen(false) }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left border-t">
                     {column.isDone
                       ? <><Circle className="h-3 w-3" /> Não é mais conclusão</>
                       : <><CheckCircle2 className="h-3 w-3 text-emerald-500" /> Marcar como concluído</>}
                   </button>
                   <button
-                    onMouseDown={async () => {
+                    onClick={async () => {
                       setMenuOpen(false)
                       if (column.cards.length === 0) {
                         const ok = await confirm({
@@ -619,14 +622,17 @@ function BoardActions({ boardId, boardName, isOwner }: { boardId: string; boardN
         <MoreVertical className="h-4 w-4" />
       </button>
       {menuOpen && (
-        <div className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-44">
+        <div 
+          onMouseDown={(e) => e.preventDefault()}
+          className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-44"
+        >
           <button
-            onMouseDown={handleRename}
+            onClick={handleRename}
             className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
             <Pencil className="h-3 w-3" /> Renomear board
           </button>
           <button
-            onMouseDown={handleDelete}
+            onClick={handleDelete}
             className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-destructive/10 text-destructive text-left border-t">
             <Trash2 className="h-3 w-3" /> Remover board
           </button>

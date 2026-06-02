@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Zap, Plus, Trash2, Save, X, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 interface QuickReply {
   id: string
@@ -20,6 +21,7 @@ const EMPTY_FORM = { shortcut: '', title: '', body: '' }
 
 export default function QuickRepliesPage() {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(EMPTY_FORM)
@@ -226,8 +228,8 @@ export default function QuickRepliesPage() {
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
                   <button
-                    onClick={() => {
-                      if (confirm(`Remover /${qr.shortcut}?`)) deleteMutation.mutate(qr.id)
+                    onClick={async () => {
+                      if (await confirm({ title: 'Remover resposta rápida', message: `Deseja realmente remover o atalho /${qr.shortcut}?`, type: 'danger', confirmLabel: 'Remover' })) deleteMutation.mutate(qr.id)
                     }}
                     className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
                     title="Remover"

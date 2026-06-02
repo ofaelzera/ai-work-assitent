@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Bot, Plus, Pencil, Trash2, Play, X, ChevronDown, ChevronUp, Zap, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type TriggerType = 'message.received' | 'conversation.created' | 'cron' | 'manual'
 
@@ -65,6 +66,7 @@ const CHANNEL_TYPES = ['WHATSAPP', 'IMAP_SMTP', 'GMAIL', 'TELEGRAM', 'INSTAGRAM'
 
 export default function AgentsPage() {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Agent | null>(null)
   const [form, setForm] = useState(DEFAULT_FORM)
@@ -431,7 +433,7 @@ export default function AgentsPage() {
                 <button onClick={() => handleEdit(agent)} className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground">
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
-                <button onClick={() => { if (confirm(`Remover "${agent.name}"?`)) deleteMutation.mutate(agent.id) }}
+                <button onClick={async () => { if (await confirm({ title: 'Remover agente', message: `Deseja realmente remover "${agent.name}"?`, type: 'danger', confirmLabel: 'Remover' })) deleteMutation.mutate(agent.id) }}
                   className="p-1.5 rounded-lg hover:bg-accent text-destructive">
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>

@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Sparkles, Save, KeyRound, CheckCircle2, XCircle, Loader2, Zap, Plus, Trash2, Star, Pencil, X } from 'lucide-react'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 import { AdminSection } from '@/components/admin/AdminSection'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type ProviderName = 'gemini' | 'openrouter' | 'anthropic' | 'openai'
 
@@ -191,6 +192,7 @@ function ModelEditor({
 // ─── Linha de um modelo cadastrado ───────────────────────────────────────────
 function ModelRow({ model, onEdit }: { model: AiModel; onEdit: () => void }) {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
 
   const mutate = (body: object) =>
@@ -263,7 +265,7 @@ function ModelRow({ model, onEdit }: { model: AiModel; onEdit: () => void }) {
           <button onClick={onEdit} title="Editar" className="rounded-md p-1.5 hover:bg-muted text-muted-foreground hover:text-foreground">
             <Pencil className="h-4 w-4" />
           </button>
-          <button onClick={() => remove.mutate()} disabled={remove.isPending} title="Remover" className="rounded-md p-1.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive">
+          <button onClick={async () => { if (await confirm({ title: 'Remover modelo', message: `Deseja realmente remover o modelo "${model.label}"?`, type: 'danger', confirmLabel: 'Remover' })) remove.mutate() }} disabled={remove.isPending} title="Remover" className="rounded-md p-1.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive">
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
