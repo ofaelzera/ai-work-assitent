@@ -1393,6 +1393,31 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
     setLastSSEEvent(event)
 
     if (event.type === 'message.received' && (event.payload as any)?.conversationId === conversationId) {
+      const payload = event.payload as any
+      queryClient.setQueryData(['conversation', conversationId], (old: any) => {
+        if (!old?.messages) return old
+        if (old.messages.some((m: any) => m.id === payload.messageId || (payload.conversationExternalId && m.externalId === payload.conversationExternalId))) return old
+        
+        return {
+          ...old,
+          messages: [
+            ...old.messages,
+            {
+              id: payload.messageId,
+              body: payload.body,
+              direction: payload.direction,
+              sentAt: new Date().toISOString(),
+              externalId: payload.conversationExternalId,
+              fromContactId: payload.contactId,
+              deliveryStatus: null,
+            }
+          ],
+          conversation: {
+            ...old.conversation,
+            lastMessageAt: new Date().toISOString()
+          }
+        }
+      })
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
     }

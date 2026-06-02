@@ -656,6 +656,29 @@ export default function EmailView({ conversationId, conv, messages, isLoading }:
 
   useSSE((event) => {
     if (event.type === 'message.received' && (event.payload as any)?.conversationId === conversationId) {
+      const payload = event.payload as any
+      queryClient.setQueryData(['conversation', conversationId], (old: any) => {
+        if (!old?.messages) return old
+        if (old.messages.some((m: any) => m.id === payload.messageId)) return old
+        
+        return {
+          ...old,
+          messages: [
+            ...old.messages,
+            {
+              id: payload.messageId,
+              body: payload.body,
+              direction: payload.direction,
+              sentAt: new Date().toISOString(),
+              fromContactId: payload.contactId,
+            }
+          ],
+          conversation: {
+            ...old.conversation,
+            lastMessageAt: new Date().toISOString()
+          }
+        }
+      })
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
     }
