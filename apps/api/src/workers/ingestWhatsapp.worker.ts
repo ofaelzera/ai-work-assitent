@@ -13,6 +13,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { parseJid } from '../lib/phone.js'
 import { mergeContacts } from '../modules/contacts/merge.service.js'
+import { linkContactCompany } from '../modules/contacts/contact-company.service.js'
 import { sendSystemMessage } from '../lib/systemMessages.js'
 import { dedupChatConversations } from '../modules/messages/dedup.service.js'
 import { routeNewConversation } from '../modules/messages/routing.service.js'
@@ -373,6 +374,14 @@ export function startIngestWhatsappWorker() {
         if (!conversation.archived && !msgFromMe) {
           await prisma.conversationRead.deleteMany({ where: { conversationId: conversation.id } })
         }
+      }
+
+      // RF04 (gancho leve): se a mensagem é de um grupo vinculado a uma empresa,
+      // associa o remetente à empresa (N:N, source=GROUP_SYNC). Idempotente.
+      if (isGroup && conversation.companyId) {
+        await linkContactCompany(contact.id, conversation.companyId, 'GROUP_SYNC').catch((err) =>
+          logger.warn({ err, contactId: contact.id, companyId: conversation.companyId }, 'Falha ao vincular contato à empresa do grupo'),
+        )
       }
 
       // Upsert message (idempotente pelo externalId)

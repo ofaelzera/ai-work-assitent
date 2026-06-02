@@ -178,17 +178,36 @@ model Contact {
   lid          String? // Linked ID opaco do WhatsApp (quando phoneType=LID)
   email        String?
   metadata     Json?
+  // Empresa "principal" denormalizada (só p/ exibição rápida e filtros legados).
+  // FONTE DE VERDADE da associação N:N é ContactCompany — mantido em sincronia por
+  // setContactCompanies()/linkContactCompany(). Não usar para regras de pertencimento.
   companyId    String?
   mergedIntoId String? // aponta para o contato primário ao mesclar
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
 
-  workspace      Workspace       @relation(fields: [workspaceId], references: [id])
-  company        Company?        @relation(fields: [companyId], references: [id])
+  // ── Cadastro estendido (RF01) ──────────────────────────────────────────────
+  cpf       String? // só dígitos (11 chars); validado quando informado (RF06)
+  birthDate DateTime? // data de nascimento (apenas data)
+  verified  Boolean   @default(false) // RF02: sync=false, cadastro manual=true
+
+  // Endereço estruturado (RF01)
+  addrStreet     String? // logradouro
+  addrNumber     String? // número
+  addrComplement String? // complemento
+  addrDistrict   String? // bairro
+  addrCity       String? // cidade
+  addrState      String? // estado (UF)
+  addrZip        String? // CEP
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id])
+  company        Company?         @relation(fields: [companyId], references: [id]) // empresa principal denormalizada
+  companies      ContactCompany[] // N:N (RF04) — fonte de verdade
   conversations  Conversation[]
   cards          Card[]
   cardLinks      CardContact[]
-  sentMessages   Message[]       @relation("MessageSender")
+  sentMessages   Message[]        @relation("MessageSender")
   tasks          Task[]
   calendarEvents CalendarEvent[]
 
@@ -196,6 +215,23 @@ model Contact {
   @@index([workspaceId, lid])
   @@index([workspaceId, email])
   @@index([workspaceId, companyId])
+  @@index([workspaceId, cpf])
+}
+
+// ─── Vínculo N:N Contato ↔ Empresa (RF04) ────────────────────────────────────
+// Um contato pode pertencer a múltiplas empresas. `source` distingue vínculo
+// criado manualmente (MANUAL) do derivado da sincronização de grupos (GROUP_SYNC).
+model ContactCompany {
+  contactId String
+  companyId String
+  source    String   @default("MANUAL") // MANUAL | GROUP_SYNC
+  createdAt DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, companyId])
+  @@index([companyId])
 }
 
 // ─── Companies ───────────────────────────────────────────────────────────────
@@ -226,10 +262,11 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace     Workspace      @relation(fields: [workspaceId], references: [id])
-  contacts      Contact[]
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id])
+  contacts      Contact[] // DEPRECATED — relação N:1 antiga (ver Contact.companyId)
+  contactLinks  ContactCompany[] // N:N (RF04)
   conversations Conversation[]
-  cards         Card[]         @relation("CardCompany")
+  cards         Card[]           @relation("CardCompany")
 
   @@index([workspaceId])
 }

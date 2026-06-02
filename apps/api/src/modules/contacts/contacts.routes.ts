@@ -1,12 +1,73 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
+import { isValidCpf, normalizeCpf } from '@aiwa/shared'
 import { prisma } from '../../lib/prisma.js'
 import { parseJid } from '../../lib/phone.js'
 import { logger } from '../../lib/logger.js'
 import { mergeContacts } from './merge.service.js'
+import { setContactCompanies } from './contact-company.service.js'
 import { autoDedupContacts } from '../channels/sync.service.js'
 import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
 import { hasPermission, requirePerm } from '../../lib/acl.js'
+
+// Campos de cadastro estendido (RF01) aceitos em create/patch.
+const extendedContactFields = {
+  cpf: z.string().nullable().optional(),
+  birthDate: z.coerce.date().nullable().optional(),
+  addrStreet: z.string().nullable().optional(),
+  addrNumber: z.string().nullable().optional(),
+  addrComplement: z.string().nullable().optional(),
+  addrDistrict: z.string().nullable().optional(),
+  addrCity: z.string().nullable().optional(),
+  addrState: z.string().nullable().optional(),
+  addrZip: z.string().nullable().optional(),
+}
+
+// Select padrão de contato — inclui cadastro estendido e empresas (N:N).
+const contactSelect = {
+  id: true, name: true, phone: true, phoneType: true, lid: true, email: true,
+  metadata: true, verified: true, cpf: true, birthDate: true,
+  addrStreet: true, addrNumber: true, addrComplement: true, addrDistrict: true,
+  addrCity: true, addrState: true, addrZip: true,
+  companyId: true, // empresa principal denormalizada (compat com consumidores legados)
+  company: { select: { id: true, name: true, color: true } },
+  companies: { select: { source: true, company: { select: { id: true, name: true, color: true } } } },
+  _count: { select: { conversations: true } },
+} as const
+
+/**
+ * Valida CPF (RF06): formato válido + único entre contatos VERIFICADOS do workspace.
+ * Retorna o CPF normalizado (só dígitos) ou uma mensagem de erro.
+ * `willBeVerified` controla a checagem de unicidade (contatos não verificados
+ * podem repetir CPF temporariamente).
+ */
+async function checkCpf(
+  workspaceId: string,
+  rawCpf: string | null | undefined,
+  willBeVerified: boolean,
+  excludeContactId?: string,
+): Promise<{ ok: true; cpf: string | null } | { ok: false; msg: string }> {
+  if (rawCpf === undefined) return { ok: true, cpf: null } // não mexeu no campo (tratado pelo caller)
+  if (rawCpf === null || rawCpf === '') return { ok: true, cpf: null }
+  const cpf = normalizeCpf(rawCpf)
+  if (!isValidCpf(cpf)) return { ok: false, msg: 'CPF inválido' }
+  if (willBeVerified) {
+    const dup = await prisma.contact.findFirst({
+      where: {
+        workspaceId, cpf, verified: true, mergedIntoId: null,
+        ...(excludeContactId && { id: { not: excludeContactId } }),
+      },
+      select: { id: true },
+    })
+    if (dup) return { ok: false, msg: 'Já existe um contato verificado com este CPF' }
+  }
+  return { ok: true, cpf }
+}
+
+// Coerção booleana de query string. NÃO usar z.coerce.boolean(): Boolean("false") === true.
+const zBool = z
+  .preprocess((v) => v === true || v === 'true' || v === '1', z.boolean())
+  .optional()
 
 export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
   // ── Listar / buscar contatos ───────────────────────────────────────────────
@@ -18,8 +79,9 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         querystring: z.object({
           q: z.string().optional(),
           companyId: z.string().optional(),
-          excludeLid: z.coerce.boolean().optional(),
-          hasPhone: z.coerce.boolean().optional(),
+          excludeLid: zBool,
+          hasPhone: zBool,
+          includeUnverified: zBool, // RF03
           limit: z.coerce.number().default(50),
           offset: z.coerce.number().default(0),
         }),
@@ -27,7 +89,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req) => {
       const { workspaceId, sub: userId } = req.user
-      const { q, companyId, excludeLid, hasPhone, limit, offset } = req.query
+      const { q, companyId, excludeLid, hasPhone, includeUnverified, limit, offset } = req.query
 
       // "Sem número real": contato sem telefone utilizável no WhatsApp.
       // Cobre os 3 casos que aparecem na base:
@@ -50,46 +112,49 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // Filtro de visibilidade por role:
       //  • Quem tem `contacts.viewAll` (ADMIN/Supervisor) → vê todos
-      //  • Sem essa permissão → vê apenas contatos com quem tem conversa atribuída a ele
-      const canViewAll = await hasPermission(req.user, 'contacts.viewAll')
-      const visibilityFilter = canViewAll ? {} : {
-        conversations: { some: { assigneeId: userId } },
-      }
+      //  • Quem tem `contacts.viewVerified` → vê também todos os contatos verificados (clientes)
+      //  • Sem nenhuma das duas → vê apenas contatos com quem tem conversa atribuída a ele
+      const [canViewAll, canViewVerified] = await Promise.all([
+        hasPermission(req.user, 'contacts.viewAll'),
+        hasPermission(req.user, 'contacts.viewVerified'),
+      ])
+      const visibilityOr = canViewAll ? null : [
+        { conversations: { some: { assigneeId: userId } } },
+        ...(canViewVerified ? [{ verified: true }] : []),
+      ]
 
-      const baseWhere = {
-        workspaceId,
-        mergedIntoId: null,
-        ...requireRealPhone,
-        ...visibilityFilter,
-        ...(companyId && { companyId }),
-        ...(q && {
+      // Cláusulas que carregam `OR` próprio (visibilidade e busca) vão num `AND`
+      // para não colidirem entre si (Prisma só aceita um `OR` por nível).
+      const andClauses: Record<string, unknown>[] = []
+      if (visibilityOr) andClauses.push({ OR: visibilityOr })
+      if (q) {
+        andClauses.push({
           OR: [
             { name: { contains: q } },
             { phone: { contains: q } },
             { email: { contains: q } },
             { lid: { contains: q } },
           ],
-        }),
+        })
       }
 
-      const [contacts, hiddenCount] = await Promise.all([
+      const baseWhere = {
+        workspaceId,
+        mergedIntoId: null,
+        ...requireRealPhone,
+        // RF03: por padrão esconde contatos não verificados
+        ...(!includeUnverified && { verified: true }),
+        ...(companyId && { companies: { some: { companyId } } }),
+        ...(andClauses.length && { AND: andClauses }),
+      }
+
+      const [contacts, hiddenCount, unverifiedCount] = await Promise.all([
         prisma.contact.findMany({
           where: baseWhere,
           orderBy: [{ name: 'asc' }, { createdAt: 'desc' }],
           take: limit,
           skip: offset,
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            phoneType: true,
-            lid: true,
-            email: true,
-            metadata: true,
-            companyId: true,
-            company: { select: { id: true, name: true, color: true } },
-            _count: { select: { conversations: true } },
-          },
+          select: contactSelect,
         }),
         // Conta quantos contatos "sem número" estão ocultos (só quando o filtro
         // está ativo e sem busca textual). Mesma definição usada no filtro acima.
@@ -98,9 +163,15 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
               where: { workspaceId, mergedIntoId: null, ...noRealPhone },
             })
           : Promise.resolve(0),
+        // RF03: quantos contatos não verificados estão ocultos na visão padrão
+        !includeUnverified && !q
+          ? prisma.contact.count({
+              where: { workspaceId, mergedIntoId: null, verified: false },
+            })
+          : Promise.resolve(0),
       ])
 
-      return { items: contacts, hiddenCount }
+      return { items: contacts, hiddenCount, unverifiedCount }
     },
   )
 
@@ -114,7 +185,8 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
           name: z.string().optional(),
           phone: z.string().optional(),
           email: z.string().email().optional(),
-          companyId: z.string().optional(),
+          companyIds: z.array(z.string()).optional(), // N:N (RF04)
+          ...extendedContactFields,
         }),
       },
     },
@@ -123,7 +195,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!(await hasPermission(req.user, 'contacts.edit'))) {
         return reply.forbidden('Sem permissão pra criar contatos')
       }
-      const { name, phone, email, companyId } = req.body
+      const { name, phone, email, companyIds, cpf, birthDate, ...addr } = req.body
 
       // Phone manualmente digitado é sempre PN — se o usuário digitar lixo, parseJid vai retornar 'unknown'
       let normalizedPhone: string | undefined
@@ -136,15 +208,26 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         }
       }
 
+      // RF02: contato criado manualmente nasce verificado → RF06 valida CPF
+      const cpfRes = await checkCpf(workspaceId, cpf, true)
+      if (!cpfRes.ok) return reply.badRequest(cpfRes.msg)
+
       const contact = await prisma.contact.create({
-        data: { workspaceId, name, phone: normalizedPhone, phoneType, email, companyId },
-        select: { id: true, name: true, phone: true, phoneType: true, lid: true, email: true, companyId: true, createdAt: true },
+        data: {
+          workspaceId, name, phone: normalizedPhone, phoneType, email,
+          verified: true, cpf: cpfRes.cpf, birthDate: birthDate ?? null, ...addr,
+        },
+        select: { id: true },
       })
-      return reply.code(201).send(contact)
+      if (companyIds?.length) await setContactCompanies(contact.id, workspaceId, companyIds)
+
+      return reply.code(201).send(
+        await prisma.contact.findUniqueOrThrow({ where: { id: contact.id }, select: contactSelect }),
+      )
     },
   )
 
-  // ── Atualizar contato (inclui desvincular empresa com companyId: null) ────
+  // ── Atualizar contato (cadastro estendido, empresas N:N, verificação) ─────
   app.patch(
     '/contacts/:id',
     {
@@ -155,8 +238,10 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
           name: z.string().optional(),
           phone: z.string().optional(),
           email: z.string().email().optional().nullable(),
-          companyId: z.string().nullable().optional(), // null = remove da empresa
+          companyIds: z.array(z.string()).optional(), // N:N — substitui os vínculos MANUAIS
           metadata: z.record(z.unknown()).optional(),
+          verified: z.boolean().optional(), // RF05: promoção a verificado
+          ...extendedContactFields,
         }),
       },
     },
@@ -167,11 +252,24 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
       const current = await prisma.contact.findFirstOrThrow({ where: { id: req.params.id, workspaceId } })
 
-      const { phone, companyId, ...rest } = req.body
+      const { phone, companyIds, cpf, verified, ...rest } = req.body
 
-      // Build update data carefully to handle nullable relation
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data: Record<string, any> = { ...rest }
+
+      // RF05/RF06: estado de verificação resultante define a checagem de unicidade de CPF
+      const willBeVerified = verified ?? current.verified
+      if (verified !== undefined) data.verified = verified
+      if (cpf !== undefined) {
+        const cpfRes = await checkCpf(workspaceId, cpf, willBeVerified, current.id)
+        if (!cpfRes.ok) return reply.badRequest(cpfRes.msg)
+        data.cpf = cpfRes.cpf
+      } else if (verified === true && !current.verified && current.cpf) {
+        // Promovendo a verificado sem mexer no CPF: garante unicidade do CPF já existente
+        const cpfRes = await checkCpf(workspaceId, current.cpf, true, current.id)
+        if (!cpfRes.ok) return reply.badRequest(cpfRes.msg)
+      }
+
       if (phone !== undefined) {
         if (phone === '' || phone === null) {
           data.phone = null
@@ -188,33 +286,61 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
               where: { workspaceId, phone: parsed.phone, mergedIntoId: null, id: { not: current.id } },
             })
             if (otherPn) {
+              if (companyIds !== undefined) await setContactCompanies(otherPn.id, workspaceId, companyIds)
               await mergeContacts(current.id, otherPn.id)
-              return prisma.contact.findUniqueOrThrow({
-                where: { id: otherPn.id },
-                select: {
-                  id: true, name: true, phone: true, phoneType: true, lid: true, email: true,
-                  companyId: true, metadata: true, updatedAt: true,
-                  company: { select: { id: true, name: true, color: true } },
-                },
-              })
+              return prisma.contact.findUniqueOrThrow({ where: { id: otherPn.id }, select: contactSelect })
             }
           } else {
             data.phone = phone.replace(/\D/g, '') || null
           }
         }
       }
-      // companyId: null → desvincula empresa; string → vincula; undefined → mantém
-      if (companyId !== undefined) data.companyId = companyId ?? null
 
-      return prisma.contact.update({
+      await prisma.contact.update({ where: { id: req.params.id }, data })
+      if (companyIds !== undefined) await setContactCompanies(req.params.id, workspaceId, companyIds)
+
+      return prisma.contact.findUniqueOrThrow({ where: { id: req.params.id }, select: contactSelect })
+    },
+  )
+
+  // ── Promover contato a verificado (RF05) ─────────────────────────────────
+  // Atalho dedicado: aplica edição de cadastro opcional e marca verified=true,
+  // com as mesmas checagens de CPF (RF06). Reaproveita a mesma lógica do PATCH.
+  app.post(
+    '/contacts/:id/verify',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z
+          .object({
+            name: z.string().optional(),
+            email: z.string().email().optional().nullable(),
+            companyIds: z.array(z.string()).optional(),
+            ...extendedContactFields,
+          })
+          .optional(),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      if (!(await hasPermission(req.user, 'contacts.edit'))) {
+        return reply.forbidden('Sem permissão pra editar contatos')
+      }
+      const current = await prisma.contact.findFirstOrThrow({ where: { id: req.params.id, workspaceId } })
+      const { companyIds, cpf, ...rest } = req.body ?? {}
+
+      const effectiveCpf = cpf !== undefined ? cpf : current.cpf
+      const cpfRes = await checkCpf(workspaceId, effectiveCpf, true, current.id)
+      if (!cpfRes.ok) return reply.badRequest(cpfRes.msg)
+
+      await prisma.contact.update({
         where: { id: req.params.id },
-        data,
-        select: {
-          id: true, name: true, phone: true, phoneType: true, lid: true, email: true,
-          companyId: true, metadata: true, updatedAt: true,
-          company: { select: { id: true, name: true, color: true } },
-        },
+        data: { ...rest, verified: true, cpf: cpfRes.cpf },
       })
+      if (companyIds !== undefined) await setContactCompanies(req.params.id, workspaceId, companyIds)
+
+      return prisma.contact.findUniqueOrThrow({ where: { id: req.params.id }, select: contactSelect })
     },
   )
 

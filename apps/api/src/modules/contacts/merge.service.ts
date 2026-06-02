@@ -27,6 +27,17 @@ export async function mergeContacts(dupId: string, primaryId: string): Promise<v
   await prisma.message.updateMany({ where: { fromContactId: dup.id }, data: { fromContactId: primary.id } })
   await prisma.card.updateMany({ where: { contactId: dup.id }, data: { contactId: primary.id } })
 
+  // Migra vínculos N:N de empresa (ContactCompany) do dup para o primário, sem duplicar.
+  const dupLinks = await prisma.contactCompany.findMany({ where: { contactId: dup.id } })
+  for (const link of dupLinks) {
+    await prisma.contactCompany.upsert({
+      where: { contactId_companyId: { contactId: primary.id, companyId: link.companyId } },
+      update: {},
+      create: { contactId: primary.id, companyId: link.companyId, source: link.source },
+    })
+  }
+  await prisma.contactCompany.deleteMany({ where: { contactId: dup.id } })
+
   // ── Conversations ────────────────────────────────────────────────────────
   // 1) Move todas as conversas do dup pro primary
   // 2) Para cada (channelId, isGroup) duplicado entre as conversas resultantes,

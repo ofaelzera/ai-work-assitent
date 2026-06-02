@@ -237,11 +237,11 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
               { externalId: { contains: q } },
             ],
           }),
-          // Filtro por empresa: pega conversas com vínculo direto OU via contato
+          // Filtro por empresa: pega conversas com vínculo direto OU via contato (N:N)
           ...(companyId && {
             OR: [
               { companyId },
-              { contact: { companyId } },
+              { contact: { companies: { some: { companyId } } } },
             ],
           }),
           ...(cursor && { lastMessageAt: { lt: new Date(cursor) } }),

@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { prisma } from '../../lib/prisma.js'
 import { hasPermission, requirePerm } from '../../lib/acl.js'
+import { setContactCompanies } from './contact-company.service.js'
 
 // Campos comuns de cadastro/edição (não inclui logoUrl — vem do upload)
 const companyBodyFields = {
@@ -30,14 +31,15 @@ export const companiesRoutes: FastifyPluginAsyncZod = async (app) => {
         workspaceId,
         ...(!canViewAll && {
           OR: [
-            { contacts: { some: { conversations: { some: { assigneeId: userId } } } } },
+            { contactLinks: { some: { contact: { conversations: { some: { assigneeId: userId } } } } } },
             { conversations: { some: { assigneeId: userId } } },
           ],
         }),
       },
       orderBy: { name: 'asc' },
       include: {
-        _count: { select: { contacts: true, conversations: true } },
+        // contagem de contatos via junção N:N (RF04); expõe como `contacts` p/ compat de UI
+        _count: { select: { contactLinks: true, conversations: true } },
       },
     })
   })
@@ -173,6 +175,8 @@ export const companiesRoutes: FastifyPluginAsyncZod = async (app) => {
   )
 
   // Atribuir empresa a contato (precisa permissão de editar contato)
+  // Mantém a semântica antiga (uma empresa principal) mas grava no vínculo N:N:
+  // substitui os vínculos MANUAIS por [companyId] (ou limpa se null).
   app.patch(
     '/contacts/:id/company',
     {
@@ -183,9 +187,11 @@ export const companiesRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (req) => {
-      return prisma.contact.update({
+      const { workspaceId } = req.user
+      await prisma.contact.findFirstOrThrow({ where: { id: req.params.id, workspaceId } })
+      await setContactCompanies(req.params.id, workspaceId, req.body.companyId ? [req.body.companyId] : [])
+      return prisma.contact.findUniqueOrThrow({
         where: { id: req.params.id },
-        data: { companyId: req.body.companyId },
         select: { id: true, companyId: true },
       })
     },

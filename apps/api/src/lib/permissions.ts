@@ -38,6 +38,7 @@ export const PERMISSIONS = {
   // ── Contatos & Empresas ───────────────────────────────────────────────────
   'contacts.view':             'Acessar o módulo de Contatos (sem isso, o menu nem aparece)',
   'contacts.viewAll':          'Ver todos os contatos do workspace (não só os ligados a mim)',
+  'contacts.viewVerified':     'Ver todos os contatos verificados (clientes), mesmo sem conversa atribuída',
   'contacts.edit':             'Editar contatos',
   'contacts.delete':           'Deletar contatos',
   'companies.view':            'Acessar o módulo de Empresas (sem isso, o menu nem aparece)',
@@ -133,7 +134,7 @@ export const SYSTEM_ROLES: SystemRoleTemplate[] = [
     description: 'Atende conversas atribuídas a si; cria cards e edita contatos',
     permissions: [
       'cards.create', 'cards.edit',
-      'contacts.view', 'contacts.edit',
+      'contacts.view', 'contacts.viewVerified', 'contacts.edit',
       'conversations.assign', 'conversations.transferTeam',
       'teams.view',
       'calendar.view',

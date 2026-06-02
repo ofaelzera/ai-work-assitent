@@ -89,6 +89,7 @@ async function upsertWaSender(
               lid: sKnownLid,
               phoneType: 'PN',
               name: pushName || lidOnly.name,
+              verified: false, // RF02: contato vindo da sincronização nasce não verificado
             },
             select: { id: true, name: true },
           })
@@ -105,6 +106,7 @@ async function upsertWaSender(
           lid: sKnownLid,
           phoneType: 'PN',
           name: pushName || null,
+          verified: false, // RF02
         },
         select: { id: true, name: true },
       })
@@ -122,6 +124,7 @@ async function upsertWaSender(
           lid: sParsed.lid,
           phoneType: 'LID',
           name: pushName || null,
+          verified: false, // RF02
         },
         select: { id: true, name: true },
       })

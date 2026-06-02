@@ -4,17 +4,19 @@ import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { formatPhone, displayPhone, isInternalId, type PhoneType } from '@/lib/phone'
-import { maskPhone } from '@/lib/masks'
+import { maskPhone, maskCPF } from '@/lib/masks'
+import { isValidCpf } from '@aiwa/shared'
 import { toast } from 'sonner'
 import {
   Users, Search, Plus, Pencil, Trash2, X, Building2,
-  Phone, Mail, MessageSquare, GitMerge, Shuffle, Camera, Link2Off, Lock, EyeOff, Eye,
+  Phone, Mail, MessageSquare, GitMerge, Shuffle, Camera, Link2Off, Lock, EyeOff, Eye, BadgeCheck, ShieldQuestion,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/lib/usePermission'
 import { PermissionGate } from '@/components/PermissionGate'
 
 interface Company { id: string; name: string; color: string }
+interface ContactCompanyLink { source: 'MANUAL' | 'GROUP_SYNC'; company: Company }
 
 interface Contact {
   id: string
@@ -26,6 +28,17 @@ interface Contact {
   metadata?: { avatarUrl?: string; notes?: string } | null
   companyId: string | null
   company: Company | null
+  companies?: ContactCompanyLink[]
+  verified?: boolean
+  cpf?: string | null
+  birthDate?: string | null
+  addrStreet?: string | null
+  addrNumber?: string | null
+  addrComplement?: string | null
+  addrDistrict?: string | null
+  addrCity?: string | null
+  addrState?: string | null
+  addrZip?: string | null
   _count: { conversations: number }
 }
 
@@ -74,7 +87,11 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
   onClose: () => void
   onSave: (data: {
     name?: string; phone?: string; email?: string
-    companyId?: string | null; metadata?: Record<string, unknown>
+    companyIds?: string[]; metadata?: Record<string, unknown>
+    verified?: boolean
+    cpf?: string | null; birthDate?: string | null
+    addrStreet?: string | null; addrNumber?: string | null; addrComplement?: string | null
+    addrDistrict?: string | null; addrCity?: string | null; addrState?: string | null; addrZip?: string | null
   }) => void
   isPending: boolean
 }) {
@@ -86,9 +103,28 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
   const [email, setEmail]   = useState(contact?.email ?? '')
   const [notes, setNotes]   = useState(contact?.metadata?.notes ?? '')
   const [avatarUrl, setAvatarUrl] = useState(contact?.metadata?.avatarUrl ?? '')
-  const [companyId, setCompanyId] = useState<string | null | undefined>(contact?.companyId ?? undefined)
+  // Vínculos de empresa N:N — separa os manuais (editáveis) dos derivados de grupo (read-only)
+  const initialManual = (contact?.companies ?? []).filter(c => c.source === 'MANUAL').map(c => c.company.id)
+  const groupLinks = (contact?.companies ?? []).filter(c => c.source === 'GROUP_SYNC')
+  const [companyIds, setCompanyIds] = useState<string[]>(initialManual)
+  // Cadastro estendido (RF01)
+  const [cpf, setCpf] = useState(contact?.cpf ?? '')
+  const [birthDate, setBirthDate] = useState(contact?.birthDate ? contact.birthDate.slice(0, 10) : '')
+  const [addrStreet, setAddrStreet] = useState(contact?.addrStreet ?? '')
+  const [addrNumber, setAddrNumber] = useState(contact?.addrNumber ?? '')
+  const [addrComplement, setAddrComplement] = useState(contact?.addrComplement ?? '')
+  const [addrDistrict, setAddrDistrict] = useState(contact?.addrDistrict ?? '')
+  const [addrCity, setAddrCity] = useState(contact?.addrCity ?? '')
+  const [addrState, setAddrState] = useState(contact?.addrState ?? '')
+  const [addrZip, setAddrZip] = useState(contact?.addrZip ?? '')
   const [syncingAvatar, setSyncingAvatar] = useState(false)
   const avatarInputRef = useRef<HTMLInputElement>(null)
+
+  const isVerified = contact?.verified ?? (!contact) // novo contato manual nasce verificado
+  const cpfInvalid = cpf.replace(/\D/g, '').length > 0 && !isValidCpf(cpf)
+
+  const addCompany = (id: string) => { if (id && !companyIds.includes(id)) setCompanyIds([...companyIds, id]) }
+  const removeCompany = (id: string) => setCompanyIds(companyIds.filter(c => c !== id))
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -123,6 +159,7 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
   const hasContent  = !!(name || phone || email)
 
   function handleSave() {
+    if (cpfInvalid) { toast.error('CPF inválido'); return }
     const meta: Record<string, unknown> = { ...(contact?.metadata ?? {}) }
     if (notes) meta.notes = notes
     if (avatarUrl) meta.avatarUrl = avatarUrl
@@ -132,12 +169,43 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
       name:      name || undefined,
       phone:     phone || undefined,
       email:     email || undefined,
-      companyId: companyId,  // null = remove, undefined = mantém, string = vincula
+      companyIds,
       metadata:  Object.keys(meta).length ? meta : undefined,
+      cpf:       cpf ? cpf.replace(/\D/g, '') : null,
+      birthDate: birthDate || null,
+      addrStreet: addrStreet || null,
+      addrNumber: addrNumber || null,
+      addrComplement: addrComplement || null,
+      addrDistrict: addrDistrict || null,
+      addrCity: addrCity || null,
+      addrState: addrState || null,
+      addrZip: addrZip || null,
     })
   }
 
-  const selectedCompany = companies.find(c => c.id === companyId)
+  // Promove contato não verificado a verificado (RF05)
+  function handleVerify() {
+    if (cpfInvalid) { toast.error('CPF inválido'); return }
+    onSave({
+      verified: true,
+      name: name || undefined,
+      email: email || undefined,
+      companyIds,
+      cpf: cpf ? cpf.replace(/\D/g, '') : null,
+      birthDate: birthDate || null,
+      addrStreet: addrStreet || null,
+      addrNumber: addrNumber || null,
+      addrComplement: addrComplement || null,
+      addrDistrict: addrDistrict || null,
+      addrCity: addrCity || null,
+      addrState: addrState || null,
+      addrZip: addrZip || null,
+    })
+  }
+
+  const selectedCompanies = companyIds
+    .map(id => companies.find(c => c.id === id))
+    .filter((c): c is Company => !!c)
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
@@ -188,14 +256,26 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
               <p className="text-xs text-muted-foreground mt-0.5">
                 {contact ? 'Editar informações do contato' : 'Novo contato'}
               </p>
-              {selectedCompany && (
-                <span
-                  className="inline-flex items-center gap-1 mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full text-white"
-                  style={{ background: selectedCompany.color }}>
-                  <Building2 className="h-2.5 w-2.5" />
-                  {selectedCompany.name}
+              <div className="flex items-center gap-1 mt-1 flex-wrap">
+                {/* Status de verificação (RF02/RF05) */}
+                <span className={cn(
+                  'inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full',
+                  isVerified
+                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                    : 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400',
+                )}>
+                  {isVerified ? <BadgeCheck className="h-2.5 w-2.5" /> : <ShieldQuestion className="h-2.5 w-2.5" />}
+                  {isVerified ? 'Verificado' : 'Não verificado'}
                 </span>
-              )}
+                {selectedCompanies.map(c => (
+                  <span key={c.id}
+                    className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full text-white"
+                    style={{ background: c.color }}>
+                    <Building2 className="h-2.5 w-2.5" />
+                    {c.name}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -223,34 +303,98 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
             </p>
           )}
 
-          <Field label="Email">
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-              placeholder="email@exemplo.com"
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Email">
+              <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                placeholder="email@exemplo.com"
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+            </Field>
+            <Field label="CPF">
+              <input value={maskCPF(cpf)} onChange={e => setCpf(e.target.value.replace(/\D/g, ''))}
+                placeholder="000.000.000-00"
+                className={cn(
+                  'w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40',
+                  cpfInvalid && 'border-red-400 focus:ring-red-300',
+                )} />
+              {cpfInvalid && <p className="text-[11px] text-red-500 mt-0.5">CPF inválido</p>}
+            </Field>
+          </div>
+
+          <Field label="Data de nascimento">
+            <input type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)}
               className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
           </Field>
 
-          {/* Empresa */}
-          <Field label="Empresa">
-            <div className="flex gap-2">
+          {/* Empresas (N:N) */}
+          <Field label="Empresas">
+            <div className="space-y-2">
+              {selectedCompanies.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedCompanies.map(c => (
+                    <span key={c.id}
+                      className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full text-white"
+                      style={{ background: c.color }}>
+                      <Building2 className="h-3 w-3" />
+                      {c.name}
+                      <button type="button" onClick={() => removeCompany(c.id)} title="Remover" className="ml-0.5 hover:opacity-70">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <select
-                value={companyId ?? ''}
-                onChange={e => setCompanyId(e.target.value || null)}
-                className="flex-1 rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
-                <option value="">Sem empresa</option>
-                {companies.map(c => (
+                value=""
+                onChange={e => { addCompany(e.target.value); e.target.value = '' }}
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
+                <option value="">+ Adicionar empresa…</option>
+                {companies.filter(c => !companyIds.includes(c.id)).map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
-              {companyId && (
-                <button
-                  type="button"
-                  onClick={() => setCompanyId(null)}
-                  title="Remover empresa"
-                  className="p-2 rounded-lg border hover:bg-red-50 hover:border-red-200 hover:text-red-500 dark:hover:bg-red-950/20 transition-colors text-muted-foreground">
-                  <Link2Off className="h-4 w-4" />
-                </button>
+              {groupLinks.length > 0 && (
+                <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                  <Link2Off className="h-3 w-3" />
+                  {groupLinks.length} vínculo(s) automático(s) por grupo de WhatsApp: {groupLinks.map(g => g.company.name).join(', ')}
+                </p>
               )}
             </div>
+          </Field>
+
+          {/* Endereço (RF01) */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2"><Field label="Logradouro">
+              <input value={addrStreet} onChange={e => setAddrStreet(e.target.value)} placeholder="Rua/Av."
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+            </Field></div>
+            <Field label="Número">
+              <input value={addrNumber} onChange={e => setAddrNumber(e.target.value)} placeholder="123"
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Complemento">
+              <input value={addrComplement} onChange={e => setAddrComplement(e.target.value)} placeholder="Apto, bloco…"
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+            </Field>
+            <Field label="Bairro">
+              <input value={addrDistrict} onChange={e => setAddrDistrict(e.target.value)}
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2"><Field label="Cidade">
+              <input value={addrCity} onChange={e => setAddrCity(e.target.value)}
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+            </Field></div>
+            <Field label="UF">
+              <input value={addrState} onChange={e => setAddrState(e.target.value.toUpperCase().slice(0, 2))} placeholder="SP" maxLength={2}
+                className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+            </Field>
+          </div>
+          <Field label="CEP">
+            <input value={addrZip} onChange={e => setAddrZip(e.target.value)} placeholder="00000-000"
+              className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
           </Field>
 
           {/* Notas */}
@@ -276,9 +420,18 @@ function ContactFormModal({ contact, companies, onClose, onSave, isPending }: {
         {/* Footer */}
         <div className="flex gap-2 justify-end px-6 py-4 border-t">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm hover:bg-accent">Cancelar</button>
+          {contact && !isVerified && (
+            <button
+              onClick={handleVerify}
+              disabled={isPending || cpfInvalid}
+              title="Promover a cliente verificado"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-emerald-300 text-emerald-700 dark:text-emerald-400 text-sm font-medium hover:bg-emerald-50 dark:hover:bg-emerald-950/20 disabled:opacity-50">
+              <BadgeCheck className="h-4 w-4" /> Verificar
+            </button>
+          )}
           <button
             onClick={handleSave}
-            disabled={!hasContent || isPending}
+            disabled={!hasContent || isPending || cpfInvalid}
             className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">
             {isPending ? 'Salvando...' : 'Salvar'}
           </button>
@@ -376,18 +529,20 @@ function ContactsPageInner() {
   const canDeleteContact = usePermission('contacts.delete')
   const [search, setSearch]     = useState('')
   const [showLid, setShowLid]   = useState(false)
+  const [includeUnverified, setIncludeUnverified] = useState(false)
   const [formModal, setFormModal]   = useState<null | 'new' | Contact>(null)
   const [mergeModal, setMergeModal] = useState<Contact | null>(null)
   const [deduping, setDeduping]     = useState(false)
 
   const { data: result, isLoading } = useQuery({
-    queryKey: ['contacts', search, showLid],
-    queryFn: () => apiFetch<{ items: Contact[]; hiddenCount: number }>(
-      `/contacts?q=${encodeURIComponent(search)}&limit=100&excludeLid=${!showLid}`
+    queryKey: ['contacts', search, showLid, includeUnverified],
+    queryFn: () => apiFetch<{ items: Contact[]; hiddenCount: number; unverifiedCount: number }>(
+      `/contacts?q=${encodeURIComponent(search)}&limit=100&excludeLid=${!showLid}&includeUnverified=${includeUnverified}`
     ),
   })
   const contacts = result?.items ?? []
   const hiddenCount = result?.hiddenCount ?? 0
+  const unverifiedCount = result?.unverifiedCount ?? 0
 
   const { data: companies = [] } = useQuery({
     queryKey: ['companies'],
@@ -451,7 +606,7 @@ function ContactsPageInner() {
     <div className="p-6 h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h1 className="text-xl font-bold flex items-center gap-2">
               <Users className="h-5 w-5 text-muted-foreground" /> Contatos
@@ -463,20 +618,38 @@ function ContactsPageInner() {
                   · {hiddenCount} sem número oculto{hiddenCount !== 1 ? 's' : ''}
                 </span>
               )}
+              {!includeUnverified && unverifiedCount > 0 && (
+                <span className="ml-1 text-muted-foreground/60">
+                  · {unverifiedCount} não verificado{unverifiedCount !== 1 ? 's' : ''} oculto{unverifiedCount !== 1 ? 's' : ''}
+                </span>
+              )}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <button
+              onClick={() => setIncludeUnverified(v => !v)}
+              title={includeUnverified ? 'Ocultar contatos não verificados' : 'Incluir contatos não verificados'}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors whitespace-nowrap shrink-0',
+                includeUnverified
+                  ? 'bg-accent text-foreground border-primary/20'
+                  : 'text-muted-foreground hover:bg-accent',
+              )}
+            >
+              {includeUnverified ? <BadgeCheck className="h-4 w-4 shrink-0" /> : <ShieldQuestion className="h-4 w-4 shrink-0" />}
+              {includeUnverified ? 'Com não verificados' : 'Só verificados'}
+            </button>
             <button
               onClick={() => setShowLid(v => !v)}
               title={showLid ? 'Ocultar contatos sem número' : 'Mostrar contatos sem número'}
               className={cn(
-                'flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors',
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors whitespace-nowrap shrink-0',
                 showLid
                   ? 'bg-accent text-foreground border-primary/20'
                   : 'text-muted-foreground hover:bg-accent',
               )}
             >
-              {showLid ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              {showLid ? <Eye className="h-4 w-4 shrink-0" /> : <EyeOff className="h-4 w-4 shrink-0" />}
               {showLid ? 'Todos' : 'Sem número'}
             </button>
             {canEditContact && (
@@ -484,15 +657,15 @@ function ContactsPageInner() {
                 onClick={handleDedup}
                 disabled={deduping}
                 title="Detectar e mesclar contatos duplicados automaticamente"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm text-muted-foreground hover:bg-accent disabled:opacity-50 transition-colors">
-                <Shuffle className="h-4 w-4" />
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm text-muted-foreground hover:bg-accent disabled:opacity-50 transition-colors whitespace-nowrap shrink-0">
+                <Shuffle className="h-4 w-4 shrink-0" />
                 {deduping ? 'Deduplicando...' : 'Deduplicar'}
               </button>
             )}
             {canEditContact && (
               <button onClick={() => setFormModal('new')}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-                <Plus className="h-4 w-4" /> Novo contato
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors whitespace-nowrap shrink-0">
+                <Plus className="h-4 w-4 shrink-0" /> Novo contato
               </button>
             )}
           </div>
@@ -554,14 +727,25 @@ function ContactsPageInner() {
                         sem número
                       </span>
                     )}
-                    {contact.company && (
+                    {contact.verified === false && (
                       <span
-                        className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full text-white leading-none"
-                        style={{ background: contact.company.color }}>
-                        <Building2 className="h-2.5 w-2.5" />
-                        {contact.company.name}
+                        title="Contato não verificado — clique em editar para verificar"
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 leading-none">
+                        <ShieldQuestion className="h-2.5 w-2.5" />
+                        não verificado
                       </span>
                     )}
+                    {(contact.companies && contact.companies.length > 0
+                      ? contact.companies.map(l => l.company)
+                      : contact.company ? [contact.company] : []
+                    ).map(co => (
+                      <span key={co.id}
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full text-white leading-none"
+                        style={{ background: co.color }}>
+                        <Building2 className="h-2.5 w-2.5" />
+                        {co.name}
+                      </span>
+                    ))}
                   </div>
                   <div className="flex items-center gap-3 mt-0.5 flex-wrap">
                     {phoneText && (

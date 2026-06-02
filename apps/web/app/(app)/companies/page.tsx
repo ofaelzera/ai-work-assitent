@@ -17,7 +17,7 @@ interface Company {
   color: string
   domain: string | null
   logoUrl?: string | null
-  _count: { contacts: number; conversations?: number }
+  _count: { contactLinks: number; conversations?: number }
 }
 
 interface Contact {
@@ -735,7 +735,7 @@ function CompaniesPageInner() {
         {/* Lista de empresas */}
         <div className="space-y-2">
           {companies.map(company => {
-            const count = company._count.contacts
+            const count = company._count.contactLinks
             const convCount = company._count.conversations ?? 0
             return (
               <div key={company.id}

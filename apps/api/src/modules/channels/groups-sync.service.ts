@@ -1,7 +1,9 @@
 import { prisma } from '../../lib/prisma.js'
 import { logger } from '../../lib/logger.js'
+import { parseJid } from '../../lib/phone.js'
 import { getChannelConfig } from './channels.service.js'
 import { getClientForChannel } from '../evolution-servers/evolution-servers.service.js'
+import { linkContactCompany } from '../contacts/contact-company.service.js'
 
 export interface GroupsCacheEntry {
   at: number
@@ -64,6 +66,82 @@ export async function refreshGroupsCache(channelId: string): Promise<any[]> {
   return promise
 }
 
+/**
+ * Resolve um participante de grupo (JID) num contato, criando-o como NÃO verificado
+ * (RF02) se ainda não existir. Reusa a mesma estratégia PN→LID do sync de mensagens.
+ * Retorna o id do contato ou null se o JID for irreconhecível.
+ */
+async function resolveParticipantContact(workspaceId: string, jid: string): Promise<string | null> {
+  const parsed = parseJid(jid)
+  if (parsed.kind === 'pn' && parsed.phone) {
+    const existing = await prisma.contact.findFirst({
+      where: { workspaceId, phone: parsed.phone, mergedIntoId: null },
+      select: { id: true },
+    })
+    if (existing) return existing.id
+    const created = await prisma.contact.create({
+      data: { workspaceId, phone: parsed.phone, phoneType: 'PN', verified: false },
+      select: { id: true },
+    })
+    return created.id
+  }
+  if (parsed.kind === 'lid' && parsed.lid) {
+    const existing = await prisma.contact.findFirst({
+      where: { workspaceId, lid: parsed.lid, mergedIntoId: null },
+      select: { id: true },
+    })
+    if (existing) return existing.id
+    const created = await prisma.contact.create({
+      data: { workspaceId, lid: parsed.lid, phoneType: 'LID', verified: false },
+      select: { id: true },
+    })
+    return created.id
+  }
+  return null
+}
+
+/**
+ * RF04 — Sincronização inteligente com empresas.
+ * Para cada grupo do canal que está vinculado a uma empresa (Conversation.isGroup=true
+ * com companyId), busca os participantes via Evolution e associa cada contato à empresa
+ * (vínculo N:N com source=GROUP_SYNC). Idempotente: re-rodar não duplica vínculos.
+ */
+export async function syncGroupCompanyLinks(channelId: string): Promise<{ groups: number; links: number }> {
+  const channel = await prisma.channel.findUnique({
+    where: { id: channelId },
+    select: { workspaceId: true },
+  })
+  if (!channel) return { groups: 0, links: 0 }
+
+  const groups = await prisma.conversation.findMany({
+    where: { channelId, isGroup: true, companyId: { not: null } },
+    select: { externalId: true, companyId: true },
+  })
+  if (groups.length === 0) return { groups: 0, links: 0 }
+
+  const { instanceName } = await getChannelConfig(channelId)
+  const client = await getClientForChannel(channelId)
+
+  let links = 0
+  for (const group of groups) {
+    if (!group.companyId) continue
+    try {
+      const res = await client.findGroupMembers(instanceName, group.externalId)
+      const participants = res?.participants ?? []
+      for (const p of participants) {
+        const contactId = await resolveParticipantContact(channel.workspaceId, p.id)
+        if (!contactId) continue
+        await linkContactCompany(contactId, group.companyId, 'GROUP_SYNC')
+        links++
+      }
+    } catch (err) {
+      logger.warn({ err, channelId, groupJid: group.externalId }, 'Falha ao vincular participantes do grupo à empresa')
+    }
+  }
+  logger.info({ channelId, groups: groups.length, links }, 'RF04: vínculos grupo→empresa sincronizados')
+  return { groups: groups.length, links }
+}
+
 /** Sincroniza grupos de todos os canais WhatsApp conectados. */
 export async function syncAllChannelsGroups(): Promise<{ synced: number; failed: number }> {
   const channels = await prisma.channel.findMany({
@@ -76,6 +154,10 @@ export async function syncAllChannelsGroups(): Promise<{ synced: number; failed:
     try {
       const data = await refreshGroupsCache(ch.id)
       logger.info({ channelId: ch.id, label: ch.label, total: data.length }, 'Grupos sincronizados')
+      // RF04: associa participantes de grupos vinculados a empresas
+      await syncGroupCompanyLinks(ch.id).catch((err) =>
+        logger.warn({ err, channelId: ch.id }, 'Falha em syncGroupCompanyLinks'),
+      )
       synced++
     } catch (err) {
       logger.warn({ err, channelId: ch.id, label: ch.label }, 'Falha ao sincronizar grupos do canal')
