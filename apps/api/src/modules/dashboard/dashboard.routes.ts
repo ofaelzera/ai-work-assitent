@@ -38,6 +38,8 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
           recentCards,
           channelBreakdown,
           contactsTotal,
+          todayEventsList,
+          reminders,
         ] = await Promise.all([
           // Não lidas do ponto de vista DESTE usuário: só conversas que ele ainda
           // não abriu (reads none). Ao ler, o ConversationRead some daqui mesmo que
@@ -106,6 +108,27 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
             GROUP BY c.type
           `,
           prisma.contact.count({ where: { workspaceId, mergedIntoId: null } }),
+          // Eventos de hoje (agenda do dia) — para o painel pessoal do dashboard
+          prisma.calendarEvent.findMany({
+            where: { workspaceId, startAt: { gte: todayStart, lte: todayEnd } },
+            orderBy: { startAt: 'asc' },
+            take: 6,
+            select: {
+              id: true, title: true, startAt: true, endAt: true,
+              contact: { select: { id: true, name: true, phone: true } },
+              conversation: { select: { id: true } },
+            },
+          }),
+          // Lembretes: tarefas pendentes atribuídas a este usuário
+          prisma.task.findMany({
+            where: { workspaceId, assigneeId: userId, done: false },
+            orderBy: [{ remindAt: 'asc' }, { createdAt: 'desc' }],
+            take: 5,
+            select: {
+              id: true, title: true, remindAt: true, conversationId: true,
+              contact: { select: { id: true, name: true, phone: true } },
+            },
+          }),
         ])
 
         return {
@@ -122,6 +145,8 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
           recentConversations,
           recentCards,
           channelBreakdown: channelBreakdown.map(r => ({ type: r.type, total: Number(r.total) })),
+          todayEventsList,
+          reminders,
         }
       }
 

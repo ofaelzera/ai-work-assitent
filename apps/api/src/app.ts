@@ -37,6 +37,7 @@ import { teamsRoutes } from './modules/teams/teams.routes.js'
 import { routingRulesRoutes } from './modules/routing/rules.routes.js'
 import { flowsRoutes } from './modules/flows/flows.routes.js'
 import { systemSettingsRoutes } from './modules/system-settings/system-settings.routes.js'
+import { integrationsRoutes } from './modules/integrations/integrations.routes.js'
 import type { JwtPayload } from '@aiwa/shared'
 
 declare module '@fastify/jwt' {
@@ -225,6 +226,7 @@ export async function buildApp() {
   await app.register(teamsRoutes)
   await app.register(routingRulesRoutes)
   await app.register(flowsRoutes)
+  await app.register(integrationsRoutes)
 
   return app
 }

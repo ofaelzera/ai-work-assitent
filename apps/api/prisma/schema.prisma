@@ -957,6 +957,9 @@ model SystemSettings {
   institutionalTexts     Json?    // { welcomeTitle, welcomeDescription, footerText }
   contactInfo            Json?    // { email, phone, address }
   externalLinks          Json?    // { website, helpCenter, terms, privacy }
+  // Integrações do dashboard: define o que está DISPONÍVEL no workspace + chaves.
+  // { widgets: { weather, quotes, converter, translator, calculator }: bool, brapiToken?: string }
+  integrations           Json?
   domainUrl              String?
   
   // API Keys que saíram do .env

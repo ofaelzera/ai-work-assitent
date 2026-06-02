@@ -10,6 +10,9 @@ import {
   ArrowRight, Zap, Clock, ListTodo, Inbox, UsersRound, Bell,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import {
+  WeatherWidget, QuotesWidget, CurrencyConverter, TranslatorWidget, Calculator,
+} from '@/components/dashboard/Widgets'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 interface ConvPreview {
@@ -40,6 +43,23 @@ interface AdminSummary {
     contact: { name: string | null; phone: string | null } | null
   }>
   channelBreakdown: Array<{ type: string; total: number }>
+  todayEventsList: EventItem[]
+  reminders: TaskItem[]
+}
+
+interface EventItem {
+  id: string; title: string; startAt: string; endAt: string
+  contact: { id: string; name: string | null; phone: string | null } | null
+  conversation: { id: string } | null
+}
+interface TaskItem {
+  id: string; title: string; remindAt: string | null
+  conversationId: string | null
+  contact: { id: string; name: string | null; phone: string | null } | null
+}
+
+type WidgetVisibility = {
+  weather: boolean; quotes: boolean; converter: boolean; translator: boolean; calculator: boolean
 }
 
 interface MemberSummary {
@@ -287,6 +307,110 @@ function DailyDigestCard() {
   )
 }
 
+// ─── Agenda do dia + Lembretes (comum às duas visões) ───────────────────────
+function AgendaELembretes({ events, reminders, loading }: { events: EventItem[]; reminders: TaskItem[]; loading: boolean }) {
+  const router = useRouter()
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Agenda do dia */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Agenda do dia</h2>
+          <button onClick={() => router.push('/calendar')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
+            Ver agenda <ArrowRight className="h-3 w-3" />
+          </button>
+        </div>
+        <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
+          {loading && Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="px-4 py-3.5 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-20" /></div>
+          ))}
+          {!loading && events.length === 0 && (
+            <div className="py-10 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
+              <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3"><Calendar className="h-6 w-6 text-primary" /></div>
+              <p className="font-medium text-foreground">Nenhum evento hoje</p>
+              <p className="text-[12px] mt-0.5">Seu dia está livre.</p>
+            </div>
+          )}
+          {events.map(ev => (
+            <div key={ev.id} className="group px-4 py-3 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+              <p className="text-[13px] font-semibold text-foreground truncate">{ev.title}</p>
+              <p className="text-[11px] font-medium text-muted-foreground mt-1.5 flex items-center gap-1.5">
+                <Clock className="h-3.5 w-3.5" /> {formatEventTime(ev.startAt)}
+                {ev.contact && (
+                  <span className="ml-1 px-2 py-0.5 rounded-full bg-accent/50 truncate font-medium flex items-center gap-1">
+                    <Users className="h-2.5 w-2.5" />{ev.contact.name ?? ev.contact.phone}
+                  </span>
+                )}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Lembretes */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Lembretes</h2>
+          <button onClick={() => router.push('/tasks')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
+            Ver todas <ArrowRight className="h-3 w-3" />
+          </button>
+        </div>
+        <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
+          {loading && Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="px-4 py-3.5 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-3/4" /></div>
+          ))}
+          {!loading && reminders.length === 0 && (
+            <div className="py-10 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
+              <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3"><ListTodo className="h-6 w-6 text-primary" /></div>
+              <p className="font-medium text-foreground">Nenhum lembrete</p>
+              <p className="text-[12px] mt-0.5">Tarefas pendentes aparecerão aqui.</p>
+            </div>
+          )}
+          {reminders.map(t => (
+            <div key={t.id} className="group px-4 py-3 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+              <p className="text-[13px] font-semibold text-foreground truncate">{t.title}</p>
+              <div className="flex items-center gap-3 mt-1.5 text-[11px] font-medium text-muted-foreground">
+                {t.remindAt && (
+                  <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30 px-1.5 py-0.5 rounded-md">
+                    <Bell className="h-3 w-3" />{formatRelative(t.remindAt)}
+                  </span>
+                )}
+                {t.conversationId && (
+                  <Link href={`/inbox/${t.conversationId}`} className="text-primary hover:underline flex items-center gap-1">
+                    <MessageSquare className="h-3 w-3" />{t.contact?.name ?? t.contact?.phone ?? 'Conversa'}
+                  </Link>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Linha de ferramentas / widgets de APIs ──────────────────────────────────
+function ToolsRow({ vis }: { vis?: WidgetVisibility }) {
+  if (!vis) return null
+  const top = [vis.weather && <WeatherWidget key="w" />, vis.quotes && <QuotesWidget key="q" />].filter(Boolean)
+  const tools = [
+    vis.converter && <CurrencyConverter key="c" />,
+    vis.translator && <TranslatorWidget key="t" />,
+    vis.calculator && <Calculator key="calc" />,
+  ].filter(Boolean)
+
+  return (
+    <>
+      {top.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-slide-up">{top}</div>
+      )}
+      {tools.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-slide-up">{tools}</div>
+      )}
+    </>
+  )
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const router = useRouter()
@@ -296,8 +420,22 @@ export default function DashboardPage() {
     refetchInterval: 60_000,
   })
 
+  const { data: me } = useQuery<{ id: string; name: string }>({
+    queryKey: ['me-profile'],
+    queryFn: () => apiFetch('/users/me'),
+    staleTime: 60_000,
+  })
+
+  const { data: widgetVis } = useQuery<{ widgets: WidgetVisibility }>({
+    queryKey: ['dashboard-widgets'],
+    queryFn: () => apiFetch('/integrations/widgets'),
+    staleTime: 5 * 60_000,
+  })
+
   const greetingHour = new Date().getHours()
-  const greeting = greetingHour < 12 ? 'Bom dia' : greetingHour < 18 ? 'Boa tarde' : 'Boa noite'
+  const base = greetingHour < 12 ? 'Bom dia' : greetingHour < 18 ? 'Boa tarde' : 'Boa noite'
+  const firstName = me?.name?.split(' ')[0]
+  const greeting = firstName ? `${base}, ${firstName}` : base
 
   const isAdminScope = data?.scope === 'admin'
   const adminData = isAdminScope ? (data as AdminSummary) : null
@@ -309,23 +447,39 @@ export default function DashboardPage() {
       : 0
     : 0
 
+  // Eventos de hoje e lembretes para o painel pessoal (comum às duas visões)
+  const isToday = (iso: string) => {
+    const d = new Date(iso); const n = new Date()
+    return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()
+  }
+  const agendaEvents: EventItem[] = adminData
+    ? adminData.todayEventsList ?? []
+    : (memberData?.upcomingEvents ?? []).filter(e => isToday(e.startAt))
+  const agendaReminders: TaskItem[] = adminData
+    ? adminData.reminders ?? []
+    : memberData?.recentTasks ?? []
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-6xl mx-auto p-6 space-y-8">
 
         {/* ── Cabeçalho ── */}
-        <div className="animate-slide-up flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-foreground">{greeting} 👋</h1>
-            <p className="text-sm font-medium text-muted-foreground mt-1">
-              {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </p>
-          </div>
-          <button onClick={() => router.push('/dashboard/teams')}
-            className="text-xs font-medium px-3 py-2 rounded-lg border hover:bg-accent transition-colors flex items-center gap-1.5">
-            Ver setores <ArrowRight className="h-3 w-3" />
-          </button>
+        <div className="animate-slide-up">
+          <h1 className="text-3xl font-extrabold tracking-tight text-foreground">{greeting} 👋</h1>
+          <p className="text-sm font-medium text-muted-foreground mt-1">
+            {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
+          </p>
         </div>
+
+        {/* ── Painel pessoal: agenda do dia + lembretes (comum) ── */}
+        {data && (
+          <div className="animate-slide-up delay-100">
+            <AgendaELembretes events={agendaEvents} reminders={agendaReminders} loading={isLoading} />
+          </div>
+        )}
+
+        {/* ── Widgets de APIs (tempo, cotações, ferramentas) ── */}
+        <ToolsRow vis={widgetVis?.widgets} />
 
         {/* ─────────────────── VISÃO ADMIN ─────────────────── */}
         {isAdminScope && adminData && (

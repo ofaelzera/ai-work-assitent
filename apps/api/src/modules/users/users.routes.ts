@@ -70,6 +70,36 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
+  // ── Preferências pessoais (merge em settings) ─────────────────────────────
+  // dashboardWidgets: { [widgetKey]: boolean } — quais widgets o usuário quer ver.
+  app.patch(
+    '/users/me/preferences',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        body: z.object({
+          dashboardWidgets: z.record(z.string(), z.boolean()).optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const current = await prisma.user.findUniqueOrThrow({
+        where: { id: req.user.sub },
+        select: { settings: true },
+      })
+      const settings = { ...((current.settings as Record<string, unknown> | null) ?? {}) }
+      if (req.body.dashboardWidgets !== undefined) {
+        const prev = (settings.dashboardWidgets as Record<string, boolean> | undefined) ?? {}
+        settings.dashboardWidgets = { ...prev, ...req.body.dashboardWidgets }
+      }
+      return prisma.user.update({
+        where: { id: req.user.sub },
+        data: { settings: settings as any },
+        select: USER_SELECT,
+      })
+    },
+  )
+
   app.post(
     '/users/me/password',
     {
