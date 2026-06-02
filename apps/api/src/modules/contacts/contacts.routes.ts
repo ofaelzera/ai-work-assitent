@@ -79,9 +79,12 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         querystring: z.object({
           q: z.string().optional(),
           companyId: z.string().optional(),
+          noCompany: zBool, // só contatos sem nenhuma empresa
           excludeLid: zBool,
           hasPhone: zBool,
-          includeUnverified: zBool, // RF03
+          // Filtro de verificação (RF03). Default 'all' no backend — a UI de Contatos
+          // pede 'verified' explicitamente. Assim merge/seletor não filtram sem querer.
+          verified: z.enum(['verified', 'unverified', 'all']).optional(),
           limit: z.coerce.number().default(50),
           offset: z.coerce.number().default(0),
         }),
@@ -89,7 +92,7 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req) => {
       const { workspaceId, sub: userId } = req.user
-      const { q, companyId, excludeLid, hasPhone, includeUnverified, limit, offset } = req.query
+      const { q, companyId, noCompany, excludeLid, hasPhone, verified, limit, offset } = req.query
 
       // "Sem número real": contato sem telefone utilizável no WhatsApp.
       // Cobre os 3 casos que aparecem na base:
@@ -138,13 +141,24 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
         })
       }
 
+      // Filtro de verificação (RF03)
+      const verifiedWhere =
+        verified === 'verified' ? { verified: true } :
+        verified === 'unverified' ? { verified: false } :
+        {} // 'all' ou ausente
+
+      // Filtro por empresa (N:N): empresa específica, sem empresa, ou todas
+      const companyWhere =
+        noCompany ? { companies: { none: {} } } :
+        companyId ? { companies: { some: { companyId } } } :
+        {}
+
       const baseWhere = {
         workspaceId,
         mergedIntoId: null,
         ...requireRealPhone,
-        // RF03: por padrão esconde contatos não verificados
-        ...(!includeUnverified && { verified: true }),
-        ...(companyId && { companies: { some: { companyId } } }),
+        ...verifiedWhere,
+        ...companyWhere,
         ...(andClauses.length && { AND: andClauses }),
       }
 
@@ -163,8 +177,8 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
               where: { workspaceId, mergedIntoId: null, ...noRealPhone },
             })
           : Promise.resolve(0),
-        // RF03: quantos contatos não verificados estão ocultos na visão padrão
-        !includeUnverified && !q
+        // RF03: quantos contatos não verificados estão ocultos quando vendo só verificados
+        verified === 'verified' && !q
           ? prisma.contact.count({
               where: { workspaceId, mergedIntoId: null, verified: false },
             })

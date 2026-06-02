@@ -9,7 +9,7 @@ import { isValidCpf } from '@aiwa/shared'
 import { toast } from 'sonner'
 import {
   Users, Search, Plus, Pencil, Trash2, X, Building2,
-  Phone, Mail, MessageSquare, GitMerge, Shuffle, Camera, Link2Off, Lock, EyeOff, Eye, BadgeCheck, ShieldQuestion,
+  Phone, Mail, MessageSquare, GitMerge, Shuffle, Camera, Link2Off, Lock, EyeOff, Eye, BadgeCheck, ShieldQuestion, Filter,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/lib/usePermission'
@@ -529,20 +529,34 @@ function ContactsPageInner() {
   const canDeleteContact = usePermission('contacts.delete')
   const [search, setSearch]     = useState('')
   const [showLid, setShowLid]   = useState(false)
-  const [includeUnverified, setIncludeUnverified] = useState(false)
+  // Filtro de verificação (RF03): 'verified' (padrão) | 'unverified' | 'all'
+  const [verifiedFilter, setVerifiedFilter] = useState<'verified' | 'unverified' | 'all'>('verified')
+  // Filtro de empresa: '' = todas | '__none__' = sem empresa | <companyId>
+  const [companyFilter, setCompanyFilter] = useState('')
   const [formModal, setFormModal]   = useState<null | 'new' | Contact>(null)
   const [mergeModal, setMergeModal] = useState<Contact | null>(null)
   const [deduping, setDeduping]     = useState(false)
 
   const { data: result, isLoading } = useQuery({
-    queryKey: ['contacts', search, showLid, includeUnverified],
-    queryFn: () => apiFetch<{ items: Contact[]; hiddenCount: number; unverifiedCount: number }>(
-      `/contacts?q=${encodeURIComponent(search)}&limit=100&excludeLid=${!showLid}&includeUnverified=${includeUnverified}`
-    ),
+    queryKey: ['contacts', search, showLid, verifiedFilter, companyFilter],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        q: search,
+        limit: '100',
+        excludeLid: String(!showLid),
+        verified: verifiedFilter,
+      })
+      if (companyFilter === '__none__') params.set('noCompany', 'true')
+      else if (companyFilter) params.set('companyId', companyFilter)
+      return apiFetch<{ items: Contact[]; hiddenCount: number; unverifiedCount: number }>(
+        `/contacts?${params.toString()}`,
+      )
+    },
   })
   const contacts = result?.items ?? []
   const hiddenCount = result?.hiddenCount ?? 0
   const unverifiedCount = result?.unverifiedCount ?? 0
+  const hasActiveFilter = verifiedFilter !== 'verified' || !!companyFilter || showLid
 
   const { data: companies = [] } = useQuery({
     queryKey: ['companies'],
@@ -618,7 +632,7 @@ function ContactsPageInner() {
                   · {hiddenCount} sem número oculto{hiddenCount !== 1 ? 's' : ''}
                 </span>
               )}
-              {!includeUnverified && unverifiedCount > 0 && (
+              {verifiedFilter === 'verified' && unverifiedCount > 0 && (
                 <span className="ml-1 text-muted-foreground/60">
                   · {unverifiedCount} não verificado{unverifiedCount !== 1 ? 's' : ''} oculto{unverifiedCount !== 1 ? 's' : ''}
                 </span>
@@ -626,32 +640,6 @@ function ContactsPageInner() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            <button
-              onClick={() => setIncludeUnverified(v => !v)}
-              title={includeUnverified ? 'Ocultar contatos não verificados' : 'Incluir contatos não verificados'}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors whitespace-nowrap shrink-0',
-                includeUnverified
-                  ? 'bg-accent text-foreground border-primary/20'
-                  : 'text-muted-foreground hover:bg-accent',
-              )}
-            >
-              {includeUnverified ? <BadgeCheck className="h-4 w-4 shrink-0" /> : <ShieldQuestion className="h-4 w-4 shrink-0" />}
-              {includeUnverified ? 'Com não verificados' : 'Só verificados'}
-            </button>
-            <button
-              onClick={() => setShowLid(v => !v)}
-              title={showLid ? 'Ocultar contatos sem número' : 'Mostrar contatos sem número'}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors whitespace-nowrap shrink-0',
-                showLid
-                  ? 'bg-accent text-foreground border-primary/20'
-                  : 'text-muted-foreground hover:bg-accent',
-              )}
-            >
-              {showLid ? <Eye className="h-4 w-4 shrink-0" /> : <EyeOff className="h-4 w-4 shrink-0" />}
-              {showLid ? 'Todos' : 'Sem número'}
-            </button>
             {canEditContact && (
               <button
                 onClick={handleDedup}
@@ -671,12 +659,84 @@ function ContactsPageInner() {
           </div>
         </div>
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar por nome, telefone ou email..."
-            className="w-full rounded-lg border bg-card pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+        {/* Busca + Filtros */}
+        <div className="space-y-3">
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar por nome, telefone ou email..."
+              className="w-full rounded-lg border bg-card pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+          </div>
+
+          {/* Barra de filtros */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+              <Filter className="h-3.5 w-3.5" /> Filtros:
+            </span>
+
+            {/* Verificação — segmented control de 3 estados */}
+            <div className="inline-flex rounded-lg border overflow-hidden text-sm shrink-0">
+              {([
+                { key: 'verified', label: 'Verificados', icon: BadgeCheck },
+                { key: 'unverified', label: 'Não verificados', icon: ShieldQuestion },
+                { key: 'all', label: 'Todos', icon: Users },
+              ] as const).map(opt => (
+                <button
+                  key={opt.key}
+                  onClick={() => setVerifiedFilter(opt.key)}
+                  className={cn(
+                    'flex items-center gap-1.5 px-3 py-1.5 transition-colors whitespace-nowrap border-l first:border-l-0',
+                    verifiedFilter === opt.key
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-accent',
+                  )}>
+                  <opt.icon className="h-3.5 w-3.5 shrink-0" />
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Empresa */}
+            <div className="relative shrink-0">
+              <Building2 className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground pointer-events-none" />
+              <select
+                value={companyFilter}
+                onChange={e => setCompanyFilter(e.target.value)}
+                className={cn(
+                  'appearance-none rounded-lg border bg-card pl-8 pr-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 cursor-pointer',
+                  companyFilter && 'border-primary/30',
+                )}>
+                <option value="">Todas as empresas</option>
+                <option value="__none__">Sem empresa</option>
+                {companies.length > 0 && <option disabled>──────────</option>}
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Sem número (LID) */}
+            <button
+              onClick={() => setShowLid(v => !v)}
+              title={showLid ? 'Ocultar contatos sem número real' : 'Mostrar contatos sem número real'}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors whitespace-nowrap shrink-0',
+                showLid ? 'bg-accent text-foreground border-primary/20' : 'text-muted-foreground hover:bg-accent',
+              )}>
+              {showLid ? <Eye className="h-4 w-4 shrink-0" /> : <EyeOff className="h-4 w-4 shrink-0" />}
+              {showLid ? 'Incluindo sem número' : 'Sem número'}
+            </button>
+
+            {/* Limpar filtros */}
+            {hasActiveFilter && (
+              <button
+                onClick={() => { setVerifiedFilter('verified'); setCompanyFilter(''); setShowLid(false) }}
+                className="flex items-center gap-1 px-2.5 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors whitespace-nowrap shrink-0">
+                <X className="h-3.5 w-3.5" /> Limpar
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Loading */}
