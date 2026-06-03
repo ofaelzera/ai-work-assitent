@@ -326,6 +326,8 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
                   <div className="space-y-2">
                     <textarea
                       autoFocus
+                      spellCheck
+                      lang="pt-BR"
                       value={desc}
                       onChange={e => setDesc(e.target.value)}
                       rows={3}

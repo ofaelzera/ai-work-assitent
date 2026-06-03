@@ -973,6 +973,8 @@ function ForwardConversationModal({
         <div className="space-y-1.5">
           <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Nota (opcional)</label>
           <textarea
+            spellCheck
+            lang="pt-BR"
             className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none"
             rows={2}
             placeholder="Ex: Cliente aguarda retorno sobre proposta..."
@@ -1026,6 +1028,8 @@ function ReleaseConversationModal({
           <p className="text-sm text-muted-foreground mt-0.5">Informe o motivo para devolver esta conversa à fila.</p>
         </div>
         <textarea
+          spellCheck
+          lang="pt-BR"
           className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none"
           rows={3}
           placeholder="Ex: Aguardando retorno do financeiro..."
@@ -2117,6 +2121,8 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                               <div className="mt-1">
                                 <textarea
                                   autoFocus
+                                  spellCheck
+                                  lang="pt-BR"
                                   value={editingMsg.text}
                                   onChange={e => setEditingMsg(v => v ? { ...v, text: e.target.value } : null)}
                                   className="w-full rounded-md border bg-card px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none"
