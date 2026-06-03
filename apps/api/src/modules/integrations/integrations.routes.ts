@@ -198,18 +198,47 @@ export const integrationsRoutes: FastifyPluginAsyncZod = async (app) => {
     if (!config.widgets.quotes) return reply.send({ enabled: false })
 
     try {
-      const data = await cached('quotes', 5 * 60_000, async () => {
-        const fx = await fetchJson<Record<string, { bid: string; pctChange: string; name: string }>>(
-          'https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL',
-        )
-        const items: Array<{ key: string; label: string; value: number; change: number; unit: string }> = []
-        const push = (k: string, label: string) => {
-          const q = fx[k]
-          if (q) items.push({ key: k, label, value: Number(q.bid), change: Number(q.pctChange), unit: 'R$' })
+      const data = await cached('quotes', 15 * 60_000, async () => {
+        type Item = { key: string; label: string; value: number; change: number; unit: string }
+        const items: Item[] = []
+
+        // Fonte primária: AwesomeAPI (dá variação % e BTC). Pode dar 429 (rate limit).
+        let primaryOk = false
+        try {
+          const fx = await fetchJson<Record<string, { bid: string; pctChange: string }>>(
+            'https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL',
+          )
+          const push = (k: string, label: string) => {
+            const q = fx[k]
+            if (q) items.push({ key: k, label, value: Number(q.bid), change: Number(q.pctChange), unit: 'R$' })
+          }
+          push('USDBRL', 'Dólar')
+          push('EURBRL', 'Euro')
+          push('BTCBRL', 'Bitcoin')
+          primaryOk = items.length > 0
+        } catch (err) {
+          req.log.warn({ err }, 'AwesomeAPI (cotações) falhou — usando fallback')
         }
-        push('USDBRL', 'Dólar')
-        push('EURBRL', 'Euro')
-        push('BTCBRL', 'Bitcoin')
+
+        // Fallback se a AwesomeAPI recusar: câmbio via open.er-api.com, BTC via CoinGecko.
+        if (!primaryOk) {
+          try {
+            const er = await fetchJson<{ rates: Record<string, number> }>('https://open.er-api.com/v6/latest/USD')
+            const brl = er.rates?.BRL, eur = er.rates?.EUR
+            if (brl) items.push({ key: 'USDBRL', label: 'Dólar', value: brl, change: 0, unit: 'R$' })
+            if (brl && eur) items.push({ key: 'EURBRL', label: 'Euro', value: brl / eur, change: 0, unit: 'R$' })
+          } catch (err) {
+            req.log.warn({ err }, 'fallback câmbio (open.er-api) falhou')
+          }
+          try {
+            const cg = await fetchJson<{ bitcoin?: { brl: number; brl_24h_change: number } }>(
+              'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=brl&include_24hr_change=true',
+            )
+            if (cg.bitcoin?.brl) items.push({ key: 'BTCBRL', label: 'Bitcoin', value: cg.bitcoin.brl, change: cg.bitcoin.brl_24h_change ?? 0, unit: 'R$' })
+          } catch (err) {
+            req.log.warn({ err }, 'fallback BTC (coingecko) falhou')
+          }
+        }
 
         if (config.brapiToken) {
           try {
@@ -222,6 +251,8 @@ export const integrationsRoutes: FastifyPluginAsyncZod = async (app) => {
             req.log.warn({ err }, 'brapi (bolsa) falhou')
           }
         }
+        // não cacheia resultado vazio (todas as fontes caíram) — deixa tentar de novo
+        if (items.length === 0) throw new Error('todas as fontes de cotação falharam')
         return items
       })
       return reply.send({ enabled: true, items: data })
@@ -254,14 +285,23 @@ export const integrationsRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.send({ enabled: true, rate: 1, result: amount, from: fromCur, to: toCur })
       }
       try {
-        const data = await cached(`fx:${fromCur}-${toCur}`, 5 * 60_000, () =>
-          fetchJson<Record<string, { bid: string }>>(
-            `https://economia.awesomeapi.com.br/last/${fromCur}-${toCur}`,
-          ),
-        )
-        const quote = data[`${fromCur}${toCur}`]
-        if (!quote) return reply.send({ enabled: true, error: 'Par de moedas não suportado' })
-        const rate = Number(quote.bid)
+        const rate = await cached(`fx:${fromCur}-${toCur}`, 15 * 60_000, async () => {
+          // Primária: AwesomeAPI
+          try {
+            const d = await fetchJson<Record<string, { bid: string }>>(
+              `https://economia.awesomeapi.com.br/last/${fromCur}-${toCur}`,
+            )
+            const q = d[`${fromCur}${toCur}`]
+            if (q) return Number(q.bid)
+          } catch (err) {
+            req.log.warn({ err }, 'AwesomeAPI (convert) falhou — usando fallback')
+          }
+          // Fallback: open.er-api.com (base=FROM → taxa de TO)
+          const er = await fetchJson<{ rates: Record<string, number> }>(`https://open.er-api.com/v6/latest/${fromCur}`)
+          const r = er.rates?.[toCur]
+          if (!r) throw new Error('par não suportado')
+          return r
+        })
         return reply.send({ enabled: true, rate, result: amount * rate, from: fromCur, to: toCur })
       } catch (err) {
         req.log.warn({ err }, 'convert falhou')
