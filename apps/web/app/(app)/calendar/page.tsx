@@ -1114,8 +1114,11 @@ export default function CalendarPage() {
   const queryClient = useQueryClient()
   const today = new Date()
 
-  const [year, setYear] = useState(today.getFullYear())
-  const [month, setMonth] = useState(today.getMonth())
+  const [currentDate, setCurrentDate] = useState(today)
+  const [view, setView] = useState<'month' | 'week' | 'day'>('month')
+  const year = currentDate.getFullYear()
+  const month = currentDate.getMonth()
+
   const [newEventOpen, setNewEventOpen] = useState(false)
   const [newEventDate, setNewEventDate] = useState(toLocalDateStr(today))
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
@@ -1161,8 +1164,25 @@ export default function CalendarPage() {
 
   // ── Events ────────────────────────────────────────────────────────────────
 
-  const from = new Date(year, month, 1).toISOString()
-  const to = new Date(year, month + 1, 0, 23, 59, 59).toISOString()
+  const { from, to } = useMemo(() => {
+    let f: Date, t: Date
+    if (view === 'month') {
+      f = new Date(year, month, 1)
+      t = new Date(year, month + 1, 0, 23, 59, 59)
+    } else if (view === 'week') {
+      f = new Date(year, month, currentDate.getDate() - currentDate.getDay())
+      f.setHours(0, 0, 0, 0)
+      t = new Date(f)
+      t.setDate(t.getDate() + 6)
+      t.setHours(23, 59, 59, 999)
+    } else {
+      f = new Date(year, month, currentDate.getDate())
+      f.setHours(0, 0, 0, 0)
+      t = new Date(f)
+      t.setHours(23, 59, 59, 999)
+    }
+    return { from: f.toISOString(), to: t.toISOString() }
+  }, [view, currentDate, year, month])
 
   const ownerKey = viewOwnerIds.join(',')
   const { data: events = [] } = useQuery<CalendarEvent[]>({
@@ -1201,10 +1221,11 @@ export default function CalendarPage() {
   })
 
   // Feriados nacionais (automáticos) dos anos visíveis na grade.
-  const gridYears = useMemo(
-    () => Array.from(new Set([year, month === 0 ? year - 1 : year, month === 11 ? year + 1 : year])),
-    [year, month],
-  )
+  const gridYears = useMemo(() => {
+    const startY = new Date(from).getFullYear()
+    const endY = new Date(to).getFullYear()
+    return Array.from(new Set([startY, endY, year]))
+  }, [from, to, year])
   const { data: nationalHolidays = [] } = useQuery<{ date: string; name: string }[]>({
     queryKey: ['national-holidays', gridYears.join(',')],
     queryFn: async () => {
@@ -1312,20 +1333,40 @@ export default function CalendarPage() {
 
   // ── Navigation ────────────────────────────────────────────────────────────
 
-  function prevMonth() {
-    if (month === 0) { setMonth(11); setYear(y => y - 1) }
-    else setMonth(m => m - 1)
+  function prevPeriod() {
+    setCurrentDate((prev) => {
+      const d = new Date(prev)
+      if (view === 'month') d.setMonth(d.getMonth() - 1)
+      else if (view === 'week') d.setDate(d.getDate() - 7)
+      else d.setDate(d.getDate() - 1)
+      return d
+    })
   }
 
-  function nextMonth() {
-    if (month === 11) { setMonth(0); setYear(y => y + 1) }
-    else setMonth(m => m + 1)
+  function nextPeriod() {
+    setCurrentDate((prev) => {
+      const d = new Date(prev)
+      if (view === 'month') d.setMonth(d.getMonth() + 1)
+      else if (view === 'week') d.setDate(d.getDate() + 7)
+      else d.setDate(d.getDate() + 1)
+      return d
+    })
   }
 
   function goToday() {
-    setYear(today.getFullYear())
-    setMonth(today.getMonth())
+    setCurrentDate(new Date())
   }
+
+  const periodLabel = useMemo(() => {
+    if (view === 'month') return `${MONTH_NAMES[month]} ${year}`
+    if (view === 'day') return `${pad(currentDate.getDate())} de ${MONTH_NAMES[month]} de ${year}`
+    const startOfWeek = new Date(from)
+    const endOfWeek = new Date(to)
+    if (startOfWeek.getMonth() === endOfWeek.getMonth()) {
+      return `${pad(startOfWeek.getDate())} - ${pad(endOfWeek.getDate())} de ${MONTH_NAMES[startOfWeek.getMonth()]}`
+    }
+    return `${pad(startOfWeek.getDate())}/${pad(startOfWeek.getMonth() + 1)} - ${pad(endOfWeek.getDate())}/${pad(endOfWeek.getMonth() + 1)}`
+  }, [view, currentDate, month, year, from, to])
 
   function openNewEvent(day: Date) {
     setNewEventDate(toLocalDateStr(day))
@@ -1344,19 +1385,19 @@ export default function CalendarPage() {
         {/* Navigation */}
         <div className="flex items-center gap-2">
           <button
-            onClick={prevMonth}
+            onClick={prevPeriod}
             className="rounded-md border p-1.5 hover:bg-accent transition-colors"
-            aria-label="Mês anterior"
+            aria-label="Anterior"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
-          <span className="text-base font-semibold w-40 text-center">
-            {MONTH_NAMES[month]} {year}
+          <span className="text-base font-semibold min-w-[180px] text-center">
+            {periodLabel}
           </span>
           <button
-            onClick={nextMonth}
+            onClick={nextPeriod}
             className="rounded-md border p-1.5 hover:bg-accent transition-colors"
-            aria-label="Próximo mês"
+            aria-label="Próximo"
           >
             <ChevronRight className="h-4 w-4" />
           </button>
@@ -1366,6 +1407,17 @@ export default function CalendarPage() {
           >
             Hoje
           </button>
+          <div className="ml-4 flex bg-muted rounded-md p-1">
+            {(['month', 'week', 'day'] as const).map(v => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${view === v ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {v === 'month' ? 'Mês' : v === 'week' ? 'Semana' : 'Dia'}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Actions */}
@@ -1439,10 +1491,10 @@ export default function CalendarPage() {
       </div>
 
       {/* ── Calendar grid ── */}
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto p-4 flex flex-col">
         {/* Legenda de cores por dono (agenda compartilhada) */}
         {multiOwner && (
-          <div className="flex flex-wrap items-center gap-3 mb-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3 mb-3 text-xs shrink-0">
             {[currentUserId, ...viewOwnerIds].map((id) => (
               <span key={id} className="inline-flex items-center gap-1.5">
                 <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: ownerColor[id] }} />
@@ -1451,116 +1503,238 @@ export default function CalendarPage() {
             ))}
           </div>
         )}
-        <div className="min-w-[640px]">
-          {/* Day header row */}
-          <div className="grid grid-cols-7 mb-1">
-            {DAY_NAMES.map((d) => (
-              <div key={d} className="text-center text-xs font-semibold text-muted-foreground py-2">
-                {d}
-              </div>
-            ))}
-          </div>
 
-          {/* Day cells */}
-          <div className="grid grid-cols-7 border-l border-t">
-            {gridDays.map((day, idx) => {
-              const isCurrentMonth = day.getMonth() === month
-              const dayStr = toLocalDateStr(day)
-              const isToday = dayStr === todayStr
-              const dayEvents = eventsByDay[dayStr] ?? []
-              const shown = dayEvents.slice(0, 3)
-              const overflow = dayEvents.length - 3
-              const closed = isDayClosed(day)
-              const reason = closed ? closedReason(day) : ''
+        {view === 'month' && (
+          <div className="min-w-[640px] flex-1 flex flex-col">
+            <div className="grid grid-cols-7 mb-1 shrink-0">
+              {DAY_NAMES.map((d) => (
+                <div key={d} className="text-center text-xs font-semibold text-muted-foreground py-2">
+                  {d}
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 border-l border-t flex-1">
+              {gridDays.map((day, idx) => {
+                const isCurrentMonth = day.getMonth() === month
+                const dayStr = toLocalDateStr(day)
+                const isToday = dayStr === todayStr
+                const dayEvents = eventsByDay[dayStr] ?? []
+                const shown = dayEvents.slice(0, 3)
+                const overflow = dayEvents.length - 3
+                const closed = isDayClosed(day)
+                const reason = closed ? closedReason(day) : ''
 
-              return (
-                <div
-                  key={idx}
-                  onClick={() => { if (!closed) openNewEvent(day) }}
-                  title={closed ? reason : undefined}
-                  className={`border-r border-b min-h-[96px] p-1.5 transition-colors ${
-                    closed
-                      ? 'bg-muted/40 cursor-not-allowed'
-                      : 'cursor-pointer hover:bg-accent/30'
-                  } ${!isCurrentMonth ? 'bg-muted/30' : ''}`}
-                >
-                  {/* Day number */}
-                  <div className="flex justify-end mb-1">
-                    <span
-                      className={`text-xs font-medium w-6 h-6 flex items-center justify-center rounded-full ${
-                        isToday
-                          ? 'bg-primary text-primary-foreground'
-                          : isCurrentMonth
-                          ? 'text-foreground'
-                          : 'text-muted-foreground'
-                      }`}
-                    >
-                      {day.getDate()}
-                    </span>
-                  </div>
-
-                  {/* Motivo de dia fechado (feriado nacional, etc.) */}
-                  {closed && (
-                    <p className="text-[10px] leading-tight text-muted-foreground truncate" title={reason}>
-                      {reason}
-                    </p>
-                  )}
-
-                  {/* Bloqueios do dia */}
-                  <div className="space-y-0.5">
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => { if (!closed) openNewEvent(day) }}
+                    title={closed ? reason : undefined}
+                    className={`border-r border-b min-h-[96px] p-1.5 transition-colors flex flex-col gap-0.5 ${
+                      closed ? 'bg-muted/40 cursor-not-allowed' : 'cursor-pointer hover:bg-accent/30'
+                    } ${!isCurrentMonth ? 'bg-muted/30' : ''}`}
+                  >
+                    <div className="flex justify-end mb-1">
+                      <span className={`text-xs font-medium w-6 h-6 flex items-center justify-center rounded-full ${isToday ? 'bg-primary text-primary-foreground' : isCurrentMonth ? 'text-foreground' : 'text-muted-foreground'}`}>
+                        {day.getDate()}
+                      </span>
+                    </div>
+                    {closed && <p className="text-[10px] leading-tight text-muted-foreground truncate" title={reason}>{reason}</p>}
                     {(blocksByDay[dayStr] ?? []).map((b) => (
-                      <button
-                        key={b.id}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (window.confirm('Remover este bloqueio de agenda?')) deleteBlock.mutate(b.id)
-                        }}
-                        className="w-full text-left rounded px-1 py-0.5 text-xs truncate block bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
-                        title={`Bloqueado${b.title ? `: ${b.title}` : ''} — clique para remover`}
-                      >
+                      <button key={b.id} onClick={(e) => { e.stopPropagation(); if (window.confirm('Remover este bloqueio de agenda?')) deleteBlock.mutate(b.id) }} className="w-full text-left rounded px-1 py-0.5 text-xs truncate block bg-muted text-muted-foreground hover:bg-muted/70 transition-colors" title={`Bloqueado — clique para remover`}>
                         <Lock className="h-2.5 w-2.5 inline mr-1 opacity-70" />
-                        <span className="mr-1">{formatTime(b.startAt)}</span>
-                        {b.title ?? 'Bloqueado'}
+                        <span className="mr-1">{formatTime(b.startAt)}</span>{b.title ?? 'Bloqueado'}
                       </button>
                     ))}
-                  </div>
-
-                  {/* Events */}
-                  <div className="space-y-0.5">
                     {shown.map((ev) => {
-                      // Em modo multi-usuário, cor por dono; senão, cor do Google.
-                      const colorHex = multiOwner
-                        ? (ownerColor[ev.ownerId ?? ''] ?? '#6366f1')
-                        : (ev.color ? GOOGLE_COLORS[ev.color] : null)
+                      const colorHex = multiOwner ? (ownerColor[ev.ownerId ?? ''] ?? '#6366f1') : (ev.color ? GOOGLE_COLORS[ev.color] : null)
                       return (
-                        <button
-                          key={ev.id}
-                          onClick={(e) => { e.stopPropagation(); setSelectedEvent(ev) }}
-                          className="w-full text-left rounded px-1 py-0.5 text-xs truncate flex items-center gap-1 transition-colors hover:opacity-80"
-                          style={colorHex
-                            ? { backgroundColor: `${colorHex}22`, borderLeft: `3px solid ${colorHex}` }
-                            : undefined}
-                          title={multiOwner ? `${ev.title} — ${ownerName(ev.ownerId)}` : ev.title}
-                        >
+                        <button key={ev.id} onClick={(e) => { e.stopPropagation(); setSelectedEvent(ev) }} className="w-full text-left rounded px-1 py-0.5 text-xs truncate flex items-center gap-1 transition-colors hover:opacity-80" style={colorHex ? { backgroundColor: `${colorHex}22`, borderLeft: `3px solid ${colorHex}` } : undefined} title={ev.title}>
                           <span className={`truncate ${!colorHex ? 'bg-primary/10 text-primary px-1 rounded' : ''}`} style={colorHex ? { color: colorHex } : undefined}>
-                            <span className="text-muted-foreground mr-1">
-                              {ev.allDay ? '◆' : formatTime(ev.startAt)}
-                            </span>
+                            <span className="text-muted-foreground mr-1">{ev.allDay ? '◆' : formatTime(ev.startAt)}</span>
                             {ev.title}
                             {ev.meetLink && <Video className="h-2.5 w-2.5 inline ml-1 opacity-60" />}
                           </span>
                         </button>
                       )
                     })}
-                    {overflow > 0 && (
-                      <p className="text-xs text-muted-foreground pl-1">+{overflow} mais</p>
-                    )}
+                    {overflow > 0 && <p className="text-xs text-muted-foreground pl-1">+{overflow} mais</p>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {(view === 'week' || view === 'day') && (() => {
+          const hours = Array.from({ length: 24 }, (_, i) => i)
+          const startDate = new Date(from)
+          const daysCount = view === 'week' ? 7 : 1
+          const days = Array.from({ length: daysCount }, (_, i) => {
+            const d = new Date(startDate)
+            d.setDate(d.getDate() + i)
+            return d
+          })
+
+          const getEventStyles = (event: CalendarEvent, allEventsInDay: CalendarEvent[]) => {
+            const s = new Date(event.startAt)
+            const e = new Date(event.endAt)
+            const startMin = s.getHours() * 60 + s.getMinutes()
+            let endMin = e.getHours() * 60 + e.getMinutes()
+            if (endMin <= startMin) endMin = startMin + 30 
+            
+            const top = (startMin / 1440) * 100
+            const height = ((endMin - startMin) / 1440) * 100
+
+            const overlaps = allEventsInDay.filter(ev => {
+              if (ev.allDay) return false
+              const evS = new Date(ev.startAt)
+              const evE = new Date(ev.endAt)
+              const evStart = evS.getHours() * 60 + evS.getMinutes()
+              let evEnd = evE.getHours() * 60 + evE.getMinutes()
+              if (evEnd <= evStart) evEnd = evStart + 30
+              return (startMin < evEnd && endMin > evStart)
+            })
+            
+            const overlapIndex = overlaps.findIndex(ev => ev.id === event.id)
+            const width = 100 / Math.max(1, overlaps.length)
+            const left = overlapIndex * width
+
+            return { top: `${top}%`, height: `${height}%`, left: `${left}%`, width: `${width}%` }
+          }
+
+          return (
+            <div className="flex-1 flex flex-col min-w-[640px] overflow-hidden border rounded-md bg-background">
+              {/* Header */}
+              <div className="flex border-b shrink-0 bg-muted/20">
+                <div className="w-16 border-r shrink-0"></div>
+                <div className={`flex-1 grid ${view === 'week' ? 'grid-cols-7' : 'grid-cols-1'}`}>
+                  {days.map((day, i) => {
+                    const isToday = toLocalDateStr(day) === todayStr
+                    return (
+                      <div key={i} className={`text-center py-2 border-r last:border-r-0 ${isToday ? 'bg-primary/5' : ''}`}>
+                        <div className="text-xs text-muted-foreground font-medium">{DAY_NAMES[day.getDay()]}</div>
+                        <div className={`text-lg mt-0.5 flex justify-center items-center`}>
+                          <span className={`w-8 h-8 flex items-center justify-center rounded-full ${isToday ? 'bg-primary text-primary-foreground font-bold' : 'font-semibold'}`}>
+                            {day.getDate()}
+                          </span>
+                        </div>
+                        {isDayClosed(day) && (
+                          <div className="text-[10px] text-muted-foreground px-1 truncate mt-1" title={closedReason(day)}>
+                            {closedReason(day)}
+                          </div>
+                        )}
+                        {/* All-day events */}
+                        <div className="mt-1 flex flex-col gap-1 px-1">
+                          {(eventsByDay[toLocalDateStr(day)] ?? []).filter(e => e.allDay).map(ev => {
+                            const colorHex = multiOwner ? (ownerColor[ev.ownerId ?? ''] ?? '#6366f1') : (ev.color ? GOOGLE_COLORS[ev.color] : null)
+                            return (
+                              <button key={ev.id} onClick={(e) => { e.stopPropagation(); setSelectedEvent(ev) }} className="text-left text-[10px] px-1.5 py-0.5 rounded truncate text-white" style={{ backgroundColor: colorHex ?? 'var(--primary)' }}>
+                                {ev.title}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto relative">
+                <div className="flex min-h-[1440px]">
+                  {/* Time labels */}
+                  <div className="w-16 border-r shrink-0 flex flex-col relative bg-muted/10">
+                    {hours.map(h => (
+                      <div key={h} className="flex-1 border-b relative">
+                        <span className="absolute -top-3 right-2 text-xs text-muted-foreground bg-muted/10 px-1 rounded-sm">
+                          {pad(h)}:00
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Day columns */}
+                  <div className={`flex-1 grid ${view === 'week' ? 'grid-cols-7' : 'grid-cols-1'}`}>
+                    {days.map((day, i) => {
+                      const dayStr = toLocalDateStr(day)
+                      const isToday = dayStr === todayStr
+                      const closed = isDayClosed(day)
+                      const dayEvents = (eventsByDay[dayStr] ?? []).filter(e => !e.allDay)
+                      const dayBlocks = blocksByDay[dayStr] ?? []
+
+                      return (
+                        <div
+                          key={i}
+                          className={`border-r last:border-r-0 relative ${closed ? 'bg-muted/20 cursor-not-allowed' : 'hover:bg-accent/10 cursor-pointer'} ${isToday && !closed ? 'bg-primary/[0.02]' : ''}`}
+                          onClick={(e) => {
+                            if (closed) return;
+                            openNewEvent(day)
+                          }}
+                        >
+                          {/* Hour lines */}
+                          {hours.map(h => (
+                            <div key={h} className="h-[60px] border-b pointer-events-none" />
+                          ))}
+
+                          {/* Blocks */}
+                          {dayBlocks.map(b => {
+                            const s = new Date(b.startAt)
+                            const e = new Date(b.endAt)
+                            const startMin = s.getHours() * 60 + s.getMinutes()
+                            const endMin = e.getHours() * 60 + e.getMinutes()
+                            const top = (startMin / 1440) * 100
+                            const height = ((endMin - startMin) / 1440) * 100
+                            return (
+                              <div
+                                key={b.id}
+                                className="absolute left-0 right-0 pointer-events-auto cursor-pointer"
+                                style={{
+                                  top: `${top}%`, height: `${height}%`,
+                                  backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,0.05) 10px, rgba(0,0,0,0.05) 20px)'
+                                }}
+                                onClick={(e) => { e.stopPropagation(); if (window.confirm('Remover este bloqueio?')) deleteBlock.mutate(b.id) }}
+                              >
+                                <div className="text-[10px] font-medium p-1 text-muted-foreground bg-background/80 m-1 rounded"><Lock className="w-2.5 h-2.5 inline mr-1" />{b.title || 'Bloqueado'}</div>
+                              </div>
+                            )
+                          })}
+
+                          {/* Events */}
+                          {dayEvents.map(ev => {
+                            const style = getEventStyles(ev, dayEvents)
+                            const colorHex = multiOwner ? (ownerColor[ev.ownerId ?? ''] ?? '#6366f1') : (ev.color ? GOOGLE_COLORS[ev.color] : null)
+                            const isDark = false // You can make text dark/light depending on colorHex if needed
+                            
+                            return (
+                              <div
+                                key={ev.id}
+                                className="absolute p-[1px] pointer-events-auto"
+                                style={style}
+                              >
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setSelectedEvent(ev) }}
+                                  className="w-full h-full rounded text-left px-1.5 py-1 text-xs overflow-hidden shadow-sm transition-all hover:brightness-95 border"
+                                  style={{ 
+                                    backgroundColor: colorHex ? `${colorHex}22` : 'var(--primary-10)', 
+                                    borderColor: colorHex ?? 'transparent', 
+                                    color: colorHex ?? 'var(--primary)' 
+                                  }}
+                                  title={ev.title}
+                                >
+                                  <div className="font-semibold truncate">{ev.title} {ev.meetLink && <Video className="h-2.5 w-2.5 inline ml-0.5 opacity-60" />}</div>
+                                  <div className="text-[10px] opacity-80 leading-tight">{formatTime(ev.startAt)} - {formatTime(ev.endAt)}</div>
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
-              )
-            })}
-          </div>
-        </div>
+              </div>
+            </div>
+          )
+        })()}
       </div>
 
       {/* ── Modals / Sheets ── */}
