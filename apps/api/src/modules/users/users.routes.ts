@@ -72,6 +72,7 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
 
   // ── Preferências pessoais (merge em settings) ─────────────────────────────
   // dashboardWidgets: { [widgetKey]: boolean } — quais widgets o usuário quer ver.
+  // dashboardLayout: { [breakpoint]: Array<{i,x,y,w,h}> } — posições/tamanhos da grade.
   app.patch(
     '/users/me/preferences',
     {
@@ -79,6 +80,13 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         body: z.object({
           dashboardWidgets: z.record(z.string(), z.boolean()).optional(),
+          dashboardLayout: z.record(z.string(), z.array(z.object({
+            i: z.string(),
+            x: z.number(),
+            y: z.number(),
+            w: z.number(),
+            h: z.number(),
+          }))).nullable().optional(),
         }),
       },
     },
@@ -91,6 +99,10 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
       if (req.body.dashboardWidgets !== undefined) {
         const prev = (settings.dashboardWidgets as Record<string, boolean> | undefined) ?? {}
         settings.dashboardWidgets = { ...prev, ...req.body.dashboardWidgets }
+      }
+      if (req.body.dashboardLayout !== undefined) {
+        // null = resetar para o padrão
+        settings.dashboardLayout = req.body.dashboardLayout ?? undefined
       }
       return prisma.user.update({
         where: { id: req.user.sub },

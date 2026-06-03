@@ -12,7 +12,7 @@ import {
 // ─── Card base ────────────────────────────────────────────────────────────────
 function WidgetCard({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('rounded-3xl border bg-card/50 backdrop-blur-sm p-5 shadow-sm', className)}>
+    <div className={cn('h-full overflow-auto rounded-3xl border bg-card/50 backdrop-blur-sm p-5 shadow-sm', className)}>
       {children}
     </div>
   )

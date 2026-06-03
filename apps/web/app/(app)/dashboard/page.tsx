@@ -1,8 +1,9 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { toast } from 'sonner'
 import { apiFetch } from '@/lib/api'
 import { formatPhone, isInternalId } from '@/lib/phone'
 import {
@@ -13,6 +14,8 @@ import { cn } from '@/lib/utils'
 import {
   WeatherWidget, QuotesWidget, CurrencyConverter, TranslatorWidget, Calculator,
 } from '@/components/dashboard/Widgets'
+import { DashboardGrid, type GridItemDef } from '@/components/dashboard/DashboardGrid'
+import type { Layouts } from 'react-grid-layout'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 interface ConvPreview {
@@ -60,6 +63,7 @@ interface TaskItem {
 
 type WidgetVisibility = {
   weather: boolean; quotes: boolean; converter: boolean; translator: boolean; calculator: boolean
+  conversations: boolean; cards: boolean; channelStats: boolean; aiExecutions: boolean
 }
 
 interface MemberSummary {
@@ -198,10 +202,10 @@ function KpiCard({ label, value, icon: Icon, iconBg, iconColor, trend, href, loa
 }
 
 // ─── Lista compartilhada: conversas recentes ─────────────────────────────────
-function RecentConversationsList({ items, loading }: { items: ConvPreview[]; loading: boolean }) {
+function RecentConversationsList({ items, loading, className, bare }: { items: ConvPreview[]; loading: boolean; className?: string; bare?: boolean }) {
   const router = useRouter()
   return (
-    <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
+    <div className={cn(bare ? 'space-y-1' : 'rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm', className)}>
       {loading && Array.from({ length: 4 }).map((_, i) => (
         <div key={i} className="flex items-center gap-4 px-4 py-3.5">
           <Skeleton className="h-11 w-11 rounded-full shrink-0" />
@@ -307,107 +311,196 @@ function DailyDigestCard() {
   )
 }
 
-// ─── Agenda do dia + Lembretes (comum às duas visões) ───────────────────────
-function AgendaELembretes({ events, reminders, loading }: { events: EventItem[]; reminders: TaskItem[]; loading: boolean }) {
-  const router = useRouter()
+// ─── Card: Agenda do dia ──────────────────────────────────────────────────────
+// Card padrão da grade: borda única + título DENTRO (igual à Calculadora).
+function ListCard({ icon: Icon, title, onAll, allLabel = 'Ver todas', bodyClassName, children }: {
+  icon: React.ElementType; title: string; onAll?: () => void; allLabel?: string; bodyClassName?: string; children: React.ReactNode
+}) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      {/* Agenda do dia */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between px-1">
-          <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Agenda do dia</h2>
-          <button onClick={() => router.push('/calendar')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
-            Ver agenda <ArrowRight className="h-3 w-3" />
+    <div className="h-full flex flex-col rounded-3xl border bg-card/50 backdrop-blur-sm p-4 shadow-sm overflow-hidden">
+      <div className="flex items-center justify-between gap-2 mb-3 shrink-0">
+        <h3 className="flex items-center gap-2 text-xs font-bold text-foreground/70 tracking-wide uppercase truncate">
+          <Icon className="h-4 w-4 text-primary shrink-0" /> {title}
+        </h3>
+        {onAll && (
+          <button onClick={onAll} className="shrink-0 text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
+            {allLabel} <ArrowRight className="h-3 w-3" />
           </button>
-        </div>
-        <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
-          {loading && Array.from({ length: 2 }).map((_, i) => (
-            <div key={i} className="px-4 py-3.5 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-20" /></div>
-          ))}
-          {!loading && events.length === 0 && (
-            <div className="py-10 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
-              <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3"><Calendar className="h-6 w-6 text-primary" /></div>
-              <p className="font-medium text-foreground">Nenhum evento hoje</p>
-              <p className="text-[12px] mt-0.5">Seu dia está livre.</p>
-            </div>
-          )}
-          {events.map(ev => (
-            <div key={ev.id} className="group px-4 py-3 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
-              <p className="text-[13px] font-semibold text-foreground truncate">{ev.title}</p>
-              <p className="text-[11px] font-medium text-muted-foreground mt-1.5 flex items-center gap-1.5">
-                <Clock className="h-3.5 w-3.5" /> {formatEventTime(ev.startAt)}
-                {ev.contact && (
-                  <span className="ml-1 px-2 py-0.5 rounded-full bg-accent/50 truncate font-medium flex items-center gap-1">
-                    <Users className="h-2.5 w-2.5" />{ev.contact.name ?? ev.contact.phone}
-                  </span>
-                )}
-              </p>
-            </div>
-          ))}
-        </div>
+        )}
       </div>
-
-      {/* Lembretes */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between px-1">
-          <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Lembretes</h2>
-          <button onClick={() => router.push('/tasks')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
-            Ver todas <ArrowRight className="h-3 w-3" />
-          </button>
-        </div>
-        <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
-          {loading && Array.from({ length: 2 }).map((_, i) => (
-            <div key={i} className="px-4 py-3.5 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-3/4" /></div>
-          ))}
-          {!loading && reminders.length === 0 && (
-            <div className="py-10 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
-              <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3"><ListTodo className="h-6 w-6 text-primary" /></div>
-              <p className="font-medium text-foreground">Nenhum lembrete</p>
-              <p className="text-[12px] mt-0.5">Tarefas pendentes aparecerão aqui.</p>
-            </div>
-          )}
-          {reminders.map(t => (
-            <div key={t.id} className="group px-4 py-3 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
-              <p className="text-[13px] font-semibold text-foreground truncate">{t.title}</p>
-              <div className="flex items-center gap-3 mt-1.5 text-[11px] font-medium text-muted-foreground">
-                {t.remindAt && (
-                  <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30 px-1.5 py-0.5 rounded-md">
-                    <Bell className="h-3 w-3" />{formatRelative(t.remindAt)}
-                  </span>
-                )}
-                {t.conversationId && (
-                  <Link href={`/inbox/${t.conversationId}`} className="text-primary hover:underline flex items-center gap-1">
-                    <MessageSquare className="h-3 w-3" />{t.contact?.name ?? t.contact?.phone ?? 'Conversa'}
-                  </Link>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      <div className={cn('flex-1 min-h-0 overflow-auto -mx-1 px-1 space-y-1', bodyClassName)}>{children}</div>
     </div>
   )
 }
 
-// ─── Linha de ferramentas / widgets de APIs ──────────────────────────────────
-function ToolsRow({ vis }: { vis?: WidgetVisibility }) {
-  if (!vis) return null
-  const top = [vis.weather && <WeatherWidget key="w" />, vis.quotes && <QuotesWidget key="q" />].filter(Boolean)
-  const tools = [
-    vis.converter && <CurrencyConverter key="c" />,
-    vis.translator && <TranslatorWidget key="t" />,
-    vis.calculator && <Calculator key="calc" />,
-  ].filter(Boolean)
-
+function EmptyState({ icon: Icon, title, hint }: { icon: React.ElementType; title: string; hint: string }) {
   return (
-    <>
-      {top.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-slide-up">{top}</div>
-      )}
-      {tools.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-slide-up">{tools}</div>
-      )}
-    </>
+    <div className="h-full py-8 flex flex-col items-center justify-center text-center text-sm text-muted-foreground">
+      <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3"><Icon className="h-6 w-6 text-primary" /></div>
+      <p className="font-medium text-foreground">{title}</p>
+      <p className="text-[12px] mt-0.5">{hint}</p>
+    </div>
+  )
+}
+
+function AgendaCard({ events, loading }: { events: EventItem[]; loading: boolean }) {
+  const router = useRouter()
+  return (
+    <ListCard icon={Calendar} title="Agenda do dia" allLabel="Ver agenda" onAll={() => router.push('/calendar')}>
+      {loading && Array.from({ length: 2 }).map((_, i) => (
+        <div key={i} className="px-4 py-3.5 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-20" /></div>
+      ))}
+      {!loading && events.length === 0 && <EmptyState icon={Calendar} title="Nenhum evento hoje" hint="Seu dia está livre." />}
+      {events.map(ev => (
+        <div key={ev.id} className="group px-4 py-3 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+          <p className="text-[13px] font-semibold text-foreground truncate">{ev.title}</p>
+          <p className="text-[11px] font-medium text-muted-foreground mt-1.5 flex items-center gap-1.5">
+            <Clock className="h-3.5 w-3.5" /> {formatEventTime(ev.startAt)}
+            {ev.contact && (
+              <span className="ml-1 px-2 py-0.5 rounded-full bg-accent/50 truncate font-medium flex items-center gap-1">
+                <Users className="h-2.5 w-2.5" />{ev.contact.name ?? ev.contact.phone}
+              </span>
+            )}
+          </p>
+        </div>
+      ))}
+    </ListCard>
+  )
+}
+
+// ─── Card: Lembretes / Minhas tarefas ─────────────────────────────────────────
+function RemindersCard({ reminders, loading, title = 'Lembretes' }: { reminders: TaskItem[]; loading: boolean; title?: string }) {
+  const router = useRouter()
+  return (
+    <ListCard icon={ListTodo} title={title} onAll={() => router.push('/tasks')}>
+      {loading && Array.from({ length: 2 }).map((_, i) => (
+        <div key={i} className="px-4 py-3.5 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-3/4" /></div>
+      ))}
+      {!loading && reminders.length === 0 && <EmptyState icon={ListTodo} title="Nenhum lembrete" hint="Tarefas pendentes aparecerão aqui." />}
+      {reminders.map(t => (
+        <div key={t.id} className="group px-4 py-3 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+          <p className="text-[13px] font-semibold text-foreground truncate">{t.title}</p>
+          <div className="flex items-center gap-3 mt-1.5 text-[11px] font-medium text-muted-foreground">
+            {t.remindAt && (
+              <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30 px-1.5 py-0.5 rounded-md">
+                <Bell className="h-3 w-3" />{formatRelative(t.remindAt)}
+              </span>
+            )}
+            {t.conversationId && (
+              <Link href={`/inbox/${t.conversationId}`} className="text-primary hover:underline flex items-center gap-1">
+                <MessageSquare className="h-3 w-3" />{t.contact?.name ?? t.contact?.phone ?? 'Conversa'}
+              </Link>
+            )}
+          </div>
+        </div>
+      ))}
+    </ListCard>
+  )
+}
+
+// ─── Card: Próximos eventos (member, 7 dias) ──────────────────────────────────
+function UpcomingEventsCard({ events, loading }: { events: MemberSummary['upcomingEvents']; loading: boolean }) {
+  const router = useRouter()
+  return (
+    <ListCard icon={Calendar} title="Próximos eventos" allLabel="Ver agenda" onAll={() => router.push('/calendar')}>
+      {loading && Array.from({ length: 2 }).map((_, i) => (
+        <div key={i} className="px-4 py-3.5 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-20" /></div>
+      ))}
+      {!loading && events.length === 0 && <EmptyState icon={Calendar} title="Nenhum evento" hint="Próximos eventos nos 7 dias." />}
+      {events.map(ev => (
+        <div key={ev.id} className="group px-4 py-3.5 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+          <p className="text-[13px] font-semibold text-foreground truncate">{ev.title}</p>
+          <p className="text-[11px] font-medium text-muted-foreground mt-2 flex items-center gap-1.5">
+            <Clock className="h-3.5 w-3.5" /> {formatEventTime(ev.startAt)}
+            {ev.contact && (
+              <span className="ml-1 px-2 py-0.5 rounded-full bg-accent/50 truncate font-medium flex items-center gap-1">
+                <Users className="h-2.5 w-2.5" />{ev.contact.name ?? ev.contact.phone}
+              </span>
+            )}
+          </p>
+        </div>
+      ))}
+    </ListCard>
+  )
+}
+
+// ─── Card: Conversas recentes ─────────────────────────────────────────────────
+function ConversationsCard({ items, loading, allLabel = 'Ver todas' }: { items: ConvPreview[]; loading: boolean; allLabel?: string }) {
+  const router = useRouter()
+  return (
+    <ListCard icon={MessageSquare} title="Conversas recentes" allLabel={allLabel} onAll={() => router.push('/inbox')}>
+      <RecentConversationsList items={items} loading={loading} bare />
+    </ListCard>
+  )
+}
+
+// ─── Card: Cards recentes (kanban) ────────────────────────────────────────────
+function RecentCardsCard({ cards, loading }: { cards: AdminSummary['recentCards']; loading: boolean }) {
+  const router = useRouter()
+  return (
+    <ListCard icon={Kanban} title="Cards recentes" allLabel="Ver todos" onAll={() => router.push('/kanban')}>
+      {loading && Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="px-4 py-3.5 space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-20" /></div>
+      ))}
+      {!loading && cards.length === 0 && <EmptyState icon={Kanban} title="Nenhum card ainda" hint="Seus cards aparecerão aqui." />}
+      {cards.map(card => (
+        <div key={card.id} className="group px-4 py-3.5 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-[13px] font-semibold text-foreground truncate flex-1">{card.title}</p>
+            <span className={cn('shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full', priorityBadge(card.priority))}>{priorityLabel(card.priority)}</span>
+          </div>
+          <div className="flex items-center gap-2 mt-2">
+            <span className="text-[11px] font-medium text-muted-foreground">{card.column.name}</span>
+            {card.createdBy === 'AI' && (
+              <span className="text-[10px] bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
+                <Zap className="h-2.5 w-2.5" /> IA
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+    </ListCard>
+  )
+}
+
+// ─── Card: Mensagens hoje por canal ───────────────────────────────────────────
+function ChannelStatsCard({ breakdown }: { breakdown: AdminSummary['channelBreakdown'] }) {
+  const maxTotal = Math.max(1, ...breakdown.map(b => b.total))
+  return (
+    <ListCard icon={TrendingUp} title="Mensagens hoje por canal" bodyClassName="space-y-4 p-2">
+      {breakdown.length === 0 && <p className="text-sm text-muted-foreground">Sem mensagens hoje.</p>}
+      {breakdown.map(({ type, total }) => {
+        const ch = channelLabel(type)
+        const pct = Math.round((total / maxTotal) * 100)
+        return (
+          <div key={type} className="group">
+            <div className="flex items-center justify-between text-[13px] mb-2">
+              <span className={cn('font-semibold flex items-center gap-2 transition-transform group-hover:translate-x-1', ch.color)}>{ch.icon} {ch.label}</span>
+              <span className="text-muted-foreground font-bold">{total}</span>
+            </div>
+            <div className="h-2.5 rounded-full bg-muted overflow-hidden">
+              <div className="h-full rounded-full bg-gradient-to-r from-primary/60 to-primary transition-all duration-1000 ease-out" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        )
+      })}
+    </ListCard>
+  )
+}
+
+// ─── Card: Execuções de IA (24h) ──────────────────────────────────────────────
+function AiExecCard({ value, loading }: { value: number; loading: boolean }) {
+  return (
+    <div className="h-full rounded-3xl border bg-gradient-to-br from-secondary/10 to-transparent p-5 flex items-center gap-4 shadow-sm">
+      <div className="h-12 w-12 rounded-2xl bg-secondary/20 flex items-center justify-center shrink-0 shadow-inner">
+        <Bot className="h-6 w-6 text-secondary-foreground" />
+      </div>
+      <div>
+        {loading ? <Skeleton className="h-6 w-12 mb-1" /> : <p className="text-2xl font-bold tracking-tight text-foreground">{value}</p>}
+        <p className="text-xs font-medium text-muted-foreground">Execuções de IA (24h)</p>
+      </div>
+      <Clock className="h-5 w-5 text-muted-foreground ml-auto shrink-0" />
+    </div>
   )
 }
 
@@ -420,16 +513,28 @@ export default function DashboardPage() {
     refetchInterval: 60_000,
   })
 
-  const { data: me } = useQuery<{ id: string; name: string }>({
+  const qc = useQueryClient()
+  const { data: me } = useQuery<{ id: string; name: string; settings?: { dashboardWidgets?: Record<string, boolean>; dashboardLayout?: Layouts } | null }>({
     queryKey: ['me-profile'],
     queryFn: () => apiFetch('/users/me'),
     staleTime: 60_000,
   })
 
-  const { data: widgetVis } = useQuery<{ widgets: WidgetVisibility }>({
+  const { data: widgetVis } = useQuery<{ widgets: WidgetVisibility; available: WidgetVisibility }>({
     queryKey: ['dashboard-widgets'],
     queryFn: () => apiFetch('/integrations/widgets'),
     staleTime: 5 * 60_000,
+  })
+
+  const persist = useMutation({
+    mutationFn: (body: { dashboardWidgets?: Record<string, boolean>; dashboardLayout?: Layouts | null }) =>
+      apiFetch('/users/me/preferences', { method: 'PATCH', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['me-profile'] })
+      qc.invalidateQueries({ queryKey: ['dashboard-widgets'] })
+      toast.success('Dashboard personalizado')
+    },
+    onError: () => toast.error('Erro ao salvar layout'),
   })
 
   const greetingHour = new Date().getHours()
@@ -459,6 +564,79 @@ export default function DashboardPage() {
     ? adminData.reminders ?? []
     : memberData?.recentTasks ?? []
 
+  // ── Registro de widgets da grade (Mac-style) ──────────────────────────────
+  const available = widgetVis?.available
+  const toolAvailable = (k: keyof WidgetVisibility) => !available || available[k] !== false
+
+  const items: GridItemDef[] = []
+  const pushTool = (key: keyof WidgetVisibility, title: string, node: React.ReactNode, w: number, h: number) => {
+    if (toolAvailable(key)) items.push({ key, title, node, w, h, minW: 3, minH: 2 })
+  }
+
+  if (data) {
+    // KPIs
+    if (adminData) {
+      items.push({
+        key: 'kpis', title: 'Indicadores', w: 12, h: 4, minW: 4, minH: 2,
+        node: (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 h-full">
+            <KpiCard label="Mensagens não lidas" value={adminData.kpis.unreadMessages} icon={MessageSquare} iconBg="bg-blue-100 dark:bg-blue-900/30" iconColor="text-blue-600 dark:text-blue-400" href="/inbox" loading={isLoading} />
+            <KpiCard label="Demandas abertas" value={adminData.kpis.openCards} icon={Kanban} iconBg="bg-purple-100 dark:bg-purple-900/30" iconColor="text-purple-600 dark:text-purple-400" href="/kanban" loading={isLoading} />
+            <KpiCard label="Mensagens hoje" value={adminData.kpis.messagesToday} icon={TrendingUp} iconBg="bg-green-100 dark:bg-green-900/30" iconColor="text-green-600 dark:text-green-400" trend={{ value: msgTrend, label: `${adminData.kpis.messagesYesterday} ontem` }} loading={isLoading} />
+            <KpiCard label="Contatos" value={adminData.kpis.contactsTotal} icon={Users} iconBg="bg-amber-100 dark:bg-amber-900/30" iconColor="text-amber-600 dark:text-amber-400" href="/contacts" loading={isLoading} />
+          </div>
+        ),
+      })
+    }
+    if (memberData) {
+      items.push({
+        key: 'kpis', title: 'Indicadores', w: 12, h: 4, minW: 4, minH: 2,
+        node: (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 h-full">
+            <KpiCard label="Minhas conversas abertas" value={memberData.kpis.myOpenConversations} icon={Inbox} iconBg="bg-blue-100 dark:bg-blue-900/30" iconColor="text-blue-600 dark:text-blue-400" href="/inbox" loading={isLoading} />
+            <KpiCard label="Na fila pública" value={memberData.kpis.queueCount} icon={UsersRound} iconBg="bg-amber-100 dark:bg-amber-900/30" iconColor="text-amber-600 dark:text-amber-400" href="/inbox" loading={isLoading} />
+            <KpiCard label="Mensagens não lidas" value={memberData.kpis.unreadMessages} icon={Bell} iconBg="bg-rose-100 dark:bg-rose-900/30" iconColor="text-rose-600 dark:text-rose-400" href="/inbox" loading={isLoading} />
+            <KpiCard label="Tarefas pendentes" value={memberData.kpis.pendingTasks} icon={ListTodo} iconBg="bg-emerald-100 dark:bg-emerald-900/30" iconColor="text-emerald-600 dark:text-emerald-400" href="/tasks" loading={isLoading} />
+          </div>
+        ),
+      })
+    }
+
+    // Pessoais (sempre disponíveis)
+    items.push({ key: 'agenda', title: 'Agenda do dia', w: 6, h: 5, minW: 3, minH: 3, node: <AgendaCard events={agendaEvents} loading={isLoading} /> })
+    items.push({ key: 'reminders', title: 'Lembretes', w: 6, h: 5, minW: 3, minH: 3, node: <RemindersCard reminders={agendaReminders} loading={isLoading} /> })
+
+    // Ferramentas (APIs) — sujeitas à liberação do admin
+    pushTool('weather', 'Previsão do tempo', <WeatherWidget />, 4, 5)
+    pushTool('quotes', 'Cotações', <QuotesWidget />, 4, 5)
+    pushTool('converter', 'Conversor de moeda', <CurrencyConverter />, 4, 5)
+    pushTool('translator', 'Tradutor', <TranslatorWidget />, 4, 6)
+    pushTool('calculator', 'Calculadora', <Calculator />, 4, 7)
+
+    // Seções operacionais
+    if (adminData) {
+      if (toolAvailable('conversations')) items.push({ key: 'conversations', title: 'Conversas recentes', w: 8, h: 8, minW: 4, minH: 4, node: <ConversationsCard items={adminData.recentConversations} loading={isLoading} /> })
+      if (toolAvailable('cards')) items.push({ key: 'cards', title: 'Cards recentes', w: 4, h: 6, minW: 3, minH: 3, node: <RecentCardsCard cards={adminData.recentCards} loading={isLoading} /> })
+      if (toolAvailable('channelStats')) items.push({ key: 'channelStats', title: 'Mensagens por canal', w: 4, h: 4, minW: 3, minH: 3, node: <ChannelStatsCard breakdown={adminData.channelBreakdown} /> })
+      if (toolAvailable('aiExecutions')) items.push({ key: 'aiExecutions', title: 'Execuções de IA', w: 4, h: 2, minW: 3, minH: 2, node: <AiExecCard value={adminData.kpis.aiExecutionsLast24h} loading={isLoading} /> })
+    }
+    if (memberData) {
+      if (toolAvailable('conversations')) items.push({ key: 'conversations', title: 'Conversas recentes', w: 8, h: 8, minW: 4, minH: 4, node: <ConversationsCard items={memberData.recentConversations} loading={isLoading} allLabel="Ver inbox" /> })
+      items.push({ key: 'upcomingEvents', title: 'Próximos eventos', w: 4, h: 5, minW: 3, minH: 3, node: <UpcomingEventsCard events={memberData.upcomingEvents} loading={isLoading} /> })
+      items.push({ key: 'myTasks', title: 'Minhas tarefas', w: 4, h: 5, minW: 3, minH: 3, node: <RemindersCard reminders={memberData.recentTasks} loading={isLoading} title="Minhas tarefas" /> })
+    }
+  }
+
+  const userPrefs = me?.settings?.dashboardWidgets ?? {}
+  const hiddenKeys = items.filter(it => userPrefs[it.key] === false).map(it => it.key)
+  const savedLayouts = me?.settings?.dashboardLayout ?? null
+
+  const handlePersist = ({ layouts, hidden }: { layouts: Layouts; hidden: string[] }) => {
+    const dw: Record<string, boolean> = {}
+    items.forEach(it => { dw[it.key] = !hidden.includes(it.key) })
+    persist.mutate({ dashboardWidgets: dw, dashboardLayout: layouts })
+  }
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-6xl mx-auto p-6 space-y-8">
@@ -471,248 +649,18 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        {/* ── Painel pessoal: agenda do dia + lembretes (comum) ── */}
+        {/* ── Resumo do dia (IA) ── */}
+        <DailyDigestCard />
+
+        {/* ── Grade personalizável (arraste, redimensione, mostre/oculte) ── */}
         {data && (
-          <div className="animate-slide-up delay-100">
-            <AgendaELembretes events={agendaEvents} reminders={agendaReminders} loading={isLoading} />
-          </div>
-        )}
-
-        {/* ── Widgets de APIs (tempo, cotações, ferramentas) ── */}
-        <ToolsRow vis={widgetVis?.widgets} />
-
-        {/* ─────────────────── VISÃO ADMIN ─────────────────── */}
-        {isAdminScope && adminData && (
-          <>
-            <DailyDigestCard />
-
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-slide-up delay-100">
-              <KpiCard label="Mensagens não lidas" value={adminData.kpis.unreadMessages} icon={MessageSquare}
-                iconBg="bg-blue-100 dark:bg-blue-900/30" iconColor="text-blue-600 dark:text-blue-400" href="/inbox" loading={isLoading} />
-              <KpiCard label="Demandas abertas" value={adminData.kpis.openCards} icon={Kanban}
-                iconBg="bg-purple-100 dark:bg-purple-900/30" iconColor="text-purple-600 dark:text-purple-400" href="/kanban" loading={isLoading} />
-              <KpiCard label="Mensagens hoje" value={adminData.kpis.messagesToday} icon={TrendingUp}
-                iconBg="bg-green-100 dark:bg-green-900/30" iconColor="text-green-600 dark:text-green-400"
-                trend={{ value: msgTrend, label: `${adminData.kpis.messagesYesterday} ontem` }} loading={isLoading} />
-              <KpiCard label="Contatos" value={adminData.kpis.contactsTotal} icon={Users}
-                iconBg="bg-amber-100 dark:bg-amber-900/30" iconColor="text-amber-600 dark:text-amber-400" href="/contacts" loading={isLoading} />
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-slide-up delay-200">
-              <div className="lg:col-span-2 space-y-3">
-                <div className="flex items-center justify-between px-1">
-                  <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Conversas recentes</h2>
-                  <button onClick={() => router.push('/inbox')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
-                    Ver todas <ArrowRight className="h-3 w-3" />
-                  </button>
-                </div>
-                <RecentConversationsList items={adminData.recentConversations} loading={isLoading} />
-              </div>
-
-              <div className="space-y-6">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between px-1">
-                    <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Cards recentes</h2>
-                    <button onClick={() => router.push('/kanban')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
-                      Ver todos <ArrowRight className="h-3 w-3" />
-                    </button>
-                  </div>
-                  <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
-                    {isLoading && Array.from({ length: 3 }).map((_, i) => (
-                      <div key={i} className="px-4 py-3.5 space-y-2">
-                        <Skeleton className="h-3 w-full" />
-                        <Skeleton className="h-3 w-20" />
-                      </div>
-                    ))}
-                    {!isLoading && adminData.recentCards.length === 0 && (
-                      <div className="py-12 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
-                        <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
-                          <Kanban className="h-6 w-6 text-primary" />
-                        </div>
-                        <p className="font-medium text-foreground">Nenhum card ainda</p>
-                        <p className="text-[12px] mt-0.5">Seus cards aparecerão aqui.</p>
-                      </div>
-                    )}
-                    {adminData.recentCards.map(card => (
-                      <div key={card.id} className="group px-4 py-3.5 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-[13px] font-semibold text-foreground truncate flex-1">{card.title}</p>
-                          <span className={cn('shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full', priorityBadge(card.priority))}>
-                            {priorityLabel(card.priority)}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="text-[11px] font-medium text-muted-foreground">{card.column.name}</span>
-                          {card.createdBy === 'AI' && (
-                            <span className="text-[10px] bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
-                              <Zap className="h-2.5 w-2.5" /> IA
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {adminData.channelBreakdown.length > 0 && (
-                  <div className="space-y-3">
-                    <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase px-1">Mensagens hoje por canal</h2>
-                    <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-6 space-y-4 shadow-sm">
-                      {adminData.channelBreakdown.map(({ type, total }) => {
-                        const ch = channelLabel(type)
-                        const maxTotal = Math.max(...adminData.channelBreakdown.map(b => b.total))
-                        const pct = maxTotal > 0 ? Math.round((total / maxTotal) * 100) : 0
-                        return (
-                          <div key={type} className="group">
-                            <div className="flex items-center justify-between text-[13px] mb-2">
-                              <span className={cn('font-semibold flex items-center gap-2 transition-transform group-hover:translate-x-1', ch.color)}>
-                                {ch.icon} {ch.label}
-                              </span>
-                              <span className="text-muted-foreground font-bold">{total}</span>
-                            </div>
-                            <div className="h-2.5 rounded-full bg-muted overflow-hidden">
-                              <div className="h-full rounded-full bg-gradient-to-r from-primary/60 to-primary transition-all duration-1000 ease-out" style={{ width: `${pct}%` }} />
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                <div className="rounded-2xl border bg-gradient-to-br from-secondary/10 to-transparent p-5 flex items-center gap-4 shadow-sm">
-                  <div className="h-12 w-12 rounded-2xl bg-secondary/20 flex items-center justify-center shrink-0 shadow-inner">
-                    <Bot className="h-6 w-6 text-secondary-foreground" />
-                  </div>
-                  <div>
-                    {isLoading ? <Skeleton className="h-6 w-12 mb-1" /> : <p className="text-2xl font-bold tracking-tight text-foreground">{adminData.kpis.aiExecutionsLast24h}</p>}
-                    <p className="text-xs font-medium text-muted-foreground">Execuções de IA (24h)</p>
-                  </div>
-                  <Clock className="h-5 w-5 text-muted-foreground ml-auto shrink-0" />
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* ─────────────────── VISÃO MEMBER ─────────────────── */}
-        {memberData && (
-          <>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-slide-up delay-100">
-              <KpiCard label="Minhas conversas abertas" value={memberData.kpis.myOpenConversations} icon={Inbox}
-                iconBg="bg-blue-100 dark:bg-blue-900/30" iconColor="text-blue-600 dark:text-blue-400" href="/inbox" loading={isLoading} />
-              <KpiCard label="Na fila pública" value={memberData.kpis.queueCount} icon={UsersRound}
-                iconBg="bg-amber-100 dark:bg-amber-900/30" iconColor="text-amber-600 dark:text-amber-400" href="/inbox" loading={isLoading} />
-              <KpiCard label="Mensagens não lidas" value={memberData.kpis.unreadMessages} icon={Bell}
-                iconBg="bg-rose-100 dark:bg-rose-900/30" iconColor="text-rose-600 dark:text-rose-400" href="/inbox" loading={isLoading} />
-              <KpiCard label="Tarefas pendentes" value={memberData.kpis.pendingTasks} icon={ListTodo}
-                iconBg="bg-emerald-100 dark:bg-emerald-900/30" iconColor="text-emerald-600 dark:text-emerald-400" href="/tasks" loading={isLoading} />
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-slide-up delay-200">
-              {/* Conversas recentes */}
-              <div className="lg:col-span-2 space-y-3">
-                <div className="flex items-center justify-between px-1">
-                  <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Conversas recentes</h2>
-                  <button onClick={() => router.push('/inbox')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
-                    Ver inbox <ArrowRight className="h-3 w-3" />
-                  </button>
-                </div>
-                <RecentConversationsList items={memberData.recentConversations} loading={isLoading} />
-              </div>
-
-              {/* Coluna direita: próximos eventos + minhas tarefas */}
-              <div className="space-y-6">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between px-1">
-                    <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Próximos eventos</h2>
-                    <button onClick={() => router.push('/calendar')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
-                      Ver agenda <ArrowRight className="h-3 w-3" />
-                    </button>
-                  </div>
-                  <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
-                    {isLoading && Array.from({ length: 2 }).map((_, i) => (
-                      <div key={i} className="px-4 py-3.5 space-y-2">
-                        <Skeleton className="h-3 w-full" />
-                        <Skeleton className="h-3 w-20" />
-                      </div>
-                    ))}
-                    {!isLoading && memberData.upcomingEvents.length === 0 && (
-                      <div className="py-12 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
-                        <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
-                          <Calendar className="h-6 w-6 text-primary" />
-                        </div>
-                        <p className="font-medium text-foreground">Nenhum evento</p>
-                        <p className="text-[12px] mt-0.5">Próximos eventos nos 7 dias.</p>
-                      </div>
-                    )}
-                    {memberData.upcomingEvents.map(ev => (
-                      <div key={ev.id} className="group px-4 py-3.5 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
-                        <p className="text-[13px] font-semibold text-foreground truncate">{ev.title}</p>
-                        <p className="text-[11px] font-medium text-muted-foreground mt-2 flex items-center gap-1.5">
-                          <Clock className="h-3.5 w-3.5" /> {formatEventTime(ev.startAt)}
-                          {ev.contact && (
-                            <span className="ml-1 px-2 py-0.5 rounded-full bg-accent/50 truncate font-medium flex items-center gap-1">
-                              <Users className="h-2.5 w-2.5" />
-                              {ev.contact.name ?? ev.contact.phone}
-                            </span>
-                          )}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between px-1">
-                    <h2 className="text-sm font-bold text-foreground/80 tracking-wide uppercase">Minhas tarefas</h2>
-                    <button onClick={() => router.push('/tasks')} className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors flex items-center gap-1">
-                      Ver todas <ArrowRight className="h-3 w-3" />
-                    </button>
-                  </div>
-                  <div className="rounded-3xl border bg-card/50 backdrop-blur-sm p-3 space-y-1 shadow-sm">
-                    {isLoading && Array.from({ length: 2 }).map((_, i) => (
-                      <div key={i} className="px-4 py-3.5 space-y-2">
-                        <Skeleton className="h-3 w-full" />
-                        <Skeleton className="h-3 w-3/4" />
-                      </div>
-                    ))}
-                    {!isLoading && memberData.recentTasks.length === 0 && (
-                      <div className="py-12 flex flex-col items-center justify-center text-center text-sm text-muted-foreground bg-gradient-to-b from-transparent to-muted/20 rounded-2xl">
-                        <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
-                          <ListTodo className="h-6 w-6 text-primary" />
-                        </div>
-                        <p className="font-medium text-foreground">Nenhuma tarefa pendente</p>
-                        <p className="text-[12px] mt-0.5">As tarefas atribuídas a você aparecerão aqui.</p>
-                      </div>
-                    )}
-                    {memberData.recentTasks.map(t => (
-                      <div key={t.id} className="group px-4 py-3.5 rounded-2xl hover:bg-background/80 hover:shadow-sm transition-all duration-200">
-                        <p className="text-[13px] font-semibold text-foreground truncate">{t.title}</p>
-                        <div className="flex items-center gap-3 mt-1.5 text-[11px] font-medium text-muted-foreground">
-                          {t.remindAt && (
-                            <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30 px-1.5 py-0.5 rounded-md">
-                              <Bell className="h-3 w-3" />
-                              {formatRelative(t.remindAt)}
-                            </span>
-                          )}
-                          {t.conversationId && (
-                            <Link
-                              href={`/inbox/${t.conversationId}`}
-                              className="text-primary hover:underline flex items-center gap-1"
-                            >
-                              <MessageSquare className="h-3 w-3" />
-                              {t.contact?.name ?? t.contact?.phone ?? 'Conversa'}
-                            </Link>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </>
+          <DashboardGrid
+            items={items}
+            hiddenKeys={hiddenKeys}
+            savedLayouts={savedLayouts}
+            onPersist={handlePersist}
+            saving={persist.isPending}
+          />
         )}
       </div>
     </div>

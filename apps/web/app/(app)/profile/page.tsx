@@ -477,6 +477,10 @@ const DASHBOARD_WIDGET_LABELS: Record<string, { label: string; description: stri
   converter: { label: 'Conversor de moeda', description: 'Converte valores entre moedas' },
   translator: { label: 'Tradutor', description: 'Tradução rápida de textos' },
   calculator: { label: 'Calculadora', description: 'Calculadora utilitária' },
+  conversations: { label: 'Conversas recentes', description: 'Lista das últimas conversas' },
+  cards: { label: 'Cards recentes', description: 'Últimos cards do kanban' },
+  channelStats: { label: 'Mensagens hoje por canal', description: 'Gráfico de mensagens por canal' },
+  aiExecutions: { label: 'Execuções de IA (24h)', description: 'Total de execuções de IA nas últimas 24h' },
 }
 
 function DashboardWidgetsPanel() {
