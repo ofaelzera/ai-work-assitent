@@ -254,6 +254,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         // assim o usuário não perde tickets quando há múltiplos para o mesmo chat.
         take: limit * 2,
         include: {
+          metadata: true,
           contact: { select: { id: true, name: true, phone: true, email: true, metadata: true, company: { select: { id: true, name: true, color: true } } } },
           channel: { select: { id: true, type: true, label: true } },
           assignee: { select: { id: true, name: true, email: true, settings: true } },
@@ -2793,7 +2794,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
             ],
           }),
         },
-        select: { id: true, externalId: true, subject: true },
+        select: { id: true, externalId: true, subject: true, metadata: true },
         // Sobre-busca pra compensar o dedup por externalId logo abaixo —
         // o modelo de ticket cria múltiplas conversations para o mesmo grupo.
         orderBy: { lastMessageAt: 'desc' },
@@ -2812,7 +2813,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           id: c.externalId,
           subject: c.subject ?? c.externalId,
           conversationId: c.id,
-          pictureUrl: null,
+          pictureUrl: (c.metadata as any)?.avatarUrl ?? null,
         })
         if (items.length >= limit) break
       }

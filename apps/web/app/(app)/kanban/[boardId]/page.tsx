@@ -364,7 +364,11 @@ function KanbanColumn({
                   className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-40"
                 >
                   <button
-                    onClick={() => { setEditing(true); setMenuOpen(false) }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuOpen(false);
+                      setTimeout(() => setEditing(true), 10);
+                    }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
                     <Pencil className="h-3 w-3" /> Renomear
                   </button>
@@ -627,12 +631,20 @@ function BoardActions({ boardId, boardName, isOwner }: { boardId: string; boardN
           className="absolute right-0 top-full mt-1 z-30 bg-card border rounded-lg shadow-lg overflow-hidden w-44"
         >
           <button
-            onClick={handleRename}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen(false);
+              setTimeout(handleRename, 10);
+            }}
             className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent text-left">
             <Pencil className="h-3 w-3" /> Renomear board
           </button>
           <button
-            onClick={handleDelete}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen(false);
+              setTimeout(handleDelete, 10);
+            }}
             className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-destructive/10 text-destructive text-left border-t">
             <Trash2 className="h-3 w-3" /> Remover board
           </button>

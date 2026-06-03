@@ -1396,7 +1396,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
       const payload = event.payload as any
       queryClient.setQueryData(['conversation', conversationId], (old: any) => {
         if (!old?.messages) return old
-        if (old.messages.some((m: any) => m.id === payload.messageId || (payload.conversationExternalId && m.externalId === payload.conversationExternalId))) return old
+        if (old.messages.some((m: any) => m.id === payload.messageId)) return old
         
         return {
           ...old,
@@ -1407,7 +1407,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
               body: payload.body,
               direction: payload.direction,
               sentAt: new Date().toISOString(),
-              externalId: payload.conversationExternalId,
+              externalId: payload.messageExternalId || null,
               fromContactId: payload.contactId,
               deliveryStatus: null,
             }

@@ -209,7 +209,12 @@ function ConversationItem({ conv, active, currentUserId, onClick, onFavorite, on
     >
       {active && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary rounded-r" />}
 
-      <Avatar name={displayName} isGroup={conv.isGroup} avatarUrl={(conv.contact?.metadata as any)?.avatarUrl} channelType={conv.channel.type} />
+      <Avatar 
+        name={displayName} 
+        isGroup={conv.isGroup} 
+        avatarUrl={conv.isGroup ? ((conv.contact?.metadata as any)?.avatarUrl ?? (conv as any).metadata?.avatarUrl) : (conv.contact?.metadata as any)?.avatarUrl} 
+        channelType={conv.channel.type} 
+      />
 
       <div className="flex-1 min-w-0">
         {/* Linha 1: ícone de grupo + nome (linha própria, sem disputar com badges) + horário */}

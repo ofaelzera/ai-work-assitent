@@ -37,6 +37,7 @@ interface GroupConversation {
   subject: string | null
   externalId: string
   companyId: string | null
+  metadata?: { avatarUrl?: string } | null
   channel: { id: string; type: string; label: string }
   contact: { id: string; name: string | null; metadata?: { avatarUrl?: string } | null } | null
 }
@@ -561,7 +562,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
                   <div className="rounded-lg border divide-y">
                     {unlinkedGroups.slice(0, 5).map(g => {
                       const label = g.subject ?? '(sem nome)'
-                      const avatar = g.contact?.metadata?.avatarUrl ?? null
+                      const avatar = (g.metadata as any)?.avatarUrl ?? g.contact?.metadata?.avatarUrl ?? null
                       return (
                         <div key={g.id} className="flex items-center gap-2.5 px-3 py-2">
                           <div className="h-8 w-8 rounded-full bg-muted overflow-hidden flex items-center justify-center text-xs shrink-0">
@@ -595,7 +596,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
                 )}
                 {filteredLinkedGroups.map(g => {
                   const label = g.subject ?? '(sem nome)'
-                  const avatar = g.contact?.metadata?.avatarUrl ?? null
+                  const avatar = (g.metadata as any)?.avatarUrl ?? g.contact?.metadata?.avatarUrl ?? null
                   return (
                     <div key={g.id}
                       className="flex items-center gap-2.5 px-5 py-2 hover:bg-accent/40 group/grp transition-colors">
