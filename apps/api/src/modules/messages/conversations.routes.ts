@@ -84,13 +84,14 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           cursor: z.string().optional(),
           limit: z.coerce.number().default(50),
           filter: z.enum(['all', 'unread', 'favorites', 'groups', 'archived', 'resolved']).default('all'),
+          status: z.enum(['all', 'active']).optional(),
           includeImported: z.coerce.boolean().optional(),  // default false — esconde conversas IMPORTED
         }),
       },
     },
     async (req) => {
       const { workspaceId, sub: userId } = req.user
-      const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, companyId, teamId, inbox, q, cursor, limit, filter, includeImported } = req.query
+      const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, companyId, teamId, inbox, q, cursor, limit, filter, status, includeImported } = req.query
 
       // Resolve filtro de canal por tipo (single, CSV-in ou CSV-not-in)
       const channelTypeFilter: Record<string, unknown> = {}
@@ -220,10 +221,12 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
                   ...(teamScope ? [teamScope] : []),
                 ],
               }),
-          // Arquivadas ficam separadas; demais filtros excluem arquivadas
-          archived: filter === 'archived' ? true : false,
+          // Arquivadas ficam separadas; demais filtros excluem arquivadas (salvo se status=all)
+          archived: status === 'all' ? undefined : filter === 'archived' ? true : false,
           // Por padrão mostra apenas tickets ativos; 'resolved' mostra apenas finalizados
-          ...(filter === 'resolved'
+          ...(status === 'all'
+            ? {}
+            : filter === 'resolved'
             ? { status: 'RESOLVED' }
             : filter !== 'archived' ? { status: { in: ['OPEN', 'WAITING'] } } : {}),
           ...(filter === 'unread' && { unreadCount: { gt: 0 }, reads: { none: { userId } } }),

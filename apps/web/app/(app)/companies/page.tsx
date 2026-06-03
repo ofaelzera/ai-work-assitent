@@ -213,7 +213,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
     queryKey: ['conversations', 'company-groups', company?.id],
     queryFn: () =>
       apiFetch<{ conversations: GroupConversation[] }>(
-        `/conversations?filter=groups&companyId=${company!.id}&limit=200&includeImported=true`,
+        `/conversations?filter=groups&companyId=${company!.id}&limit=200&includeImported=true&status=all`,
       ),
     enabled: !!company,
   })
@@ -223,7 +223,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
     queryKey: ['conversations', 'groups-search', groupSearch],
     queryFn: () =>
       apiFetch<{ conversations: GroupConversation[] }>(
-        `/conversations?filter=groups&q=${encodeURIComponent(groupSearch)}&limit=30&includeImported=true`,
+        `/conversations?filter=groups&q=${encodeURIComponent(groupSearch)}&limit=30&includeImported=true&status=all`,
       ),
     enabled: groupSearch.length > 0 && !!company,
   })
