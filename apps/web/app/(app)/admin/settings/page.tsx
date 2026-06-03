@@ -578,6 +578,113 @@ function IntegrationsPanel() {
   )
 }
 
+// ─── Widgets do dashboard ─────────────────────────────────────────────────────
+type WidgetKey =
+  | 'weather' | 'quotes' | 'converter' | 'translator' | 'calculator'
+  | 'conversations' | 'cards' | 'channelStats' | 'aiExecutions'
+
+type IntegrationsConfig = {
+  widgets: Record<WidgetKey, boolean>
+  brapiToken?: string
+}
+
+const TOOL_WIDGETS: Array<{ key: WidgetKey; label: string; desc: string }> = [
+  { key: 'weather', label: 'Previsão do tempo', desc: 'Clima do endereço da empresa (Open-Meteo, sem chave)' },
+  { key: 'quotes', label: 'Cotações', desc: 'Dólar, euro, bitcoin (AwesomeAPI) e bolsa (brapi, requer token)' },
+  { key: 'converter', label: 'Conversor de moeda', desc: 'Converte valores entre moedas em tempo real' },
+  { key: 'translator', label: 'Tradutor', desc: 'Tradução rápida de textos curtos (MyMemory, sem chave)' },
+  { key: 'calculator', label: 'Calculadora', desc: 'Calculadora utilitária (offline, no navegador)' },
+]
+
+const SECTION_WIDGETS: Array<{ key: WidgetKey; label: string; desc: string }> = [
+  { key: 'conversations', label: 'Conversas recentes', desc: 'Lista das últimas conversas' },
+  { key: 'cards', label: 'Cards recentes', desc: 'Últimos cards do kanban' },
+  { key: 'channelStats', label: 'Mensagens hoje por canal', desc: 'Gráfico de mensagens por canal' },
+  { key: 'aiExecutions', label: 'Execuções de IA (24h)', desc: 'Total de execuções de IA nas últimas 24h' },
+]
+
+function ApiIntegrationsPanel() {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['integrations-settings'],
+    queryFn: () => apiFetch<IntegrationsConfig>('/integrations/settings'),
+  })
+  const [draft, setDraft] = useState<IntegrationsConfig | null>(null)
+  useEffect(() => { if (data) setDraft(data) }, [data])
+
+  const save = useMutation({
+    mutationFn: (patch: Partial<IntegrationsConfig>) =>
+      apiFetch<IntegrationsConfig>('/integrations/settings', { method: 'PUT', body: JSON.stringify(patch) }),
+    onSuccess: (res) => {
+      setDraft(res)
+      qc.invalidateQueries({ queryKey: ['integrations-settings'] })
+      qc.invalidateQueries({ queryKey: ['dashboard-widgets'] })
+      toast.success('Integrações salvas')
+    },
+    onError: () => toast.error('Erro ao salvar integrações'),
+  })
+
+  if (isLoading || !draft) return <p className="text-sm text-muted-foreground">Carregando...</p>
+
+  const row = (w: { key: WidgetKey; label: string; desc: string }) => {
+    const on = draft.widgets[w.key] !== false
+    return (
+      <div key={w.key} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">{w.label}</p>
+          <p className="text-xs text-muted-foreground">{w.desc}</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          onClick={() => setDraft({ ...draft, widgets: { ...draft.widgets, [w.key]: !on } })}
+          className={cn(
+            'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors',
+            on ? 'bg-primary' : 'bg-muted',
+          )}
+        >
+          <span className={cn('inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', on ? 'translate-x-4' : 'translate-x-0.5')} />
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ferramentas</p>
+        {TOOL_WIDGETS.map(row)}
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Seções do dashboard</p>
+        {SECTION_WIDGETS.map(row)}
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-sm font-medium flex items-center gap-1.5"><Key className="h-3.5 w-3.5" /> Token da brapi.dev (bolsa)</label>
+        <input
+          type="text"
+          value={draft.brapiToken ?? ''}
+          onChange={e => setDraft({ ...draft, brapiToken: e.target.value })}
+          placeholder="Opcional — necessário só para a cotação do Ibovespa"
+          className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+        />
+        <p className="text-xs text-muted-foreground">Crie um token gratuito em brapi.dev. Sem ele, dólar/euro/bitcoin continuam funcionando.</p>
+      </div>
+
+      <button
+        onClick={() => save.mutate(draft)}
+        disabled={save.isPending}
+        className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+      >
+        <Save className="h-3.5 w-3.5" /> {save.isPending ? 'Salvando...' : 'Salvar'}
+      </button>
+    </div>
+  )
+}
+
 // ─── Definição das abas ─────────────────────────────────────────────────────────
 type TabDef = {
   id: string
@@ -652,13 +759,21 @@ function SettingsPageInner() {
       render: () => <EvolutionServersPanel />,
     },
     {
-      id: 'integrations',
-      label: 'Integrações',
+      id: 'channels-status',
+      label: 'Canais conectados',
       icon: Plug,
-      title: 'Integrações',
+      title: 'Canais conectados',
       description: 'Resumo dos canais conectados',
       render: () => <IntegrationsPanel />,
     },
+    ...(isAdmin ? [{
+      id: 'integrations',
+      label: 'Widgets',
+      icon: Plug,
+      title: 'Widgets',
+      description: 'Ative os widgets e seções do dashboard e configure chaves de APIs públicas. O usuário escolhe no perfil quais exibir.',
+      render: () => <ApiIntegrationsPanel />,
+    } as TabDef] : []),
     ...(isAdmin ? [{
       id: 'maintenance',
       label: 'Manutenção',

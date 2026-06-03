@@ -945,21 +945,24 @@ model EventLog {
 
 // ─── System Settings (White-Label) ───────────────────────────────────────────
 model SystemSettings {
-  id                 String  @id @default("default")
-  systemTitle        String  @default("AI Work Assistant")
-  companyName        String  @default("My Company")
-  logoUrl            String? @db.LongText // logo pra tema claro
-  logoDarkUrl        String? @db.LongText // logo pra tema escuro (fallback: logoUrl)
-  faviconUrl         String? @db.LongText
-  primaryColor       String  @default("#6366f1")
-  secondaryColor     String  @default("#4f46e5")
-  chatBgColorLight   String  @default("#efeae2")
-  chatBgColorDark    String  @default("#0b141a")
-  institutionalTexts Json? // { welcomeTitle, welcomeDescription, footerText }
-  contactInfo        Json? // { email, phone, address }
-  externalLinks      Json? // { website, helpCenter, terms, privacy }
-  domainUrl          String?
-
+  id                     String   @id @default("default")
+  systemTitle            String   @default("AI Work Assistant")
+  companyName            String   @default("My Company")
+  logoUrl                String?  @db.LongText  // logo pra tema claro
+  logoDarkUrl            String?  @db.LongText  // logo pra tema escuro (fallback: logoUrl)
+  faviconUrl             String?  @db.LongText
+  primaryColor           String   @default("#6366f1")
+  secondaryColor         String   @default("#4f46e5")
+  chatBgColorLight       String   @default("#efeae2")
+  chatBgColorDark        String   @default("#0b141a")
+  institutionalTexts     Json?    // { welcomeTitle, welcomeDescription, footerText }
+  contactInfo            Json?    // { email, phone, address }
+  externalLinks          Json?    // { website, helpCenter, terms, privacy }
+  // Integrações do dashboard: define o que está DISPONÍVEL no workspace + chaves.
+  // { widgets: { weather, quotes, converter, translator, calculator }: bool, brapiToken?: string }
+  integrations           Json?
+  domainUrl              String?
+  
   // API Keys que saíram do .env
   evolutionServerUrl     String?
   evolutionApiKey        String?

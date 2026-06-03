@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, UserRound, MessageSquare, KeyRound, Calendar as CalendarIcon, Plug, Trash2, Camera, Upload, Clock } from 'lucide-react'
+import { Save, UserRound, MessageSquare, KeyRound, Calendar as CalendarIcon, Plug, Trash2, Camera, Upload, Clock, LayoutDashboard } from 'lucide-react'
 import MessageTemplateField from '@/components/MessageTemplateField'
 import { WeeklyHoursEditor, type HoursRow } from '@/components/WeeklyHoursEditor'
 import { useAuthStore } from '@/store/auth'
@@ -470,6 +470,63 @@ function MessageTemplates() {
   )
 }
 
+// ─── Personalizar dashboard ──────────────────────────────────────────────────
+const DASHBOARD_WIDGET_LABELS: Record<string, { label: string; description: string }> = {
+  weather: { label: 'Previsão do tempo', description: 'Clima do endereço da empresa' },
+  quotes: { label: 'Cotações', description: 'Dólar, euro, bitcoin e bolsa' },
+  converter: { label: 'Conversor de moeda', description: 'Converte valores entre moedas' },
+  translator: { label: 'Tradutor', description: 'Tradução rápida de textos' },
+  calculator: { label: 'Calculadora', description: 'Calculadora utilitária' },
+  conversations: { label: 'Conversas recentes', description: 'Lista das últimas conversas' },
+  cards: { label: 'Cards recentes', description: 'Últimos cards do kanban' },
+  channelStats: { label: 'Mensagens hoje por canal', description: 'Gráfico de mensagens por canal' },
+  aiExecutions: { label: 'Execuções de IA (24h)', description: 'Total de execuções de IA nas últimas 24h' },
+}
+
+function DashboardWidgetsPanel() {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery<{ widgets: Record<string, boolean>; available: Record<string, boolean> }>({
+    queryKey: ['dashboard-widgets'],
+    queryFn: () => apiFetch('/integrations/widgets'),
+  })
+
+  const save = useMutation({
+    mutationFn: (patch: Record<string, boolean>) =>
+      apiFetch('/users/me/preferences', { method: 'PATCH', body: JSON.stringify({ dashboardWidgets: patch }) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dashboard-widgets'] })
+      qc.invalidateQueries({ queryKey: ['me-profile'] })
+      toast.success('Preferências salvas')
+    },
+    onError: () => toast.error('Erro ao salvar'),
+  })
+
+  if (isLoading || !data) return <p className="text-sm text-muted-foreground">Carregando...</p>
+
+  // Só os widgets que o admin deixou disponíveis
+  const availableKeys = Object.keys(data.available).filter(k => data.available[k])
+  if (availableKeys.length === 0) {
+    return <p className="text-sm text-muted-foreground">Nenhum widget disponível. O administrador pode habilitá-los em Configurações → Integrações / APIs.</p>
+  }
+
+  return (
+    <div className="space-y-4">
+      {availableKeys.map(key => {
+        const meta = DASHBOARD_WIDGET_LABELS[key] ?? { label: key, description: '' }
+        return (
+          <Toggle
+            key={key}
+            label={meta.label}
+            description={meta.description}
+            value={data.widgets[key] !== false}
+            onChange={(v) => save.mutate({ [key]: v })}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 // ─── Página ──────────────────────────────────────────────────────────────────
 // ─── Horário de trabalho ──────────────────────────────────────────────────────
 function WorkingHoursPanel({ userId }: { userId: string }) {
@@ -569,6 +626,11 @@ export default function ProfilePage() {
           {isLoading || !profile
             ? <p className="text-sm text-muted-foreground">Carregando...</p>
             : <WorkingHoursPanel userId={profile.id} />}
+        </Section>
+
+        <Section title="Personalizar dashboard" icon={LayoutDashboard}
+          description="Escolha quais widgets aparecem no seu dashboard, entre os disponibilizados pelo administrador.">
+          <DashboardWidgetsPanel />
         </Section>
 
         <Section title="Mensagens automáticas" icon={MessageSquare}
