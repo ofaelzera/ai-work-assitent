@@ -76,7 +76,7 @@ model User {
   chatParticipations    ConversationParticipant[]
   messageReads          MessageRead[]
   conversationReads     ConversationRead[]
-  createdCards          Card[]             @relation("CardCreator")
+  createdCards          Card[]                    @relation("CardCreator")
   cardAssignments       CardAssignee[]
   teamMemberships       TeamMembership[]
   transfersFrom         ConversationTransfer[]    @relation("TransferFromUser")
@@ -296,6 +296,7 @@ model Conversation {
   eligibleAssigneeIds Json? // string[] | null. null = fila pública; preenchido = só esses users veem
   // Tags livres por conversa (string[]). Usadas por RoutingRules/Flows.
   tags                Json?
+  metadata            Json? // Usado para armazenar avatarUrl de grupos, etc.
   releasedFrom        Json? // [{ userId, at, reason }] — DEPRECATED: usar ConversationTransfer. Mantido pra compat.
   lastMessageAt       DateTime?
   firstResponseAt     DateTime? // quando demos a primeira resposta
@@ -520,25 +521,25 @@ model Column {
 }
 
 model Card {
-  id             String    @id @default(cuid())
-  workspaceId    String
-  columnId       String
-  title          String
-  description    String?   @db.Text
-  priority       Priority  @default(MEDIUM)
-  dueDate        DateTime?
-  contactId      String?
-  companyId      String?
-  conversationId String?
-  createdBy      CreatedBy @default(USER)
-  createdByUserId String?  // quem clicou em "criar card" (null se foi criado pela IA/sistema)
-  assigneeId     String?
-  position       Int
-  labels         Json?
-  checklist      Json?
-  deletedAt      DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  workspaceId     String
+  columnId        String
+  title           String
+  description     String?   @db.Text
+  priority        Priority  @default(MEDIUM)
+  dueDate         DateTime?
+  contactId       String?
+  companyId       String?
+  conversationId  String?
+  createdBy       CreatedBy @default(USER)
+  createdByUserId String? // quem clicou em "criar card" (null se foi criado pela IA/sistema)
+  assigneeId      String?
+  position        Int
+  labels          Json?
+  checklist       Json?
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   workspace    Workspace      @relation(fields: [workspaceId], references: [id])
   column       Column         @relation(fields: [columnId], references: [id])
@@ -944,21 +945,21 @@ model EventLog {
 
 // ─── System Settings (White-Label) ───────────────────────────────────────────
 model SystemSettings {
-  id                     String   @id @default("default")
-  systemTitle            String   @default("AI Work Assistant")
-  companyName            String   @default("My Company")
-  logoUrl                String?  @db.LongText  // logo pra tema claro
-  logoDarkUrl            String?  @db.LongText  // logo pra tema escuro (fallback: logoUrl)
-  faviconUrl             String?  @db.LongText
-  primaryColor           String   @default("#6366f1")
-  secondaryColor         String   @default("#4f46e5")
-  chatBgColorLight       String   @default("#efeae2")
-  chatBgColorDark        String   @default("#0b141a")
-  institutionalTexts     Json?    // { welcomeTitle, welcomeDescription, footerText }
-  contactInfo            Json?    // { email, phone, address }
-  externalLinks          Json?    // { website, helpCenter, terms, privacy }
-  domainUrl              String?
-  
+  id                 String  @id @default("default")
+  systemTitle        String  @default("AI Work Assistant")
+  companyName        String  @default("My Company")
+  logoUrl            String? @db.LongText // logo pra tema claro
+  logoDarkUrl        String? @db.LongText // logo pra tema escuro (fallback: logoUrl)
+  faviconUrl         String? @db.LongText
+  primaryColor       String  @default("#6366f1")
+  secondaryColor     String  @default("#4f46e5")
+  chatBgColorLight   String  @default("#efeae2")
+  chatBgColorDark    String  @default("#0b141a")
+  institutionalTexts Json? // { welcomeTitle, welcomeDescription, footerText }
+  contactInfo        Json? // { email, phone, address }
+  externalLinks      Json? // { website, helpCenter, terms, privacy }
+  domainUrl          String?
+
   // API Keys que saíram do .env
   evolutionServerUrl     String?
   evolutionApiKey        String?
@@ -971,34 +972,34 @@ model SystemSettings {
   googleAuthRedirectUri  String?
   webUrl                 String?
 
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // Configuração dinâmica de provedores de IA (substitui as keys do .env).
 // A API key é cifrada com AES-256-GCM (lib/crypto.ts) — nunca em texto puro.
 model AiProviderConfig {
-  provider        String   @id // gemini | openrouter | anthropic | openai
-  enabled         Boolean  @default(false)
+  provider         String    @id // gemini | openrouter | anthropic | openai
+  enabled          Boolean   @default(false)
   apiKeyCiphertext Bytes?
-  apiKeyIv        Bytes?
-  apiKeyAuthTag   Bytes?
-  extra           Json?    // { siteUrl, baseUrl, ... } específico do provider
-  models          AiModel[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  apiKeyIv         Bytes?
+  apiKeyAuthTag    Bytes?
+  extra            Json? // { siteUrl, baseUrl, ... } específico do provider
+  models           AiModel[]
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 }
 
 // Modelos cadastrados pelo usuário sob um provedor (ex: vários modelos do OpenRouter).
 // O sistema (agentes, sugestões) escolhe entre estes modelos.
 model AiModel {
   id          String   @id @default(cuid())
-  provider    String   // FK lógica p/ AiProviderConfig.provider
-  modelId     String   // slug enviado à API (ex: "openai/gpt-4o-mini")
-  label       String   // nome amigável exibido na UI
+  provider    String // FK lógica p/ AiProviderConfig.provider
+  modelId     String // slug enviado à API (ex: "openai/gpt-4o-mini")
+  label       String // nome amigável exibido na UI
   description String?  @db.Text // particularidades / notas do modelo
-  temperature Float?   // temperatura padrão sugerida
-  maxTokens   Int?     // limite de tokens padrão
+  temperature Float? // temperatura padrão sugerida
+  maxTokens   Int? // limite de tokens padrão
   enabled     Boolean  @default(true)
   isDefault   Boolean  @default(false) // modelo padrão do sistema (sugestões, fallback)
   createdAt   DateTime @default(now())

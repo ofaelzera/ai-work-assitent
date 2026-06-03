@@ -1518,6 +1518,10 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
     conv.subject ??
     conv.externalId ?? '...'
 
+  const avatarUrl = conv.isGroup
+    ? (conv as any).metadata?.avatarUrl ?? null
+    : conv.contact?.metadata?.avatarUrl ?? null
+
   const groups = groupByDate(messages)
 
   const handleSend = () => {
@@ -1574,9 +1578,9 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
             className={cn('shrink-0', (isGroup || conv.contact) && 'cursor-pointer hover:opacity-80 transition-opacity')}
             disabled={!isGroup && !conv.contact}
             title={isGroup ? 'Detalhes do grupo' : undefined}>
-            {!isGroup && conv.contact?.metadata?.avatarUrl ? (
+            {avatarUrl ? (
               <img
-                src={conv.contact.metadata.avatarUrl}
+                src={avatarUrl}
                 alt={contactName}
                 className="h-10 w-10 rounded-full object-cover"
                 onError={e => {
@@ -1590,7 +1594,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
             <div
               className={cn(
                 'h-10 w-10 rounded-full flex items-center justify-center text-sm font-bold text-white overflow-hidden',
-                !isGroup && conv.contact?.metadata?.avatarUrl && 'hidden',
+                avatarUrl && 'hidden',
               )}
               style={{ background: conv.contact ? senderColor(conv.contact.id) : '#64748b' }}>
               {isGroup

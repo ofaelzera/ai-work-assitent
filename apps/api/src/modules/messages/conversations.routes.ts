@@ -2600,6 +2600,42 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
+  /** POST /conversations/:id/group/sync-avatar — busca a foto do grupo via Evolution API */
+  app.post(
+    '/conversations/:id/group/sync-avatar',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req: any, reply) => {
+      try {
+        const { conv, client, instanceName, groupJid } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+
+        let profilePictureUrl: string | null = null
+        try {
+          const result = await client.fetchProfilePicture(instanceName, groupJid)
+          profilePictureUrl = result.profilePictureUrl ?? null
+        } catch {
+          return reply.badRequest('Não foi possível buscar a foto — privacidade restrita ou grupo sem foto')
+        }
+
+        if (!profilePictureUrl) {
+          return reply.badRequest('Este grupo não tem foto de perfil disponível')
+        }
+
+        const meta = (conv.metadata as Record<string, unknown> | null) ?? {}
+        await prisma.conversation.update({
+          where: { id: conv.id },
+          data: { metadata: { ...meta, avatarUrl: profilePictureUrl } },
+        })
+
+        return { ok: true, avatarUrl: profilePictureUrl }
+      } catch (err: any) {
+        return reply.badRequest(err?.message ?? 'Erro ao sincronizar foto')
+      }
+    },
+  )
+
   /** POST /conversations/:id/group/members — add/remove/promote/demote */
   app.post(
     '/conversations/:id/group/members',

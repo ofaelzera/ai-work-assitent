@@ -101,6 +101,16 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
     onError: (e: any) => toast.error(e?.message ?? 'Erro ao atualizar foto'),
   })
 
+  const syncAvatarMut = useMutation({
+    mutationFn: () => apiFetch<{ avatarUrl: string }>(`/conversations/${conversationId}/group/sync-avatar`, { method: 'POST' }),
+    onSuccess: () => {
+      toast.success('Foto sincronizada com sucesso')
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+    },
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao sincronizar foto'),
+  })
+
   const membersMut = useMutation({
     mutationFn: (body: { action: 'add' | 'remove' | 'promote' | 'demote'; participants: string[] }) =>
       apiFetch(`/conversations/${conversationId}/group/members`, { method: 'POST', body: JSON.stringify(body) }),
@@ -241,6 +251,17 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
                       if (e.target) e.target.value = ''
                     }}
                   />
+                </div>
+                <div className="mt-2 flex items-center justify-center">
+                  <button
+                    onClick={() => syncAvatarMut.mutate()}
+                    disabled={syncAvatarMut.isPending}
+                    className="text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1"
+                    title="Sincronizar foto do WhatsApp"
+                  >
+                    <RefreshCw className={cn('h-3 w-3', syncAvatarMut.isPending && 'animate-spin')} />
+                    Sincronizar
+                  </button>
                 </div>
 
                 {/* Subject (editável) */}
