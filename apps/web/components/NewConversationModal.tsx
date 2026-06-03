@@ -7,7 +7,6 @@ import { toast } from 'sonner'
 import { X, Search, MessageSquare, Mail, Phone, UserPlus, CheckCircle2, AlertCircle, Loader2, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { maskPhone } from '@/lib/masks'
-import { ChatInput } from '@/components/ChatInput'
 
 interface Channel { id: string; type: string; label: string; status: string }
 interface Contact {
@@ -46,7 +45,6 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null)
   const [selectedGroup, setSelectedGroup] = useState<GroupItem | null>(null)
   const [selectedChannelId, setSelectedChannelId] = useState('')
-  const [text, setText] = useState('')
   const [subject, setSubject] = useState('')
   const [manualPhone, setManualPhone] = useState('')
   const [manualEmail, setManualEmail] = useState('')
@@ -177,7 +175,6 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
           email: !isWa ? (selectedContact?.email ?? manualEmail) : undefined,
           groupJid: targetMode === 'group' ? selectedGroup?.id : undefined,
           subject: subject || (targetMode === 'group' ? selectedGroup?.subject : undefined),
-          text,
         }),
       })
     },
@@ -189,7 +186,7 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
     onError: (err: any) => toast.error(err?.message ?? 'Erro ao iniciar conversa'),
   })
 
-  const canSend = selectedChannelId && text.trim() && (
+  const canSend = selectedChannelId && (
     targetMode === 'group'
       ? !!selectedGroup
       : (selectedContact ?? manualPhone ?? manualEmail)
@@ -459,17 +456,6 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
             </div>
           )}
 
-          {/* Mensagem */}
-          <div>
-            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">Mensagem</label>
-            <ChatInput
-              value={text}
-              onChange={setText}
-              onSend={() => { if (canSend && !sendMutation.isPending) sendMutation.mutate() }}
-              disabled={sendMutation.isPending}
-              placeholder="Digite sua mensagem..."
-            />
-          </div>
         </div>
 
         {/* Footer */}
@@ -480,7 +466,7 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
             disabled={!canSend || sendMutation.isPending}
             className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
           >
-            {sendMutation.isPending ? 'Enviando...' : 'Enviar'}
+            {sendMutation.isPending ? 'Iniciando...' : 'Iniciar'}
           </button>
         </div>
       </div>

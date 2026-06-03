@@ -987,7 +987,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           email: z.string().email().optional(), // Email
           groupJid: z.string().optional(), // WhatsApp: jid de grupo (xxx@g.us)
           subject: z.string().optional(),
-          text: z.string().min(1),
+          text: z.string().optional(),
         }),
       },
     },
@@ -1077,7 +1077,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
             workspaceId,
             channelId,
             contactId: contact!.id,
-            messageBody: text,
+            messageBody: text ?? '',
             autoAssign: true,
             fallbackUserId: req.user.sub,
           })
@@ -1102,6 +1102,11 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
             'Nova conversa proativa criada',
           )
         }
+      }
+
+      // Se não enviou texto, retorna apenas a conversa
+      if (!text?.trim()) {
+        return reply.code(201).send({ conversation })
       }
 
       // Envia a primeira mensagem
