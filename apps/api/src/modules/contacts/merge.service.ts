@@ -69,15 +69,27 @@ export async function mergeContacts(dupId: string, primaryId: string): Promise<v
     const keep = group[0]
     const drops = group.slice(1)
     for (const drop of drops) {
-      // Move mensagens (idempotência: o índice unique é (conversationId, externalId),
-      // então em teoria não há colisão entre conversas distintas — mas se houver, ignoramos)
-      try {
-        await prisma.message.updateMany({
-          where: { conversationId: drop.id },
-          data: { conversationId: keep.id },
-        })
-      } catch (err) {
-        logger.warn({ err, dropId: drop.id, keepId: keep.id }, 'Colisão ao mover mensagens — algumas mensagens podem ter sido descartadas')
+      // Move mensagens uma a uma. O índice unique (conversationId, externalId)
+      // colide quando a MESMA mensagem do WhatsApp existe nas duas conversas
+      // (mesmo chat via PN e LID). Nesse caso descartamos a duplicata do drop
+      // (os MessageRead somem em cascata) — senão ela ficaria órfã apontando
+      // para a conversa deletada e violaria a FK no delete abaixo.
+      const dropMsgs = await prisma.message.findMany({
+        where: { conversationId: drop.id },
+        select: { id: true, externalId: true },
+      })
+      for (const msg of dropMsgs) {
+        if (msg.externalId) {
+          const twin = await prisma.message.findUnique({
+            where: { conversationId_externalId: { conversationId: keep.id, externalId: msg.externalId } },
+            select: { id: true },
+          })
+          if (twin) {
+            await prisma.message.delete({ where: { id: msg.id } })
+            continue
+          }
+        }
+        await prisma.message.update({ where: { id: msg.id }, data: { conversationId: keep.id } })
       }
       // Move cards
       await prisma.card.updateMany({
