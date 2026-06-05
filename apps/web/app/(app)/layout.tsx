@@ -18,6 +18,14 @@ import {
   Users,
   CheckSquare,
   UserCircle,
+  ChevronRight, 
+  Megaphone, 
+  LineChart, 
+  BarChart2, 
+  Activity, 
+  Workflow, 
+  Mails, 
+  PieChart
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -30,45 +38,87 @@ import { useTheme } from 'next-themes'
 import { NotificationManager } from '@/components/providers/NotificationManager'
 
 /**
- * Itens do menu principal.
- *
- * `perm` (opcional): permissão necessária pra o item aparecer no menu.
- * Quando omitido, item aparece pra qualquer user autenticado.
- * ADMIN base sempre vê tudo (bypass no usePermission).
+ * Estrutura de grupos do menu lateral.
  */
-const navItems: Array<{ href: string; label: string; icon: any; perm?: string }> = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/inbox',     label: 'Inbox',     icon: MessageSquare },
-  { href: '/chat',      label: 'Chat',      icon: MessageSquare },
-  { href: '/kanban',    label: 'Kanban',    icon: Kanban },
-  { href: '/calendar',  label: 'Agenda',    icon: Calendar },
-  { href: '/tasks',     label: 'Tarefas',   icon: CheckSquare },
-  { href: '/contacts',  label: 'Contatos',  icon: Users,     perm: 'contacts.view' },
-  { href: '/companies', label: 'Empresas',  icon: Building2, perm: 'companies.view' },
-  { href: '/vault',     label: 'Cofre',     icon: Lock },
-  { href: '/storage',   label: 'Arquivos',  icon: FolderOpen },
-]
+type NavItem = {
+  href: string;
+  label: string;
+  icon: any;
+  perm?: string;
+  badge?: { text: string; variant: 'beta' | 'new' };
+};
 
-/**
- * Itens admin — cada um exige sua perm granular.
- * A seção inteira só aparece se o user tiver pelo menos UMA.
- */
-const adminItems: Array<{ href: string; label: string; perm: string }> = [
-  { href: '/admin/channels', label: 'Canais',              perm: 'admin.channels' },
-  { href: '/admin/agents',   label: 'Agentes IA',          perm: 'admin.agents' },
-  { href: '/admin/ai-settings', label: 'Provedores de IA',  perm: 'admin.settings' },
-  // { href: '/admin/prompts',  label: 'Prompts',             perm: 'admin.agents' },
-  { href: '/admin/ai-logs',  label: 'Logs IA',             perm: 'admin.agents' },
-  { href: '/admin/events',   label: 'Eventos',             perm: 'admin.events' },
-  { href: '/admin/reports',  label: 'Relatórios',          perm: 'reports.view' },
-  { href: '/admin/users',    label: 'Usuários',            perm: 'admin.users' },
-  { href: '/admin/roles',    label: 'Roles e permissões',  perm: 'admin.users' },
-  { href: '/admin/teams',           label: 'Setores',              perm: 'teams.manage' },
-  { href: '/admin/routing-rules',   label: 'Regras de roteamento', perm: 'flows.manage' },
-  { href: '/admin/flows',           label: 'Fluxos',               perm: 'flows.manage' },
-  { href: '/admin/quick-replies',     label: 'Respostas Rápidas',   perm: 'admin.settings' },
-  { href: '/admin/settings',          label: 'Configurações',        perm: 'admin.settings' },
-]
+type NavGroup = {
+  title?: string;
+  items: NavItem[];
+};
+
+const navGroups: NavGroup[] = [
+  {
+    items: [
+      { href: '/dashboard', label: 'Início', icon: LayoutDashboard },
+    ]
+  },
+  {
+    title: 'ATENDIMENTO',
+    items: [
+      { href: '/inbox', label: 'Conversas', icon: MessageSquare },
+      { href: '/chat', label: 'Chat Interno', icon: MessageSquare },
+      { href: '/calendar', label: 'Agenda', icon: Calendar },
+      { href: '/tasks', label: 'Tarefas', icon: CheckSquare },
+      { href: '/admin/quick-replies', label: 'Respostas Rápidas', icon: MessageSquare, perm: 'admin.settings' },
+    ]
+  },
+  {
+    title: 'CRM',
+    items: [
+      { href: '/kanban', label: 'Negócios', icon: Kanban },
+      { href: '/contacts', label: 'Contatos', icon: Users, perm: 'contacts.view' },
+      { href: '/companies', label: 'Empresas', icon: Building2, perm: 'companies.view' },
+    ]
+  },
+  {
+    title: 'AUTOMAÇÕES',
+    items: [
+      { href: '/admin/agents', label: 'Atendente Automático', icon: Bot, perm: 'admin.agents' },
+      { href: '/admin/flows', label: 'Fluxos', icon: Workflow, perm: 'flows.manage' },
+      { href: '/admin/routing-rules', label: 'Roteamento', icon: Settings, perm: 'flows.manage' },
+    ]
+  },
+  {
+    title: 'MARKETING & ANÚNCIOS',
+    items: [
+      { href: '/admin/campaigns', label: 'Campanhas', icon: Megaphone, perm: 'admin.settings', badge: { text: 'Beta', variant: 'beta' } },
+      // Exemplo de item caso queiram links/UTMs
+    ]
+  },
+  {
+    title: 'RESULTADOS',
+    items: [
+      { href: '/admin/reports', label: 'Painel Geral', icon: BarChart2, perm: 'reports.view' },
+      { href: '/admin/ai-logs', label: 'Logs IA', icon: Activity, perm: 'admin.agents' },
+      { href: '/admin/events', label: 'Eventos', icon: Activity, perm: 'admin.events' },
+    ]
+  },
+  {
+    title: 'SISTEMA & ARQUIVOS',
+    items: [
+      { href: '/vault', label: 'Cofre', icon: Lock },
+      { href: '/storage', label: 'Arquivos', icon: FolderOpen },
+    ]
+  },
+  {
+    title: 'AJUSTES',
+    items: [
+      { href: '/admin/channels', label: 'Canais', icon: Settings, perm: 'admin.channels', badge: { text: 'Novo', variant: 'new' } },
+      { href: '/admin/ai-settings', label: 'Provedores de IA', icon: Settings, perm: 'admin.settings' },
+      { href: '/admin/users', label: 'Usuários', icon: Users, perm: 'admin.users' },
+      { href: '/admin/roles', label: 'Roles e permissões', icon: Lock, perm: 'admin.users' },
+      { href: '/admin/teams', label: 'Setores', icon: Building2, perm: 'teams.manage' },
+      { href: '/admin/settings', label: 'Configurações', icon: Settings, perm: 'admin.settings' },
+    ]
+  }
+];
 
 function userHasPerm(user: { role: string; permissions?: string[] } | null, perm?: string): boolean {
   if (!user) return false
@@ -223,6 +273,71 @@ function InboxBadges() {
   )
 }
 
+function CollapsibleNavGroup({ title, items, pathname, user }: { title?: string, items: NavItem[], pathname: string, user: any }) {
+  const [isOpen, setIsOpen] = useState(true)
+  
+  return (
+    <div className="flex flex-col">
+      {title && (
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="flex w-full items-center justify-between px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest text-muted-foreground/70 hover:text-foreground transition-colors group"
+        >
+          <span>{title}</span>
+          <ChevronRight className={cn("h-3.5 w-3.5 transition-transform opacity-50 group-hover:opacity-100", isOpen && "rotate-90")} />
+        </button>
+      )}
+      
+      <div className={cn(
+        "grid transition-all duration-200 ease-in-out",
+        isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+      )}>
+        <div className="overflow-hidden">
+          <div className={cn("space-y-[3px]", title ? "mt-1" : "")}>
+            {items.map((item) => {
+              if (!userHasPerm(user, item.perm)) return null;
+              const isActive = pathname.startsWith(item.href)
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    'group flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-[14px] font-medium transition-all duration-200 relative',
+                    isActive
+                      ? 'bg-primary/10 text-primary dark:bg-[#2d2252]/40 dark:text-[#9F7AEA]'
+                      : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
+                  )}
+                >
+                  <item.icon className={cn(
+                    "h-[18px] w-[18px] transition-transform", 
+                    isActive ? "scale-110" : "opacity-70 group-hover:opacity-100 group-hover:scale-105"
+                  )} />
+                  <span className="flex-1 truncate">{item.label}</span>
+                  
+                  <div className="flex items-center gap-2 shrink-0">
+                    {item.badge && (
+                      <span className={cn(
+                        "text-[10px] px-1.5 py-0.5 rounded border leading-none font-semibold tracking-wide",
+                        item.badge.variant === 'beta' 
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                          : "border-primary/30 bg-primary/10 text-primary dark:text-[#9F7AEA]"
+                      )}>
+                        {item.badge.text}
+                      </span>
+                    )}
+                    {item.href === '/chat' && <ChatUnreadBadge />}
+                    {item.href === '/inbox' && <InboxBadges />}
+                  </div>
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
@@ -311,7 +426,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="absolute inset-0 bg-grid-black/[0.02] dark:bg-grid-white/[0.02] pointer-events-none" />
 
       {/* Modern Sidebar with Glassmorphism */}
-      <aside className="w-64 flex-shrink-0 bg-card/60 backdrop-blur-xl border-r flex flex-col shadow-2xl z-10">
+      <aside className="w-[260px] flex-shrink-0 bg-[#0A0A0B] dark:bg-[#11121C] border-r border-border/40 flex flex-col shadow-2xl z-10">
         <div className="p-5 pb-3">
           <div className="flex items-center justify-between gap-1 animate-fade-in">
             <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -336,79 +451,21 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-4 space-y-1.5 py-4">
-          {navItems.filter(it => userHasPerm(user, it.perm)).map((item, index) => {
-            const isActive = pathname.startsWith(item.href)
+        <nav className="flex-1 overflow-y-auto px-3 space-y-4 py-4 custom-scrollbar">
+          {navGroups.map((group, idx) => {
+            const hasVisibleItems = group.items.some(it => userHasPerm(user, it.perm))
+            if (!hasVisibleItems) return null;
+
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-300 animate-slide-up relative overflow-hidden',
-                  isActive
-                    ? 'bg-primary/10 text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]'
-                    : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground',
-                  `delay-${(index % 4) * 100}`
-                )}
-              >
-                {isActive && (
-                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-1/2 bg-primary rounded-r-full shadow-[0_0_12px_rgba(var(--primary),0.8)]" />
-                )}
-                {isActive && (
-                  <div className="absolute inset-0 bg-gradient-to-r from-primary/10 to-transparent pointer-events-none" />
-                )}
-                <item.icon className={cn("h-[18px] w-[18px] transition-transform duration-300 relative z-10", isActive ? "scale-110" : "group-hover:scale-110 group-hover:rotate-3")} />
-                <span className="flex-1 relative z-10">{item.label}</span>
-                <div className="relative z-10 flex items-center">
-                  {item.href === '/chat' && <ChatUnreadBadge />}
-                  {item.href === '/inbox' && <InboxBadges />}
-                </div>
-              </Link>
+              <CollapsibleNavGroup 
+                key={idx} 
+                title={group.title} 
+                items={group.items} 
+                pathname={pathname} 
+                user={user} 
+              />
             )
           })}
-
-          {/* Itens admin */}
-          {(() => {
-            const visibleAdmin = adminItems.filter(it => userHasPerm(user, it.perm))
-            if (visibleAdmin.length === 0) return null
-            return (
-            <div className="animate-slide-up delay-400 mt-4">
-              <div className="pt-6 pb-2">
-                <div className="flex items-center gap-2 px-3">
-                  <div className="h-px flex-1 bg-border/50" />
-                  <p className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-[0.2em]">
-                    Administração
-                  </p>
-                  <div className="h-px flex-1 bg-border/50" />
-                </div>
-              </div>
-
-              <div className="space-y-1 mt-2">
-                {visibleAdmin.map((item) => {
-                  const isActive = pathname.startsWith(item.href)
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={cn(
-                        'group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-all duration-300 relative',
-                        isActive
-                          ? 'bg-primary/10 text-primary'
-                          : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground'
-                      )}
-                    >
-                      {isActive && (
-                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-1/2 bg-primary rounded-r-full shadow-[0_0_12px_rgba(var(--primary),0.8)]" />
-                      )}
-                      <Settings className={cn("h-[16px] w-[16px] transition-all duration-300", isActive ? "scale-110 text-primary" : "group-hover:rotate-90")} />
-                      {item.label}
-                    </Link>
-                  )
-                })}
-              </div>
-            </div>
-            )
-          })()}
         </nav>
 
         <div className="p-4 mt-auto">
