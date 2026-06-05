@@ -72,7 +72,7 @@ const navGroups: NavGroup[] = [
   {
     title: 'CRM',
     items: [
-      { href: '/kanban', label: 'Negócios', icon: Kanban },
+      { href: '/kanban', label: 'Kanban', icon: Kanban, perm: undefined },
       { href: '/contacts', label: 'Contatos', icon: Users, perm: 'contacts.view' },
       { href: '/companies', label: 'Empresas', icon: Building2, perm: 'companies.view' },
     ]
