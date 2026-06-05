@@ -23,9 +23,11 @@ export async function mergeContacts(dupId: string, primaryId: string): Promise<v
   }
   if (dup.mergedIntoId === primaryId) return // já mesclado
 
-  // Migra referências de mensagens (Message.fromContactId) e cards
+  // Migra referências de mensagens (Message.fromContactId), cards, tasks e eventos
   await prisma.message.updateMany({ where: { fromContactId: dup.id }, data: { fromContactId: primary.id } })
   await prisma.card.updateMany({ where: { contactId: dup.id }, data: { contactId: primary.id } })
+  await prisma.task.updateMany({ where: { contactId: dup.id }, data: { contactId: primary.id } })
+  await prisma.calendarEvent.updateMany({ where: { contactId: dup.id }, data: { contactId: primary.id } })
 
   // Migra vínculos N:N de empresa (ContactCompany) do dup para o primário, sem duplicar.
   const dupLinks = await prisma.contactCompany.findMany({ where: { contactId: dup.id } })
@@ -79,6 +81,16 @@ export async function mergeContacts(dupId: string, primaryId: string): Promise<v
       }
       // Move cards
       await prisma.card.updateMany({
+        where: { conversationId: drop.id },
+        data: { conversationId: keep.id },
+      })
+      // Move tasks e eventos de calendário (também referenciam conversationId sem
+      // ON DELETE CASCADE — sem isso o delete da conversa abaixo viola FK).
+      await prisma.task.updateMany({
+        where: { conversationId: drop.id },
+        data: { conversationId: keep.id },
+      })
+      await prisma.calendarEvent.updateMany({
         where: { conversationId: drop.id },
         data: { conversationId: keep.id },
       })
