@@ -401,8 +401,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     staleTime: 60_000,
   })
   const systemTitle = branding?.systemTitle ?? 'Work Assistant'
-  // A sidebar agora é sempre escura, então priorizamos a logoDarkUrl
-  const logoUrl = branding?.logoDarkUrl || branding?.logoUrl || null
+  // Escolhe a logo certa pro tema atual. Se não tem versão escura, usa a clara.
+  const { resolvedTheme } = useTheme()
+  const logoUrl =
+    resolvedTheme === 'dark'
+      ? (branding?.logoDarkUrl || branding?.logoUrl || null)
+      : (branding?.logoUrl || null)
 
   if (!ready) {
     return (
@@ -421,8 +425,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-background to-background pointer-events-none" />
       <div className="absolute inset-0 bg-grid-black/[0.02] dark:bg-grid-white/[0.02] pointer-events-none" />
 
-      {/* Modern Sidebar with Glassmorphism (Forced Dark) */}
-      <aside className="dark w-[260px] flex-shrink-0 bg-[#0A0A0B] border-r border-border/40 flex flex-col shadow-2xl z-10 text-foreground">
+      {/* Modern Sidebar with Glassmorphism */}
+      <aside className="w-[260px] flex-shrink-0 bg-card/60 dark:bg-[#11121C] backdrop-blur-xl border-r border-border/40 flex flex-col shadow-2xl z-10">
         <div className="p-5 pb-3">
           <div className="flex items-center justify-between gap-1 animate-fade-in">
             <div className="flex items-center gap-2 min-w-0 flex-1">
