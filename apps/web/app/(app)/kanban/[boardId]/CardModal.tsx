@@ -6,9 +6,9 @@ import { apiFetch, getAccessToken } from '@/lib/api'
 import { toast } from 'sonner'
 import {
   X, Flag, Calendar, User, MessageSquare,
-  Trash2, ExternalLink, Plus, Check, GripVertical, Phone, ListTodo,
+  Trash2, ExternalLink, Plus, Check, GripVertical, ListTodo,
   Paperclip, Download, FileText, Image as ImageIcon, Music, Video, Upload, Loader2,
-  Building2, Search,
+  Building2, Search, AlignLeft,
 } from 'lucide-react'
 
 import { getApiUrl } from '@/lib/runtime-config'
@@ -59,8 +59,19 @@ interface CardDetail {
   column: { id: string; name: string; boardId: string }
 }
 
+// ── Section label ─────────────────────────────────────────────────────────
+
+function SectionLabel({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 mb-3">
+      {icon && <span className="text-muted-foreground shrink-0">{icon}</span>}
+      <h3 className="text-sm font-semibold leading-none">{children}</h3>
+    </div>
+  )
+}
+
 // ── Seletor reutilizável (empresa/contato) ────────────────────────────────
-// Combobox simples com busca server-side. Salva ao escolher; permite limpar.
+
 function EntityPicker<T extends { id: string; name?: string | null; phone?: string | null; color?: string }>({
   label, icon, current, fetchOptions, onPick, onClear, displayCurrent, placeholder,
 }: {
@@ -106,19 +117,17 @@ function EntityPicker<T extends { id: string; name?: string | null; phone?: stri
         {icon} {label}
       </p>
       {current ? (
-        <div className="bg-muted/60 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+        <div className="bg-black/5 dark:bg-white/8 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
           <div className="min-w-0 flex-1">{displayCurrent(current)}</div>
           <button
             onClick={() => setOpen(true)}
             className="text-[10px] text-muted-foreground hover:text-foreground shrink-0"
-            title="Trocar"
           >
             Trocar
           </button>
           <button
             onClick={onClear}
-            className="text-[10px] text-muted-foreground hover:text-red-500 shrink-0"
-            title="Remover"
+            className="text-muted-foreground hover:text-red-500 shrink-0"
           >
             <X className="h-3 w-3" />
           </button>
@@ -126,13 +135,13 @@ function EntityPicker<T extends { id: string; name?: string | null; phone?: stri
       ) : (
         <button
           onClick={() => setOpen(true)}
-          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-accent/40 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
+          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-black/5 dark:hover:bg-white/5 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
         >
           + Vincular
         </button>
       )}
       {open && (
-        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1">
+        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1 z-10 relative">
           <div className="relative">
             <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
             <input
@@ -173,6 +182,7 @@ function EntityPicker<T extends { id: string; name?: string | null; phone?: stri
 }
 
 // ── Multi-picker: contatos vinculados ao card ─────────────────────────────
+
 function MultiContactsPicker({ cardId, contacts }: {
   cardId: string
   contacts: Array<{ id: string; name: string | null; phone: string | null }>
@@ -222,7 +232,7 @@ function MultiContactsPicker({ cardId, contacts }: {
       </p>
       <div className="space-y-1.5">
         {contacts.map(c => (
-          <div key={c.id} className="bg-muted/60 rounded-lg px-3 py-1.5 flex items-center gap-2">
+          <div key={c.id} className="bg-black/5 dark:bg-white/8 rounded-lg px-3 py-1.5 flex items-center gap-2">
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium truncate">{c.name ?? c.phone ?? '(sem nome)'}</p>
               {c.phone && c.name && <p className="text-[10px] text-muted-foreground font-mono">{c.phone}</p>}
@@ -234,13 +244,13 @@ function MultiContactsPicker({ cardId, contacts }: {
         ))}
         <button
           onClick={() => setOpen(true)}
-          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-accent/40 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
+          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-black/5 dark:hover:bg-white/5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
         >
           + Vincular contato
         </button>
       </div>
       {open && (
-        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1">
+        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1 z-10 relative">
           <div className="relative">
             <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
             <input
@@ -287,7 +297,8 @@ function MultiContactsPicker({ cardId, contacts }: {
   )
 }
 
-// ── Multi-picker: usuários responsáveis (respeita visibility do board) ─────
+// ── Multi-picker: usuários responsáveis ───────────────────────────────────
+
 function MultiAssigneesPicker({ cardId, boardId, assignees }: {
   cardId: string
   boardId: string
@@ -338,8 +349,8 @@ function MultiAssigneesPicker({ cardId, boardId, assignees }: {
       </p>
       <div className="space-y-1.5">
         {assignees.map(u => (
-          <div key={u.id} className="bg-muted/60 rounded-lg px-3 py-1.5 flex items-center gap-2">
-            <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-semibold text-primary shrink-0">
+          <div key={u.id} className="bg-black/5 dark:bg-white/8 rounded-lg px-3 py-1.5 flex items-center gap-2">
+            <div className="h-6 w-6 rounded-full bg-primary/15 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
               {(u.name ?? u.email)[0].toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
@@ -352,13 +363,13 @@ function MultiAssigneesPicker({ cardId, boardId, assignees }: {
         ))}
         <button
           onClick={() => setOpen(true)}
-          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-accent/40 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
+          className="w-full rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-black/5 dark:hover:bg-white/5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
         >
           + Vincular responsável
         </button>
       </div>
       {open && (
-        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1">
+        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1 z-10 relative">
           <div className="relative">
             <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
             <input
@@ -387,7 +398,7 @@ function MultiAssigneesPicker({ cardId, boardId, assignees }: {
                       already ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent',
                     )}
                   >
-                    <div className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-semibold text-primary shrink-0">
+                    <div className="h-5 w-5 rounded-full bg-primary/15 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
                       {(u.name ?? u.email)[0].toUpperCase()}
                     </div>
                     <span className="truncate flex-1">{u.name ?? u.email}</span>
@@ -430,7 +441,7 @@ function SortableChecklistItem({
     <div
       ref={setNodeRef}
       style={style}
-      className={cn('flex items-center gap-2 group rounded px-1 py-0.5', isDragging && 'opacity-40 bg-muted')}
+      className={cn('flex items-center gap-2 group rounded-lg px-1 py-1', isDragging && 'opacity-40 bg-black/5 dark:bg-white/5')}
     >
       <button
         {...attributes}
@@ -460,7 +471,6 @@ function SortableChecklistItem({
   )
 }
 
-// Adiciona IDs estáveis para o DnD
 function withIds(items: Omit<ChecklistItem, 'id'>[]): ChecklistItem[] {
   return items.map((item, i) => ({ ...item, id: `item-${i}-${item.text.slice(0, 8)}` }))
 }
@@ -512,21 +522,15 @@ function TasksSection({ cardId }: { cardId: string }) {
     onError: () => toast.error('Erro ao remover tarefa'),
   })
 
-  const handleAddTask = () => {
-    const t = newTaskTitle.trim()
-    if (!t) return
-    createTask.mutate(t)
-  }
-
   return (
     <section>
-      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1">
-        <ListTodo className="h-3 w-3" /> Tarefas {tasks.length > 0 && `(${tasks.filter((t) => t.done).length}/${tasks.length})`}
-      </p>
+      <SectionLabel icon={<ListTodo className="h-4 w-4" />}>
+        Tarefas {tasks.length > 0 && `(${tasks.filter(t => t.done).length}/${tasks.length})`}
+      </SectionLabel>
 
       <div className="space-y-0.5 mb-2">
         {tasks.map((task) => (
-          <div key={task.id} className="flex items-center gap-2 group rounded px-1 py-0.5 hover:bg-muted/40">
+          <div key={task.id} className="flex items-center gap-2 group rounded-lg px-1 py-1 hover:bg-black/5 dark:hover:bg-white/5">
             <button
               onClick={() => toggleTask.mutate({ id: task.id, done: !task.done })}
               className="shrink-0"
@@ -550,7 +554,7 @@ function TasksSection({ cardId }: { cardId: string }) {
           </div>
         ))}
         {tasks.length === 0 && (
-          <p className="text-xs text-muted-foreground italic px-1">Nenhuma tarefa ainda</p>
+          <p className="text-xs text-muted-foreground/60 italic px-1">Nenhuma tarefa ainda</p>
         )}
       </div>
 
@@ -558,14 +562,14 @@ function TasksSection({ cardId }: { cardId: string }) {
         <input
           value={newTaskTitle}
           onChange={(e) => setNewTaskTitle(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleAddTask() }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { const t = newTaskTitle.trim(); if (t) createTask.mutate(t) } }}
           placeholder="Nova tarefa..."
-          className="flex-1 rounded-md border bg-transparent px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+          className="flex-1 rounded-lg border border-black/10 dark:border-white/10 bg-black/3 dark:bg-white/5 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 placeholder:text-muted-foreground/50"
         />
         <button
-          onClick={handleAddTask}
+          onClick={() => { const t = newTaskTitle.trim(); if (t) createTask.mutate(t) }}
           disabled={!newTaskTitle.trim() || createTask.isPending}
-          className="px-2.5 py-1.5 rounded-md bg-muted hover:bg-accent text-sm disabled:opacity-40"
+          className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-sm disabled:opacity-40 transition-colors"
         >
           <Plus className="h-4 w-4" />
         </button>
@@ -591,7 +595,6 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-/** Carrega o arquivo via fetch autenticado e cria blob URL para player/img. */
 function useAttachmentBlobUrl(attachmentId: string, mimeType: string, enabled: boolean) {
   const [src, setSrc] = useState<string | null>(null)
   useEffect(() => {
@@ -637,7 +640,7 @@ function AttachmentItem({ att, onDelete }: { att: Attachment; onDelete?: () => v
   }
 
   return (
-    <div className="rounded-lg border bg-card p-3 space-y-2">
+    <div className="rounded-lg border border-black/8 dark:border-white/10 bg-black/3 dark:bg-white/4 p-3 space-y-2">
       <div className="flex items-start gap-2">
         <Icon className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
         <div className="flex-1 min-w-0">
@@ -646,14 +649,14 @@ function AttachmentItem({ att, onDelete }: { att: Attachment; onDelete?: () => v
         </div>
         <button
           onClick={handleDownload}
-          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+          className="p-1 rounded-lg hover:bg-black/8 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground"
           title="Baixar">
           <Download className="h-3.5 w-3.5" />
         </button>
         {onDelete && (
           <button
             onClick={onDelete}
-            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+            className="p-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/15 text-muted-foreground hover:text-destructive"
             title="Remover anexo">
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -662,21 +665,21 @@ function AttachmentItem({ att, onDelete }: { att: Attachment; onDelete?: () => v
 
       {isImage && src && (
         <img src={src} alt={att.filename}
-          className="w-full max-h-64 rounded object-contain bg-muted/30 cursor-zoom-in"
+          className="w-full max-h-64 rounded-lg object-contain bg-black/5 dark:bg-white/5 cursor-zoom-in"
           onClick={() => window.open(src, '_blank')} />
       )}
       {isAudio && src && (
         <audio src={src} controls className="w-full h-9" />
       )}
       {isVideo && src && (
-        <video src={src} controls className="w-full max-h-64 rounded" />
+        <video src={src} controls className="w-full max-h-64 rounded-lg" />
       )}
       {isPdf && src && (
         <div className="space-y-1">
           <iframe
             src={src}
             title={att.filename}
-            className="w-full h-72 rounded border bg-muted/30"
+            className="w-full h-72 rounded-lg border bg-black/5 dark:bg-white/5"
           />
           <button
             onClick={() => window.open(src, '_blank')}
@@ -754,7 +757,7 @@ function AttachmentsSection({ cardId }: { cardId: string }) {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-accent/40 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-border hover:border-primary/40 hover:bg-black/5 dark:hover:bg-white/5 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
           >
             {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
             {uploading ? 'Enviando...' : 'Anexar arquivo (máx 64 MB)'}
@@ -765,7 +768,7 @@ function AttachmentsSection({ cardId }: { cardId: string }) {
       {isLoading ? (
         <p className="text-xs text-muted-foreground">Carregando anexos...</p>
       ) : attachments.length === 0 ? (
-        <p className="text-xs text-muted-foreground italic">Nenhum anexo</p>
+        <p className="text-xs text-muted-foreground/60 italic">Nenhum anexo</p>
       ) : (
         attachments.map(a => (
           <AttachmentItem
@@ -809,7 +812,7 @@ export default function CardModal({
   useEffect(() => {
     if (card) {
       setTitle(card.title)
-      setLocalDesc(null) // reset on fresh load
+      setLocalDesc(null)
     }
   }, [card?.id])
 
@@ -856,10 +859,7 @@ export default function CardModal({
     setEditingTitle(false)
   }
 
-  // ── Checklist helpers ────────────────────────────────────────────────────
-
   const checklist = withIds(card?.checklist ?? [])
-
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -892,8 +892,8 @@ export default function CardModal({
 
   if (isLoading || !card) {
     return (
-      <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
-        <div className="bg-card rounded-xl p-6 w-full max-w-2xl mx-4 text-sm text-muted-foreground">
+      <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4">
+        <div className="bg-white dark:bg-[#1c1d2e] rounded-2xl p-8 shadow-2xl text-sm text-muted-foreground ring-1 ring-black/10 dark:ring-white/10">
           Carregando...
         </div>
       </div>
@@ -903,77 +903,89 @@ export default function CardModal({
   const doneCount = checklist.filter((i) => i.done).length
   const totalCount = checklist.length
   const progress = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
-
   const priority = priorityOptions.find((p) => p.value === card.priority)!
+  const creatorInitial = (card.creator?.name ?? card.creator?.email ?? 'U')[0].toUpperCase()
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-8 pb-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center py-6 overflow-y-auto"
       onClick={onClose}
     >
       <div
-        className="bg-card rounded-xl shadow-2xl w-full max-w-2xl mx-4"
+        className="bg-white dark:bg-[#1c1d2e] rounded-2xl shadow-2xl w-full max-w-3xl mx-4 ring-1 ring-black/8 dark:ring-white/10"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-start gap-3 px-5 pt-5 pb-3">
-          <div className="flex-1 min-w-0">
+
+        {/* ── Header ──────────────────────────────────────────────────────── */}
+        <div className="flex items-start gap-3 px-6 pt-5 pb-4 border-b border-black/8 dark:border-white/8">
+          <div className="flex-1 min-w-0 space-y-1.5">
             {editingTitle ? (
-              <input
+              <textarea
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 onBlur={saveTitle}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') saveTitle()
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveTitle() }
                   if (e.key === 'Escape') { setTitle(card.title); setEditingTitle(false) }
                 }}
                 autoFocus
-                className="w-full text-lg font-semibold bg-transparent border-b-2 border-primary focus:outline-none pb-0.5"
+                rows={2}
+                className="w-full text-xl font-bold bg-black/5 dark:bg-white/10 border border-primary/40 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/40 px-2 py-1 resize-none leading-snug"
               />
             ) : (
               <h2
-                className="text-lg font-semibold cursor-pointer hover:text-primary/80 transition-colors leading-snug"
+                className="text-xl font-bold cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 rounded-lg px-2 py-1 -mx-2 -my-1 transition-colors leading-snug"
                 onClick={() => setEditingTitle(true)}
+                title="Clique para editar"
               >
                 {card.title}
               </h2>
             )}
-            <p className="text-xs text-muted-foreground mt-0.5">
-              em <span className="font-medium">{card.column.name}</span>
-              {' · '}
+            <p className="text-xs text-muted-foreground px-2">
+              em{' '}
+              <span className="font-medium text-foreground/80">{card.column.name}</span>
+              <span className="mx-1.5 opacity-40">·</span>
               <span className={cn('font-medium', priority.color)}>{priority.label}</span>
             </p>
           </div>
-          <div className="flex items-center gap-0.5 shrink-0">
+
+          <div className="flex items-center gap-0.5 shrink-0 pt-1">
             {card.conversationId && (
-              <Link href={`/inbox/${card.conversationId}`} className="p-1.5 rounded hover:bg-accent text-muted-foreground" title="Ver conversa">
+              <Link
+                href={`/inbox/${card.conversationId}`}
+                className="p-1.5 rounded-lg hover:bg-black/8 dark:hover:bg-white/10 text-muted-foreground transition-colors"
+                title="Ver conversa"
+              >
                 <ExternalLink className="h-4 w-4" />
               </Link>
             )}
             {canDeleteCard && (
               <button
                 onClick={() => { if (confirm('Remover este card?')) deleteMutation.mutate() }}
-                className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-red-500"
+                className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/15 text-muted-foreground hover:text-red-500 transition-colors"
                 title="Remover card"
               >
                 <Trash2 className="h-4 w-4" />
               </button>
             )}
-            <button onClick={onClose} className="p-1.5 rounded hover:bg-accent text-muted-foreground">
-              <X className="h-4 w-4" />
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg hover:bg-black/8 dark:hover:bg-white/10 text-muted-foreground transition-colors"
+            >
+              <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-[1fr_176px]">
-          {/* Main */}
-          <div className="px-5 pb-5 space-y-5 min-w-0 border-r">
+        {/* ── Body ────────────────────────────────────────────────────────── */}
+        <div className="grid grid-cols-[1fr_220px]">
+
+          {/* ── Left: main content ──────────────────────────────────────── */}
+          <div className="px-6 py-5 space-y-6 min-w-0 overflow-hidden">
 
             {/* Descrição */}
             <section>
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                Descrição
-              </p>
+              <SectionLabel icon={<AlignLeft className="h-4 w-4" />}>Descrição</SectionLabel>
               <RichEditor
                 value={localDesc ?? card.description ?? ''}
                 onChange={setLocalDesc}
@@ -988,26 +1000,22 @@ export default function CardModal({
 
             {/* Anexos */}
             <section>
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1">
-                <Paperclip className="h-3 w-3" /> Anexos
-              </p>
+              <SectionLabel icon={<Paperclip className="h-4 w-4" />}>Anexos</SectionLabel>
               <AttachmentsSection cardId={cardId} />
             </section>
 
             {/* Checklist */}
             <section>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  Checklist {totalCount > 0 && `(${doneCount}/${totalCount})`}
-                </p>
-              </div>
+              <SectionLabel icon={<ListTodo className="h-4 w-4" />}>
+                Checklist {totalCount > 0 && `(${doneCount}/${totalCount})`}
+              </SectionLabel>
 
               {totalCount > 0 && (
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-[10px] text-muted-foreground w-6 text-right">{progress}%</span>
-                  <div className="flex-1 bg-muted rounded-full h-1.5">
+                <div className="flex items-center gap-2 mb-3 -mt-1">
+                  <span className="text-[10px] text-muted-foreground tabular-nums w-6 text-right">{progress}%</span>
+                  <div className="flex-1 bg-black/8 dark:bg-white/10 rounded-full h-2">
                     <div
-                      className="bg-primary h-1.5 rounded-full transition-all duration-300"
+                      className={cn('h-2 rounded-full transition-all duration-300', progress === 100 ? 'bg-emerald-500' : 'bg-primary')}
                       style={{ width: `${progress}%` }}
                     />
                   </div>
@@ -1035,12 +1043,12 @@ export default function CardModal({
                   onChange={(e) => setNewItem(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') addItem() }}
                   placeholder="Novo item..."
-                  className="flex-1 rounded-md border bg-transparent px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  className="flex-1 rounded-lg border border-black/10 dark:border-white/10 bg-black/3 dark:bg-white/5 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 placeholder:text-muted-foreground/50"
                 />
                 <button
                   onClick={addItem}
                   disabled={!newItem.trim()}
-                  className="px-2.5 py-1.5 rounded-md bg-muted hover:bg-accent text-sm disabled:opacity-40"
+                  className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-sm disabled:opacity-40 transition-colors"
                 >
                   <Plus className="h-4 w-4" />
                 </button>
@@ -1050,60 +1058,83 @@ export default function CardModal({
             {/* Tarefas */}
             <TasksSection cardId={cardId} />
 
-            {/* Comentários */}
+            {/* Atividade / Comentários */}
             <section>
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                Comentários ({card.comments.length})
-              </p>
-              <div className="space-y-2 mb-3">
-                {card.comments.map((c) => (
-                  <div key={c.id} className="bg-muted/50 rounded-lg px-3 py-2">
-                    <p className="text-sm whitespace-pre-wrap">{c.body}</p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      {new Date(c.createdAt).toLocaleString('pt-BR')}
-                    </p>
-                  </div>
-                ))}
-                {card.comments.length === 0 && (
-                  <p className="text-xs text-muted-foreground italic">Nenhum comentário ainda</p>
-                )}
+              <SectionLabel icon={<MessageSquare className="h-4 w-4" />}>Atividade</SectionLabel>
+
+              {/* Input de novo comentário */}
+              <div className="flex gap-3 items-start mb-4">
+                <div className="h-8 w-8 rounded-full bg-primary/15 dark:bg-primary/25 flex items-center justify-center text-xs font-bold text-primary shrink-0 mt-0.5">
+                  {creatorInitial}
+                </div>
+                <div className="flex-1 space-y-2">
+                  <textarea
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey && comment.trim()) {
+                        e.preventDefault()
+                        commentMutation.mutate(comment)
+                      }
+                    }}
+                    placeholder="Escrever um comentário..."
+                    rows={comment ? 3 : 1}
+                    className="w-full rounded-lg border border-black/10 dark:border-white/10 bg-black/3 dark:bg-white/5 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none transition-all placeholder:text-muted-foreground/50"
+                  />
+                  {comment && (
+                    <button
+                      onClick={() => comment.trim() && commentMutation.mutate(comment)}
+                      disabled={!comment.trim() || commentMutation.isPending}
+                      className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50 transition-opacity"
+                    >
+                      Salvar
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="flex gap-2">
-                <input
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && comment.trim()) commentMutation.mutate(comment) }}
-                  placeholder="Escrever comentário..."
-                  className="flex-1 rounded-md border bg-transparent px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                />
-                <button
-                  onClick={() => comment.trim() && commentMutation.mutate(comment)}
-                  disabled={!comment.trim() || commentMutation.isPending}
-                  className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm disabled:opacity-50"
-                >
-                  Enviar
-                </button>
-              </div>
+
+              {/* Lista de comentários */}
+              {card.comments.length === 0 ? (
+                <p className="text-xs text-muted-foreground/50 italic pl-11">Nenhum comentário ainda</p>
+              ) : (
+                <div className="space-y-3">
+                  {card.comments.map((c) => (
+                    <div key={c.id} className="flex gap-3 items-start">
+                      <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold shrink-0 mt-0.5">
+                        {String(c.userId ?? 'U')[0].toUpperCase()}
+                      </div>
+                      <div className="flex-1">
+                        <div className="rounded-lg bg-black/4 dark:bg-white/6 px-3 py-2">
+                          <p className="text-sm whitespace-pre-wrap">{c.body}</p>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground/60 mt-1 px-1">
+                          {new Date(c.createdAt).toLocaleString('pt-BR')}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
 
-            {/* Rodapé: quem criou e quando */}
-            <p className="text-[10px] text-muted-foreground/70 pt-2 mt-2 border-t border-border/40">
-              {card.creator ? (
-                <>by: <span className="font-medium text-muted-foreground">{card.creator.name ?? card.creator.email}</span></>
-              ) : (
-                <>by: <span className="italic">Sistema</span></>
-              )}
+            {/* Footer */}
+            <p className="text-[10px] text-muted-foreground/50 border-t border-black/6 dark:border-white/6 pt-3">
+              {card.creator
+                ? <>Criado por <span className="font-medium text-muted-foreground/70">{card.creator.name ?? card.creator.email}</span></>
+                : 'Criado pelo sistema'
+              }
               {card.createdAt && (
-                <> · {new Date(card.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</>
+                <> · {new Date(card.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })}</>
               )}
             </p>
           </div>
 
-          {/* Sidebar */}
-          <div className="p-4 space-y-5">
+          {/* ── Sidebar ─────────────────────────────────────────────────── */}
+          <div className="py-5 px-3 border-l border-black/8 dark:border-white/8 space-y-5">
+
             {/* Prioridade */}
             <div>
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1 px-1">
                 <Flag className="h-3 w-3" /> Prioridade
               </p>
               <div className="space-y-0.5">
@@ -1112,8 +1143,10 @@ export default function CardModal({
                     key={opt.value}
                     onClick={() => patchMutation.mutate({ priority: opt.value })}
                     className={cn(
-                      'w-full text-left px-2 py-1.5 rounded-md text-xs flex items-center gap-2 transition-colors',
-                      card.priority === opt.value ? 'bg-primary/10 font-semibold' : 'hover:bg-accent',
+                      'w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center gap-2 transition-colors',
+                      card.priority === opt.value
+                        ? 'bg-primary/12 ring-1 ring-primary/25 font-semibold'
+                        : 'hover:bg-black/5 dark:hover:bg-white/8',
                     )}
                   >
                     <span className={cn('h-2 w-2 rounded-full shrink-0', opt.dot)} />
@@ -1126,19 +1159,19 @@ export default function CardModal({
 
             {/* Prazo */}
             <div>
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1 px-1">
                 <Calendar className="h-3 w-3" /> Prazo
               </p>
               <input
                 type="date"
                 value={card.dueDate ? card.dueDate.split('T')[0] : ''}
                 onChange={(e) => patchMutation.mutate({ dueDate: e.target.value || null })}
-                className="w-full rounded-md border bg-transparent px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full rounded-lg border border-black/10 dark:border-white/10 bg-black/3 dark:bg-white/5 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
               {card.dueDate && (
                 <button
                   onClick={() => patchMutation.mutate({ dueDate: null })}
-                  className="text-[10px] text-muted-foreground hover:text-red-500 mt-1"
+                  className="text-[10px] text-muted-foreground hover:text-red-500 mt-1 px-1 transition-colors"
                 >
                   Remover prazo
                 </button>
@@ -1166,19 +1199,17 @@ export default function CardModal({
               placeholder="Buscar empresa..."
             />
 
-            {/* Contatos (multi) + Responsáveis (multi) — abaixo, em componentes próprios */}
             <MultiContactsPicker cardId={cardId} contacts={card.contacts} />
             <MultiAssigneesPicker cardId={cardId} boardId={card.column.boardId} assignees={card.assignees} />
 
-            {/* Conversa */}
             {card.conversationId && (
               <div>
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1 px-1">
                   <MessageSquare className="h-3 w-3" /> Conversa
                 </p>
                 <Link
                   href={`/inbox/${card.conversationId}`}
-                  className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+                  className="flex items-center gap-1.5 text-xs text-primary hover:underline px-1"
                 >
                   <ExternalLink className="h-3 w-3" />
                   Abrir no Inbox

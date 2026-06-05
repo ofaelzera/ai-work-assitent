@@ -136,19 +136,16 @@ function SortableCard({
     <div
       ref={setNodeRef}
       style={style}
+      {...attributes}
+      {...listeners}
       className={cn(
-        'glass-card rounded-xl p-4 cursor-pointer hover:border-primary/40 hover:shadow-md transition-all group',
+        'glass-card rounded-xl p-4 cursor-grab active:cursor-grabbing hover:border-primary/40 hover:shadow-md transition-all group',
         isDragging && 'opacity-60 scale-105 shadow-2xl ring-2 ring-primary/20',
       )}
       onClick={onClick}
     >
       <div className="flex items-start gap-2">
-        <div
-          {...attributes}
-          {...listeners}
-          className="mt-0.5 opacity-0 group-hover:opacity-40 cursor-grab active:cursor-grabbing shrink-0"
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div className="mt-0.5 opacity-0 group-hover:opacity-40 shrink-0">
           <GripVertical className="h-4 w-4" />
         </div>
         <div className="flex-1 min-w-0">
@@ -812,16 +809,23 @@ export default function BoardPage() {
 
     const overId = String(over.id)
 
-    // Find target column
+    // Find target column and insert index
     let targetColId: string | undefined
+    let insertAtIndex: number | undefined
+
     if (overId.startsWith(COLUMN_PREFIX)) {
-      // Dropped directly over a column droppable (empty column area)
-      targetColId = overId.slice(COLUMN_PREFIX.length)
+      // Hovering over column area — strip prefix and optional ::cards suffix
+      const suffix = overId.slice(COLUMN_PREFIX.length)
+      const colonIdx = suffix.indexOf('::')
+      targetColId = colonIdx === -1 ? suffix : suffix.slice(0, colonIdx)
+      // insertAtIndex undefined → append to end
     } else {
-      // Dropped over another card — find its column in current local state
+      // Hovering over a card — find its column and exact index
       for (const col of localBoardRef.current.columns) {
-        if (col.cards.some((c) => c.id === overId)) {
+        const idx = col.cards.findIndex((c) => c.id === overId)
+        if (idx !== -1) {
           targetColId = col.id
+          insertAtIndex = idx
           break
         }
       }
@@ -841,7 +845,7 @@ export default function BoardPage() {
     // Only act on cross-column moves
     if (!currentColId || currentColId === targetColId) return
 
-    // Move card to target column (append at end; final position handled in dragEnd)
+    // Move card to target column at the hovered position (or end if hovering column area)
     setLocalBoard((prev) => {
       if (!prev) return prev
       const cols = prev.columns.map((col) => ({
@@ -851,7 +855,11 @@ export default function BoardPage() {
       const targetCol = cols.find((c) => c.id === targetColId)
       if (!targetCol) return prev
       const movedCard = { ...draggedCard, columnId: targetColId }
-      targetCol.cards.push(movedCard)
+      if (insertAtIndex !== undefined) {
+        targetCol.cards.splice(insertAtIndex, 0, movedCard)
+      } else {
+        targetCol.cards.push(movedCard)
+      }
       const next = { ...prev, columns: cols }
       localBoardRef.current = next
       return next
@@ -922,7 +930,34 @@ export default function BoardPage() {
 
       // Cross-column move — compara contra a ORIGEM snapshotted (não o draggedCard reativo)
       if (finalColId !== origin.columnId) {
-        moveMutation.mutate({ cardId: draggedCardId, columnId: finalColId, position: finalIdx })
+        let targetPosition = finalIdx
+
+        // Refine position: if dropped over a specific card, compute exact slot via arrayMove
+        if (over) {
+          const overId = String(over.id)
+          if (!overId.startsWith(COLUMN_PREFIX) && overId !== draggedCardId) {
+            const col = board.columns.find((c) => c.id === finalColId)
+            if (col) {
+              const fromIdx = col.cards.findIndex((c) => c.id === draggedCardId)
+              const toIdx = col.cards.findIndex((c) => c.id === overId)
+              if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
+                const newCards = arrayMove(col.cards, fromIdx, toIdx)
+                targetPosition = newCards.findIndex((c) => c.id === draggedCardId)
+                setLocalBoard((prev) => {
+                  if (!prev) return prev
+                  const cols = prev.columns.map((c) =>
+                    c.id === finalColId ? { ...c, cards: newCards } : c,
+                  )
+                  const next = { ...prev, columns: cols }
+                  localBoardRef.current = next
+                  return next
+                })
+              }
+            }
+          }
+        }
+
+        moveMutation.mutate({ cardId: draggedCardId, columnId: finalColId, position: targetPosition })
         return
       }
 
