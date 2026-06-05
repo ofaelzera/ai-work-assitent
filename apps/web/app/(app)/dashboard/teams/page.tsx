@@ -52,7 +52,7 @@ function AgentsModal({ teamId, teamName, onClose }: { teamId: string; teamName: 
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-4 border-b flex items-center justify-between">
           <h2 className="font-semibold text-sm">Carga por agente — {teamName}</h2>
           <button onClick={onClose} className="text-xs text-muted-foreground hover:text-foreground">Fechar</button>

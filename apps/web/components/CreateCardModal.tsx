@@ -160,7 +160,7 @@ export default function CreateCardModal({
       onClick={onClose}
     >
       <div
-        className="bg-card rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]"
+        className="modal-surface rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

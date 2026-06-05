@@ -178,7 +178,7 @@ function WhatsAppModal({ onClose, onCreate, onAdopt }: {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-md p-6 space-y-5" onClick={e => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-md p-6 space-y-5" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <WhatsAppIcon size={32} />
@@ -359,7 +359,7 @@ function SmtpModal({ onClose, onSave, isPending }: { onClose: () => void; onSave
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
           <div className="flex items-center gap-3">
@@ -444,7 +444,7 @@ function MetaModal({ onClose, onSave, isPending }: { onClose: () => void; onSave
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
           <div className="flex items-center gap-3">
             <WhatsAppIcon size={32} />
@@ -1072,7 +1072,7 @@ function ImportHistoryModal({
 }) {
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-md p-6 space-y-5">
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-md p-6 space-y-5">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center shrink-0">
             <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
@@ -1395,7 +1395,7 @@ export default function ChannelsPage() {
     {/* ── Modal QR Code ── */}
     {qr && (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-        <div className="bg-card rounded-xl p-6 space-y-4 max-w-sm w-full shadow-xl">
+        <div className="modal-surface rounded-xl p-6 space-y-4 max-w-sm w-full shadow-xl">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <WhatsAppIcon size={24} />

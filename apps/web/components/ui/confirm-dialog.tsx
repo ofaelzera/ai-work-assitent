@@ -67,7 +67,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           onClick={() => close(false)}
         >
           <div
-            className="bg-card rounded-2xl shadow-2xl w-full max-w-md flex flex-col animate-in zoom-in-95 duration-150"
+            className="modal-surface rounded-2xl shadow-2xl w-full max-w-md flex flex-col animate-in zoom-in-95 duration-150"
             onClick={e => e.stopPropagation()}
           >
             {/* Ícone + close */}

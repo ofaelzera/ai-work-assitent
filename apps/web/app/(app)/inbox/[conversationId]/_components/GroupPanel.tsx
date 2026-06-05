@@ -199,7 +199,7 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-end" onClick={onClose}>
       <div
-        className="bg-card w-full max-w-md h-full shadow-2xl flex flex-col"
+        className="panel-surface w-full max-w-md h-full shadow-2xl flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}

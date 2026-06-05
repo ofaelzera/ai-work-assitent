@@ -439,7 +439,7 @@ function ItemSheet({ item, folders, onClose }: SheetProps) {
         onClick={onClose}
       />
       {/* Sheet */}
-      <div className="fixed inset-y-0 right-0 z-50 w-[440px] bg-card border-l shadow-2xl flex flex-col">
+      <div className="fixed inset-y-0 right-0 z-50 w-[440px] panel-surface border-l shadow-2xl flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <div className="flex items-center gap-2">

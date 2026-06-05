@@ -75,7 +75,7 @@ function UserModal({ onClose, onSave, isPending, editing }: UserModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-md p-6 space-y-5" onClick={e => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-md p-6 space-y-5" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-semibold">{editing ? 'Editar usuário' : 'Novo usuário'}</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground">

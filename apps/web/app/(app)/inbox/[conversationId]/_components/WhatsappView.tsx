@@ -352,7 +352,7 @@ function AttachToCardModal({ messageId, onClose }: { messageId: string; onClose:
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-[420px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-[420px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <h2 className="font-semibold text-sm flex items-center gap-2">
             <Kanban className="h-4 w-4 text-primary" /> Anexar ao Card
@@ -577,7 +577,7 @@ function ContactDrawer({ contact, onClose, onSave, currentConvId }: {
 
   return (
     <div className="fixed inset-0 z-50 flex" onClick={onClose}>
-      <div className="ml-auto w-80 h-full bg-card border-l shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="ml-auto w-80 h-full panel-surface border-l shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
           <h3 className="font-semibold text-sm">Contato</h3>
           <button onClick={onClose} className="p-1.5 rounded hover:bg-accent text-muted-foreground"><X className="h-4 w-4" /></button>
@@ -908,7 +908,7 @@ function ForwardConversationModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-card rounded-xl shadow-xl border w-full max-w-sm mx-4 p-5 space-y-4">
+      <div className="modal-surface rounded-xl shadow-xl border w-full max-w-sm mx-4 p-5 space-y-4">
         <div>
           <h3 className="font-semibold text-base">Encaminhar conversa</h3>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -1022,7 +1022,7 @@ function ReleaseConversationModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-card rounded-xl shadow-xl border w-full max-w-sm mx-4 p-5 space-y-4">
+      <div className="modal-surface rounded-xl shadow-xl border w-full max-w-sm mx-4 p-5 space-y-4">
         <div>
           <h3 className="font-semibold text-base">Devolver à fila</h3>
           <p className="text-sm text-muted-foreground mt-0.5">Informe o motivo para devolver esta conversa à fila.</p>
@@ -2566,7 +2566,7 @@ function LocationModal({ onClose, onSend, isPending, companyAddress, companyName
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <MapPin className="h-4 w-4 text-emerald-500" />
@@ -2669,7 +2669,7 @@ function ContactCardModal({ onClose, onSend, isPending }: {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Contact className="h-4 w-4 text-blue-500" />
@@ -2762,7 +2762,7 @@ function PollModal({ onClose, onSend, isPending }: {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-sm p-5 space-y-3" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <BarChart2 className="h-4 w-4 text-violet-500" />

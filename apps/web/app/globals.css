@@ -91,6 +91,15 @@
     @apply bg-white/70 dark:bg-black/40 backdrop-blur-md border border-white/20 dark:border-white/10;
   }
   
+  /* High-contrast surfaces — bg-card is near-black in dark mode and blends with the page */
+  .modal-surface {
+    @apply bg-white dark:bg-[#1c1d2e] ring-1 ring-black/[0.08] dark:ring-white/[0.10];
+  }
+  /* Variant for side panels (border-l/r already delineates them, no ring needed) */
+  .panel-surface {
+    @apply bg-white dark:bg-[#1c1d2e];
+  }
+
   .glass-card {
     @apply bg-card/80 backdrop-blur-xl border border-white/20 dark:border-white/10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.1)];
   }

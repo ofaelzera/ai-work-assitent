@@ -564,7 +564,7 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-card border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+      <div className="relative modal-surface rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Novo evento</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
@@ -813,7 +813,7 @@ function EventDetailSheet({ event, currentUserId, canCancelOthers, users, onClos
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative bg-card border-l shadow-xl w-full max-w-sm h-full flex flex-col">
+      <div className="relative modal-surface shadow-xl w-full max-w-sm h-full flex flex-col">
         {/* Color bar */}
         {colorHex && (
           <div className="h-1.5 w-full shrink-0" style={{ backgroundColor: colorHex }} />
@@ -1070,7 +1070,7 @@ function BlockModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-card border rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+      <div className="relative modal-surface rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold flex items-center gap-2"><Ban className="h-4 w-4" /> Bloquear agenda</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>

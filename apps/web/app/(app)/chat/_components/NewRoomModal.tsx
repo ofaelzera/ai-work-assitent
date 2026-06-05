@@ -63,7 +63,7 @@ export function NewRoomModal({ open, onClose }: { open: boolean; onClose: () => 
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-card rounded-xl shadow-2xl w-full max-w-md flex flex-col max-h-[80vh]">
+      <div className="modal-surface rounded-xl shadow-2xl w-full max-w-md flex flex-col max-h-[80vh]">
         <div className="flex items-center justify-between p-4 border-b border-border">
           <h3 className="font-semibold text-sm flex items-center gap-2">
             <Users className="h-4 w-4" /> Nova conversa

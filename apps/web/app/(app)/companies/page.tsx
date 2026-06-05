@@ -267,7 +267,7 @@ function CompanyFormModal({ company, onClose, onSave, isPending }: {
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className={cn('bg-card rounded-xl shadow-2xl w-full flex flex-col', company ? 'max-w-lg max-h-[90vh]' : 'max-w-sm')}
+        className={cn('modal-surface rounded-xl shadow-2xl w-full flex flex-col', company ? 'max-w-lg max-h-[90vh]' : 'max-w-sm')}
         onClick={e => e.stopPropagation()}>
 
         {/* Header */}
