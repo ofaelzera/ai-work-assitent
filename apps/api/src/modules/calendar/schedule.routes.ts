@@ -12,7 +12,7 @@ import { prisma } from '../../lib/prisma.js'
 import { hasPermission, requirePerm } from '../../lib/acl.js'
 import {
   findFreeSlots,
-  findFreeIntervals,
+  findFreeIntervalsForUsers,
   isWithinCompanyHours,
   isWithinWorkingHours,
   hasConflict,
@@ -348,18 +348,25 @@ export const scheduleRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         querystring: z.object({
           userId: z.string().optional(),
+          // Vários donos → devolve os horários em comum (interseção). Usado ao
+          // agendar um compromisso para várias agendas de uma vez.
+          userIds: z.union([z.string(), z.array(z.string())]).optional(),
           from: z.string().datetime(),
           to: z.string().datetime(),
         }),
       },
     },
     async (req, reply) => {
-      const userId = req.query.userId ?? req.user.sub
-      if (userId !== req.user.sub) {
+      const requested = req.query.userIds
+        ? (Array.isArray(req.query.userIds) ? req.query.userIds : [req.query.userIds])
+        : [req.query.userId ?? req.user.sub]
+      const userIds = Array.from(new Set(requested))
+
+      if (userIds.some((id) => id !== req.user.sub)) {
         const ok = await hasPermission(req.user, 'calendar.viewOthers')
         if (!ok) return reply.forbidden('Sem permissão para ver a agenda de terceiros')
       }
-      return findFreeIntervals(req.user.workspaceId, userId, {
+      return findFreeIntervalsForUsers(req.user.workspaceId, userIds, {
         from: new Date(req.query.from),
         to: new Date(req.query.to),
       })

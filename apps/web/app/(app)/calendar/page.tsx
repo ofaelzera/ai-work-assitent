@@ -398,6 +398,125 @@ function AttendeeInput({ value, onChange }: AttendeeInputProps) {
   )
 }
 
+// ─── OwnerMultiSelect ──────────────────────────────────────────────────────────
+// Multi-seleção de donos da agenda (usuários do workspace), com busca e avatar.
+// Usado em "Para quem" para agendar um compromisso em várias agendas de uma vez.
+
+function OwnerMultiSelect({
+  users,
+  currentUserId,
+  selected,
+  onChange,
+}: {
+  users: WorkspaceUser[]
+  currentUserId: string
+  selected: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const [input, setInput] = useState('')
+  const [open, setOpen] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const byId = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
+  const labelFor = (id: string) =>
+    id === currentUserId ? 'Minha agenda' : (byId.get(id)?.name ?? byId.get(id)?.email ?? id)
+
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [])
+
+  const q = input.trim().toLowerCase()
+  const available = users.filter((u) => !selected.includes(u.id))
+  const filtered = (q
+    ? available.filter((u) => (u.name ?? '').toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+    : available
+  ).slice(0, 8)
+
+  function add(id: string) {
+    onChange([...selected, id])
+    setInput('')
+    inputRef.current?.focus()
+  }
+  function remove(id: string) {
+    onChange(selected.filter((x) => x !== id))
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div
+        onClick={() => { inputRef.current?.focus(); setOpen(true) }}
+        className={`min-h-[42px] flex flex-wrap gap-1.5 rounded-lg border bg-background px-2 py-1.5 cursor-text transition-colors ${
+          focused ? 'ring-2 ring-primary/50 border-primary' : ''
+        }`}
+      >
+        {selected.map((id) => {
+          const u = byId.get(id)
+          const av = u?.settings?.avatarUrl
+          return (
+            <span
+              key={id}
+              className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 text-primary pl-1 pr-2 py-0.5 text-xs font-medium"
+            >
+              <span className="h-5 w-5 rounded-full overflow-hidden bg-primary/25 flex items-center justify-center text-[10px] font-semibold shrink-0">
+                {av ? <img src={av} alt="" className="h-full w-full object-cover" /> : labelFor(id)[0].toUpperCase()}
+              </span>
+              <span className="max-w-[150px] truncate">{labelFor(id)}</span>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); remove(id) }}
+                className="hover:text-destructive transition-colors"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )
+        })}
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={(e) => { setInput(e.target.value); setOpen(true) }}
+          onFocus={() => { setFocused(true); setOpen(true) }}
+          onBlur={() => setFocused(false)}
+          placeholder={selected.length === 0 ? 'Buscar usuário...' : ''}
+          className="flex-1 min-w-[120px] bg-transparent text-sm outline-none placeholder:text-muted-foreground py-0.5"
+        />
+      </div>
+
+      {open && filtered.length > 0 && (
+        <div className="absolute z-50 top-full mt-1 w-full max-h-64 overflow-y-auto rounded-lg border bg-popover shadow-lg">
+          {filtered.map((u) => {
+            const av = u.settings?.avatarUrl
+            const isSelf = u.id === currentUserId
+            return (
+              <button
+                key={u.id}
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); add(u.id) }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+              >
+                <div className="h-7 w-7 rounded-full shrink-0 overflow-hidden bg-primary/20 text-primary flex items-center justify-center text-xs font-semibold">
+                  {av ? <img src={av} alt="" className="h-full w-full object-cover" /> : (u.name ?? u.email)[0].toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{isSelf ? 'Minha agenda' : (u.name ?? u.email)}</p>
+                  <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                </div>
+                {isSelf && <span className="text-[10px] text-muted-foreground shrink-0">você</span>}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── NewEventModal ─────────────────────────────────────────────────────────────
 
 interface NewEventModalProps {
@@ -422,16 +541,18 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
   const [createMeetLink, setCreateMeetLink] = useState(false)
   const [allDay, setAllDay] = useState(false)
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
-  const [ownerId, setOwnerId] = useState(currentUserId)
+  // Donos da agenda: cria 1 evento em cada agenda selecionada, no horário comum.
+  const [ownerIds, setOwnerIds] = useState<string[]>([currentUserId])
 
-  const isForOther = ownerId !== currentUserId
+  const onlySelf = ownerIds.length === 1 && ownerIds[0] === currentUserId
+  const ownersKey = ownerIds.join(',')
 
-  // Ao abrir (ou mudar o dia clicado), reseta data/dono — corrige o modal que
+  // Ao abrir (ou mudar o dia clicado), reseta data/donos — corrige o modal que
   // ficava preso na data inicial.
   useEffect(() => {
     if (open) {
       setDate(defaultDate)
-      setOwnerId(currentUserId)
+      setOwnerIds([currentUserId])
     }
   }, [open, defaultDate, currentUserId])
 
@@ -440,10 +561,15 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
   const dayFrom = date ? new Date(`${date}T00:00:00`).toISOString() : null
   const dayTo = date ? new Date(`${date}T23:59:59`).toISOString() : null
   const { data: freeIntervals = [] } = useQuery<{ start: string; end: string }[]>({
-    queryKey: ['free-intervals', ownerId, date],
-    queryFn: () =>
-      apiFetch(`/calendar/free-intervals?userId=${ownerId}&from=${encodeURIComponent(dayFrom!)}&to=${encodeURIComponent(dayTo!)}`),
-    enabled: open && !allDay && !!date,
+    queryKey: ['free-intervals', ownersKey, date],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      for (const id of ownerIds) params.append('userIds', id)
+      params.append('from', dayFrom!)
+      params.append('to', dayTo!)
+      return apiFetch(`/calendar/free-intervals?${params.toString()}`)
+    },
+    enabled: open && !allDay && !!date && ownerIds.length > 0,
   })
 
   const toMin = (hhmm: string) => { const [h, m] = hhmm.split(':').map(Number); return (h || 0) * 60 + (m || 0) }
@@ -489,7 +615,7 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
       setEndTime(toHHMM(e > s ? e : s + STEP))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startOptions, open, allDay, date, ownerId])
+  }, [startOptions, open, allDay, date, ownersKey])
 
   function onChangeStart(v: string) {
     setStartTime(v)
@@ -502,8 +628,10 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
   const noSlots = !allDay && !!date && startOptions.length === 0
   const timeInvalid = !allDay && (!startTime || !endTime || toMin(endTime) <= toMin(startTime))
 
+  const CANCELLED = '__cancelado_por_conflito__'
+
   const mutation = useMutation({
-    mutationFn: async (opts?: { force?: boolean }) => {
+    mutationFn: async () => {
       const startAt = allDay
         ? new Date(`${date}T00:00:00`).toISOString()
         : new Date(`${date}T${startTime}:00`).toISOString()
@@ -511,13 +639,15 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
         ? new Date(`${date}T23:59:59`).toISOString()
         : new Date(`${date}T${endTime}:00`).toISOString()
 
-      return apiFetch('/calendar/events', {
-        method: 'POST',
-        body: JSON.stringify({
+      const targets = ownerIds.length > 0 ? ownerIds : [currentUserId]
+
+      const bodyFor = (oid: string, force: boolean) => {
+        const isSelf = oid === currentUserId
+        return JSON.stringify({
           // Para terceiros o backend resolve a conta Google do dono automaticamente.
-          accountId: isForOther ? undefined : (accountId || undefined),
-          ownerId: isForOther ? ownerId : undefined,
-          force: opts?.force || undefined,
+          accountId: isSelf ? (accountId || undefined) : undefined,
+          ownerId: isSelf ? undefined : oid,
+          force: force || undefined,
           title,
           startAt,
           endAt,
@@ -528,11 +658,38 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
             : undefined,
           createMeetLink: createMeetLink || undefined,
           allDay,
-        }),
-      })
+        })
+      }
+
+      // Cria 1 evento por dono. Em caso de conflito (409), pergunta UMA vez e,
+      // se confirmado, força os demais — os já criados não são refeitos (sem duplicar).
+      let forceAll = false
+      let created = 0
+      for (const oid of targets) {
+        try {
+          await apiFetch('/calendar/events', { method: 'POST', body: bodyFor(oid, forceAll) })
+          created++
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409 && !forceAll) {
+            const who = oid === currentUserId ? 'sua agenda' : (users.find((u) => u.id === oid)?.name ?? 'um dos selecionados')
+            const ok = typeof window !== 'undefined' &&
+              window.confirm(`Há conflito de horário em ${who}. Agendar mesmo assim para todos?`)
+            if (!ok) {
+              if (created > 0) throw new Error(`PARCIAL:${created}`)
+              throw new Error(CANCELLED)
+            }
+            forceAll = true
+            await apiFetch('/calendar/events', { method: 'POST', body: bodyFor(oid, true) })
+            created++
+          } else {
+            throw err
+          }
+        }
+      }
+      return created
     },
-    onSuccess: () => {
-      toast.success('Evento criado com sucesso')
+    onSuccess: (created: number) => {
+      toast.success(created > 1 ? `Evento criado em ${created} agendas` : 'Evento criado com sucesso')
       onCreated()
       onClose()
       setTitle('')
@@ -543,12 +700,14 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
       setAllDay(false)
     },
     onError: (err: Error) => {
-      if (err instanceof ApiError && err.status === 409) {
-        if (typeof window !== 'undefined' && window.confirm('Há conflito de horário na agenda. Deseja agendar mesmo assim?')) {
-          mutation.mutate({ force: true })
-          return
-        }
+      if (err.message === CANCELLED) {
         toast.error('Conflito de horário — agendamento cancelado')
+        return
+      }
+      if (err.message?.startsWith('PARCIAL:')) {
+        toast.warning(`Criado em ${err.message.split(':')[1]} agenda(s); o restante foi cancelado por conflito`)
+        onCreated()
+        onClose()
         return
       }
       if (err instanceof ApiError && err.status === 422) {
@@ -562,22 +721,35 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative modal-surface rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Novo evento</h2>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative modal-surface rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[92vh] overflow-hidden">
+
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 px-6 py-4 border-b shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-primary/15 text-primary flex items-center justify-center">
+              <CalendarIcon className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold leading-tight">Novo evento</h2>
+              <p className="text-xs text-muted-foreground">
+                {onlySelf ? 'Na sua agenda' : `Para ${ownerIds.length} agendas`}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="space-y-3">
+        {/* Body */}
+        <div className="px-6 py-5 space-y-4 overflow-y-auto">
           {/* Title */}
-          <div>
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">Título</label>
             <input
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Nome do evento"
@@ -585,29 +757,29 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
             />
           </div>
 
-          {/* Owner (agenda compartilhada) */}
+          {/* Owner (agenda compartilhada) — multi-seleção com busca e avatar */}
           {canCreateForOthers && (
-            <div>
-              <label className="text-sm font-medium">Para quem (dono da agenda)</label>
-              <select
-                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                value={ownerId}
-                onChange={(e) => setOwnerId(e.target.value)}
-              >
-                <option value={currentUserId}>Minha agenda</option>
-                {users
-                  .filter((u) => u.id !== currentUserId)
-                  .map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name ?? u.email}
-                    </option>
-                  ))}
-              </select>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium flex items-center gap-1.5">
+                <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                Para quem (donos da agenda)
+              </label>
+              <OwnerMultiSelect
+                users={users}
+                currentUserId={currentUserId}
+                selected={ownerIds}
+                onChange={setOwnerIds}
+              />
+              <p className="text-xs text-muted-foreground">
+                {onlySelf
+                  ? 'Selecione mais usuários para agendar para todos ao mesmo tempo.'
+                  : 'Os horários abaixo são apenas os livres para TODOS os selecionados. Um evento será criado em cada agenda.'}
+              </p>
             </div>
           )}
 
           {/* All-day toggle */}
-          <div className="flex items-center gap-2">
+          <label htmlFor="allDay" className="flex items-center gap-2.5 rounded-lg border px-3 py-2.5 cursor-pointer hover:bg-accent/40 transition-colors">
             <input
               type="checkbox"
               id="allDay"
@@ -615,34 +787,29 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
               onChange={(e) => setAllDay(e.target.checked)}
               className="h-4 w-4 rounded border"
             />
-            <label htmlFor="allDay" className="text-sm font-medium cursor-pointer">
-              Dia inteiro
-            </label>
-          </div>
+            <span className="text-sm font-medium">Dia inteiro</span>
+          </label>
 
-          {/* Date */}
-          <div>
-            <label className="text-sm font-medium">Data</label>
-            <input
-              type="date"
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
-          </div>
+          {/* Data + Horários */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="space-y-1.5 sm:col-span-1">
+              <label className="text-sm font-medium">Data</label>
+              <input
+                type="date"
+                className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+            </div>
 
-          {/* Horários (selects derivados dos intervalos livres — evita escolher hora indisponível) */}
-          {!allDay && (
-            noSlots ? (
-              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
-                Nenhum horário disponível neste dia para {isForOther ? 'este usuário' : 'você'}.
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-sm font-medium">Início</label>
+            {!allDay && !noSlots && (
+              <>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium flex items-center gap-1.5">
+                    <Clock className="h-3.5 w-3.5 text-muted-foreground" /> Início
+                  </label>
                   <select
-                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                     value={startTime}
                     onChange={(e) => onChangeStart(e.target.value)}
                   >
@@ -651,10 +818,10 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
                     ))}
                   </select>
                 </div>
-                <div>
+                <div className="space-y-1.5">
                   <label className="text-sm font-medium">Fim</label>
                   <select
-                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                     value={endTime}
                     onChange={(e) => setEndTime(e.target.value)}
                   >
@@ -663,18 +830,24 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
                     ))}
                   </select>
                 </div>
-              </div>
-            )
+              </>
+            )}
+          </div>
+
+          {!allDay && noSlots && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-600 dark:text-amber-400">
+              Nenhum horário em comum disponível neste dia para {onlySelf ? 'você' : 'todos os selecionados'}. Tente outra data ou remova alguém.
+            </div>
           )}
 
           {/* Location */}
-          <div>
+          <div className="space-y-1.5">
             <label className="text-sm font-medium flex items-center gap-1.5">
               <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
               Local (opcional)
             </label>
             <input
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
               placeholder="Endereço ou link do local"
@@ -682,20 +855,20 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           </div>
 
           {/* Attendees */}
-          <div>
-            <label className="text-sm font-medium flex items-center gap-1.5 mb-1">
-              <Users className="h-3.5 w-3.5 text-muted-foreground" />
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium flex items-center gap-1.5">
+              <User className="h-3.5 w-3.5 text-muted-foreground" />
               Participantes (opcional)
             </label>
             <AttendeeInput value={attendees} onChange={setAttendees} />
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-muted-foreground">
               Digite para buscar usuários ou contatos. Pressione Enter para adicionar um e-mail externo.
             </p>
           </div>
 
           {/* Google Meet */}
           {accountId && (
-            <div className="flex items-center gap-2">
+            <label htmlFor="createMeetLink" className="flex items-center gap-2.5 rounded-lg border px-3 py-2.5 cursor-pointer hover:bg-accent/40 transition-colors">
               <input
                 type="checkbox"
                 id="createMeetLink"
@@ -703,19 +876,19 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
                 onChange={(e) => setCreateMeetLink(e.target.checked)}
                 className="h-4 w-4 rounded border"
               />
-              <label htmlFor="createMeetLink" className="text-sm font-medium cursor-pointer flex items-center gap-1.5">
+              <span className="text-sm font-medium flex items-center gap-1.5">
                 <Video className="h-3.5 w-3.5 text-muted-foreground" />
                 Criar link do Google Meet
-              </label>
-            </div>
+              </span>
+            </label>
           )}
 
           {/* Account selector */}
           {accounts.length > 0 && (
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Conta Google</label>
               <select
-                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                 value={accountId}
                 onChange={(e) => setAccountId(e.target.value)}
               >
@@ -730,10 +903,10 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           )}
 
           {/* Description */}
-          <div>
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">Descrição (opcional)</label>
             <textarea
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+              className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary resize-none"
               rows={3}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -742,20 +915,23 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 pt-1">
+        {/* Footer */}
+        <div className="flex justify-end gap-2 px-6 py-4 border-t shrink-0">
           <button
             onClick={onClose}
-            className="rounded-md border px-4 py-2 text-sm hover:bg-accent transition-colors"
+            className="rounded-lg border px-4 py-2 text-sm hover:bg-accent transition-colors"
           >
             Cancelar
           </button>
           <button
-            onClick={() => mutation.mutate({})}
-            disabled={!title.trim() || mutation.isPending || noSlots || timeInvalid}
+            onClick={() => mutation.mutate()}
+            disabled={!title.trim() || mutation.isPending || noSlots || timeInvalid || ownerIds.length === 0}
             title={noSlots ? 'Nenhum horário disponível neste dia' : undefined}
-            className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+            className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
-            {mutation.isPending ? 'Criando...' : 'Criar evento'}
+            {mutation.isPending
+              ? 'Criando...'
+              : onlySelf ? 'Criar evento' : `Criar para ${ownerIds.length} agendas`}
           </button>
         </div>
       </div>

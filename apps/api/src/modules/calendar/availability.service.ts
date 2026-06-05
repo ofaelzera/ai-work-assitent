@@ -361,6 +361,41 @@ export async function findFreeIntervals(
 }
 
 /**
+ * Interseção dos horários livres de vários usuários — devolve apenas os
+ * intervalos em que TODOS estão livres (horários em comum). Usado ao agendar
+ * um compromisso para várias agendas de uma vez.
+ */
+export async function findFreeIntervalsForUsers(
+  workspaceId: string,
+  userIds: string[],
+  range: { from: Date; to: Date },
+): Promise<Slot[]> {
+  const unique = Array.from(new Set(userIds))
+  if (unique.length === 0) return []
+  if (unique.length === 1) return findFreeIntervals(workspaceId, unique[0], range)
+
+  const perUser = await Promise.all(
+    unique.map((u) => findFreeIntervals(workspaceId, u, range)),
+  )
+  return perUser.reduce((acc, cur) => intersectSlots(acc, cur))
+}
+
+/** Interseção de duas listas de slots ordenadas e sem sobreposição (two-pointer). */
+function intersectSlots(a: Slot[], b: Slot[]): Slot[] {
+  const out: Slot[] = []
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    const start = Math.max(a[i].start.getTime(), b[j].start.getTime())
+    const end = Math.min(a[i].end.getTime(), b[j].end.getTime())
+    if (end > start) out.push({ start: new Date(start), end: new Date(end) })
+    if (a[i].end.getTime() < b[j].end.getTime()) i++
+    else j++
+  }
+  return out
+}
+
+/**
  * Lista os horários livres fatiados em blocos de `durationMin`.
  */
 export async function findFreeSlots(
