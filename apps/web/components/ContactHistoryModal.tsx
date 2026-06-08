@@ -71,8 +71,8 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
   })
 
   const { data: convsData, isLoading: convsLoading } = useQuery<{ conversations: Conversation[] }>({
-    queryKey: ['conversations', { contactId, status: 'all', filter: 'all' }],
-    queryFn: () => apiFetch(`/conversations?contactId=${contactId}&status=all&filter=all&limit=100`)
+    queryKey: ['conversations', { contactId, status: 'all', filter: 'all', noDedup: true }],
+    queryFn: () => apiFetch(`/conversations?contactId=${contactId}&status=all&filter=all&limit=100&noDedup=true`)
   })
 
   const { data: msgsData, isLoading: msgsLoading } = useQuery<{ messages: Message[] }>({
@@ -88,12 +88,15 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
   })
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-background rounded-xl shadow-xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-start justify-center py-6 bg-black/70 overflow-y-auto px-4" onClick={onClose}>
+      <div 
+        className="bg-white dark:bg-[#1c1d2e] rounded-2xl shadow-2xl w-full max-w-6xl min-h-[500px] max-h-[90vh] flex flex-col overflow-hidden ring-1 ring-black/8 dark:ring-white/10"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b">
-          <div>
-            <h2 className="text-lg font-semibold">Histórico de Atendimentos</h2>
+        <div className="flex items-start gap-3 px-6 pt-5 pb-4 border-b border-black/8 dark:border-white/8">
+          <div className="flex-1 min-w-0 space-y-1.5">
+            <h2 className="text-lg font-semibold text-foreground">Histórico de Atendimentos</h2>
             <p className="text-sm text-muted-foreground">{contactName}</p>
           </div>
           <button
@@ -108,20 +111,20 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
         <div className="flex flex-col md:flex-row flex-1 min-h-0">
           
           {/* Left Column (KPIs & Ticket List) */}
-          <div className="w-full md:w-1/3 border-r flex flex-col min-h-0">
+          <div className="w-full md:w-1/3 border-r border-black/8 dark:border-white/8 flex flex-col min-h-0">
             {/* KPIs */}
-            <div className="p-4 border-b grid grid-cols-3 gap-2 bg-muted/20">
-              <div className="bg-background p-3 rounded-lg border shadow-sm flex flex-col items-center justify-center text-center">
+            <div className="p-4 border-b border-black/8 dark:border-white/8 grid grid-cols-3 gap-2 bg-black/3 dark:bg-white/5">
+              <div className="bg-white dark:bg-[#252636] p-3 rounded-lg border border-black/8 dark:border-white/10 shadow-sm flex flex-col items-center justify-center text-center">
                 <Ticket className="w-4 h-4 text-primary mb-1" />
                 <span className="text-xl font-bold">{kpisLoading ? '-' : kpis?.totalTickets || 0}</span>
                 <span className="text-[10px] text-muted-foreground uppercase font-medium">Tickets</span>
               </div>
-              <div className="bg-background p-3 rounded-lg border shadow-sm flex flex-col items-center justify-center text-center">
+              <div className="bg-white dark:bg-[#252636] p-3 rounded-lg border border-black/8 dark:border-white/10 shadow-sm flex flex-col items-center justify-center text-center">
                 <MessageSquare className="w-4 h-4 text-blue-500 mb-1" />
                 <span className="text-xl font-bold">{kpisLoading ? '-' : kpis?.totalMessages || 0}</span>
                 <span className="text-[10px] text-muted-foreground uppercase font-medium">Mensagens</span>
               </div>
-              <div className="bg-background p-3 rounded-lg border shadow-sm flex flex-col items-center justify-center text-center">
+              <div className="bg-white dark:bg-[#252636] p-3 rounded-lg border border-black/8 dark:border-white/10 shadow-sm flex flex-col items-center justify-center text-center">
                 <Clock className="w-4 h-4 text-amber-500 mb-1" />
                 <span className="text-xl font-bold">{kpisLoading ? '-' : formatDuration(kpis?.avgSlaSeconds || 0)}</span>
                 <span className="text-[10px] text-muted-foreground uppercase font-medium">SLA Médio</span>
@@ -144,15 +147,15 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
                       key={conv.id}
                       onClick={() => setSelectedConvId(conv.id)}
                       className={`w-full text-left p-3 rounded-lg border transition-colors ${
-                        selectedConvId === conv.id ? 'bg-primary/10 border-primary/20' : 'bg-background hover:bg-muted border-transparent'
+                        selectedConvId === conv.id ? 'bg-primary/12 border-primary/25' : 'bg-transparent hover:bg-black/5 dark:hover:bg-white/5 border-transparent'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1">
-                        <span className="font-medium text-sm truncate pr-2">
+                        <span className="font-medium text-sm truncate pr-2 text-foreground">
                           {conv.subject || 'Ticket sem assunto'}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                          conv.status === 'RESOLVED' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+                          conv.status === 'RESOLVED' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
                         }`}>
                           {conv.status === 'RESOLVED' ? 'Finalizado' : 'Aberto'}
                         </span>
@@ -169,7 +172,7 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
           </div>
 
           {/* Right Column (Message Viewer & Filters) */}
-          <div className="w-full md:w-2/3 flex flex-col min-h-0 bg-muted/10">
+          <div className="w-full md:w-2/3 flex flex-col min-h-0 bg-black/3 dark:bg-white/[0.02]">
             {!selectedConvId ? (
               <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
                 <MessageSquare className="w-12 h-12 mb-4 opacity-20" />
@@ -178,7 +181,7 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
             ) : (
               <>
                 {/* Filters */}
-                <div className="p-3 border-b bg-background flex flex-wrap items-center gap-2">
+                <div className="p-3 border-b border-black/8 dark:border-white/8 bg-white dark:bg-[#1c1d2e] flex flex-wrap items-center gap-2">
                   <div className="relative flex-1 min-w-[200px]">
                     <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                     <input
@@ -186,7 +189,7 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
                       placeholder="Localizar mensagem..."
                       value={q}
                       onChange={handleSearchChange}
-                      className="w-full pl-9 h-9 text-sm rounded-md border bg-transparent px-3 py-1 shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="w-full pl-9 h-9 text-sm rounded-lg border border-black/10 dark:border-white/10 bg-black/3 dark:bg-white/5 px-3 py-1 shadow-sm placeholder:text-muted-foreground/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 text-foreground"
                     />
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -195,14 +198,14 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
                       type="date"
                       value={startDate}
                       onChange={e => setStartDate(e.target.value)}
-                      className="h-9 text-sm rounded-md border bg-transparent px-2 py-1 shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="h-9 text-sm rounded-lg border border-black/10 dark:border-white/10 bg-black/3 dark:bg-white/5 px-2 py-1 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 text-foreground"
                     />
                     <span className="text-muted-foreground text-sm">até</span>
                     <input
                       type="date"
                       value={endDate}
                       onChange={e => setEndDate(e.target.value)}
-                      className="h-9 text-sm rounded-md border bg-transparent px-2 py-1 shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="h-9 text-sm rounded-lg border border-black/10 dark:border-white/10 bg-black/3 dark:bg-white/5 px-2 py-1 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 text-foreground"
                     />
                   </div>
                 </div>
@@ -221,7 +224,7 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
                         const isOutbound = msg.direction === 'OUTBOUND'
                         return (
                           <div key={msg.id} className={`flex flex-col max-w-[80%] ${isOutbound ? 'self-end items-end' : 'self-start items-start'}`}>
-                            <div className={`p-3 rounded-2xl ${isOutbound ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-background border shadow-sm rounded-tl-sm'}`}>
+                            <div className={`p-3 rounded-2xl ${isOutbound ? 'bg-primary text-primary-foreground rounded-tr-sm shadow-sm' : 'bg-white dark:bg-white/10 border border-black/10 dark:border-white/5 shadow-sm rounded-tl-sm text-foreground'}`}>
                               <p className="text-sm whitespace-pre-wrap">{msg.body}</p>
                             </div>
                             <span className="text-[10px] text-muted-foreground mt-1 px-1">

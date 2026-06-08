@@ -87,6 +87,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           status: z.enum(['all', 'active']).optional(),
           includeImported: z.coerce.boolean().optional(),  // default false — esconde conversas IMPORTED
           contactId: z.string().optional(),
+          noDedup: z.coerce.boolean().optional(), // allow bypassing ticket deduplication
         }),
       },
     },
@@ -286,7 +287,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
       const seenChat = new Set<string>()
       const dedupedAll: typeof conversations = []
       for (const c of conversations) {
-        if (c.type === 'EXTERNAL' && c.externalId) {
+        if (!req.query.noDedup && c.type === 'EXTERNAL' && c.externalId) {
           const key = `${c.channelId}:${c.externalId}`
           if (seenChat.has(key)) continue
           seenChat.add(key)
