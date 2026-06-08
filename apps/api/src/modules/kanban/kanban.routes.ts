@@ -745,9 +745,23 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
       if (!card) return reply.notFound()
+
+      const commentUserIds = [...new Set(card.comments.map(c => c.userId).filter(Boolean) as string[])]
+      const commentUsers = commentUserIds.length > 0 
+        ? await prisma.user.findMany({
+            where: { id: { in: commentUserIds } },
+            select: { id: true, name: true, email: true, settings: true },
+          })
+        : []
+      const usersMap = new Map(commentUsers.map(u => [u.id, u]))
+
       // Achata p/ a UI: contacts[].contact → contacts[], assignees[].user → assignees[]
       return {
         ...card,
+        comments: card.comments.map(c => ({
+          ...c,
+          user: c.userId ? (usersMap.get(c.userId) ?? null) : null,
+        })),
         contacts: card.contacts.map(c => c.contact),
         assignees: card.assignees.map(a => a.user),
       }

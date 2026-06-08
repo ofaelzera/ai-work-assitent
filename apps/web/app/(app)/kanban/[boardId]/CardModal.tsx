@@ -15,6 +15,7 @@ import { getApiUrl } from '@/lib/runtime-config'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { usePermission } from '@/lib/usePermission'
+import { useAuthStore } from '@/store/auth'
 import RichEditor from '@/components/RichEditor'
 import {
   DndContext,
@@ -55,7 +56,7 @@ interface CardDetail {
   creator: { id: string; name: string | null; email: string } | null
   contacts: Array<{ id: string; name: string | null; phone: string | null }>
   assignees: Array<{ id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null }>
-  comments: { id: string; userId: string | null; body: string; createdAt: string }[]
+  comments: { id: string; userId: string | null; body: string; createdAt: string; user?: { id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null } | null }[]
   column: { id: string; name: string; boardId: string }
 }
 
@@ -798,6 +799,7 @@ export default function CardModal({
   const queryClient = useQueryClient()
   const canEditCard   = usePermission('cards.edit')
   const canDeleteCard = usePermission('cards.delete')
+  const currentUser = useAuthStore(s => s.user)
   const [title, setTitle] = useState('')
   const [editingTitle, setEditingTitle] = useState(false)
   const [comment, setComment] = useState('')
@@ -1064,9 +1066,13 @@ export default function CardModal({
 
               {/* Input de novo comentário */}
               <div className="flex gap-3 items-start mb-4">
-                <div className="h-8 w-8 rounded-full bg-primary/15 dark:bg-primary/25 flex items-center justify-center text-xs font-bold text-primary shrink-0 mt-0.5">
-                  {creatorInitial}
-                </div>
+                {currentUser?.settings?.avatarUrl ? (
+                  <img src={currentUser.settings.avatarUrl} alt="Você" className="h-8 w-8 rounded-full object-cover shrink-0 mt-0.5" />
+                ) : (
+                  <div className="h-8 w-8 rounded-full bg-primary/15 dark:bg-primary/25 flex items-center justify-center text-xs font-bold text-primary shrink-0 mt-0.5">
+                    {(currentUser?.name ?? currentUser?.email ?? creatorInitial ?? 'U')[0].toUpperCase()}
+                  </div>
+                )}
                 <div className="flex-1 space-y-2">
                   <textarea
                     value={comment}
@@ -1098,21 +1104,34 @@ export default function CardModal({
                 <p className="text-xs text-muted-foreground/50 italic pl-11">Nenhum comentário ainda</p>
               ) : (
                 <div className="space-y-3">
-                  {card.comments.map((c) => (
-                    <div key={c.id} className="flex gap-3 items-start">
-                      <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold shrink-0 mt-0.5">
-                        {String(c.userId ?? 'U')[0].toUpperCase()}
-                      </div>
-                      <div className="flex-1">
-                        <div className="rounded-lg bg-black/4 dark:bg-white/6 px-3 py-2">
-                          <p className="text-sm whitespace-pre-wrap">{c.body}</p>
+                  {card.comments.map((c) => {
+                    const avatarUrl = c.user?.settings?.avatarUrl
+                    const name = c.user?.name ?? c.user?.email ?? 'Usuário'
+                    const initial = String(name)[0].toUpperCase()
+
+                    return (
+                      <div key={c.id} className="flex gap-3 items-start">
+                        {avatarUrl ? (
+                          <img src={avatarUrl} alt={name} className="h-8 w-8 rounded-full object-cover shrink-0 mt-0.5" />
+                        ) : (
+                          <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold shrink-0 mt-0.5" title={name}>
+                            {initial}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 px-1">
+                            <span className="text-xs font-medium truncate">{name}</span>
+                            <span className="text-[10px] text-muted-foreground/60 shrink-0">
+                              {new Date(c.createdAt).toLocaleString('pt-BR')}
+                            </span>
+                          </div>
+                          <div className="rounded-lg bg-black/4 dark:bg-white/6 px-3 py-2">
+                            <p className="text-sm whitespace-pre-wrap">{c.body}</p>
+                          </div>
                         </div>
-                        <p className="text-[10px] text-muted-foreground/60 mt-1 px-1">
-                          {new Date(c.createdAt).toLocaleString('pt-BR')}
-                        </p>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </section>
