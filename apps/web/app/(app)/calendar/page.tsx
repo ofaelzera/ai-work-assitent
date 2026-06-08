@@ -522,6 +522,8 @@ function OwnerMultiSelect({
 interface NewEventModalProps {
   open: boolean
   defaultDate: string
+  defaultTime?: string
+  eventToEdit?: CalendarEvent | null
   accounts: CalendarAccount[]
   users: WorkspaceUser[]
   currentUserId: string
@@ -530,10 +532,10 @@ interface NewEventModalProps {
   onCreated: () => void
 }
 
-function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canCreateForOthers, onClose, onCreated }: NewEventModalProps) {
+function NewEventModal({ open, defaultDate, defaultTime, eventToEdit, accounts, users, currentUserId, canCreateForOthers, onClose, onCreated }: NewEventModalProps) {
   const [title, setTitle] = useState('')
   const [date, setDate] = useState(defaultDate)
-  const [startTime, setStartTime] = useState('09:00')
+  const [startTime, setStartTime] = useState(defaultTime || '09:00')
   const [endTime, setEndTime] = useState('10:00')
   const [description, setDescription] = useState('')
   const [location, setLocation] = useState('')
@@ -547,14 +549,39 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
   const onlySelf = ownerIds.length === 1 && ownerIds[0] === currentUserId
   const ownersKey = ownerIds.join(',')
 
-  // Ao abrir (ou mudar o dia clicado), reseta data/donos — corrige o modal que
-  // ficava preso na data inicial.
+  // Ao abrir (ou mudar o dia clicado), reseta data/donos — ou preenche se for edição
   useEffect(() => {
     if (open) {
-      setDate(defaultDate)
-      setOwnerIds([currentUserId])
+      if (eventToEdit) {
+        setTitle(eventToEdit.title || '')
+        const s = new Date(eventToEdit.startAt)
+        const e = new Date(eventToEdit.endAt)
+        setDate(toLocalDateStr(s))
+        setStartTime(`${pad(s.getHours())}:${pad(s.getMinutes())}`)
+        setEndTime(`${pad(e.getHours())}:${pad(e.getMinutes())}`)
+        setDescription(eventToEdit.description || '')
+        setLocation(eventToEdit.location || '')
+        setAllDay(eventToEdit.allDay || false)
+        setOwnerIds(eventToEdit.ownerId ? [eventToEdit.ownerId] : [currentUserId])
+        setAttendees(eventToEdit.attendees?.map(a => ({ email: a.email, name: a.name, type: 'manual' as const })) || [])
+        // Se a conta existe, preenche, senão ignora
+        if (eventToEdit.calendarAccountId) {
+           setAccountId(eventToEdit.calendarAccountId)
+        }
+      } else {
+        setTitle('')
+        setDate(defaultDate)
+        setStartTime(defaultTime || '09:00')
+        setEndTime('') // Será calculado depois
+        setDescription('')
+        setLocation('')
+        setAllDay(false)
+        setAttendees([])
+        setCreateMeetLink(false)
+        setOwnerIds([currentUserId])
+      }
     }
-  }, [open, defaultDate, currentUserId])
+  }, [open, defaultDate, defaultTime, currentUserId, eventToEdit])
 
   // ── Horários disponíveis (selects derivados dos intervalos livres) ─────────
   const STEP = 15 // granularidade dos horários (min)
@@ -605,17 +632,17 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
 
   // Auto-seleciona um horário válido quando o dia muda / opções carregam
   useEffect(() => {
-    if (!open || allDay || startOptions.length === 0) return
+    if (!open || allDay || eventToEdit) return
     const cur = startTime ? toMin(startTime) : null
-    if (cur == null || !startOptions.includes(cur)) {
-      const s = startOptions[0]
+    if (startOptions.length > 0 && (cur == null || !startOptions.includes(cur) || !endTime)) {
+      const s = cur != null && startOptions.includes(cur) ? cur : startOptions[0]
       const itv = intervalMins.find((i) => s >= i.startMin && s < i.endMin)
       const e = Math.min(s + 60, itv?.endMin ?? s + STEP)
       setStartTime(toHHMM(s))
       setEndTime(toHHMM(e > s ? e : s + STEP))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startOptions, open, allDay, date, ownersKey])
+  }, [startOptions, open, allDay, date, ownersKey, eventToEdit])
 
   function onChangeStart(v: string) {
     setStartTime(v)
@@ -639,57 +666,63 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
         ? new Date(`${date}T23:59:59`).toISOString()
         : new Date(`${date}T${endTime}:00`).toISOString()
 
-      const targets = ownerIds.length > 0 ? ownerIds : [currentUserId]
+      const targets = eventToEdit ? (eventToEdit.ownerId ? [eventToEdit.ownerId] : [currentUserId]) : (ownerIds.length > 0 ? ownerIds : [currentUserId])
 
       const bodyFor = (oid: string, force: boolean) => {
         const isSelf = oid === currentUserId
         return JSON.stringify({
-          // Para terceiros o backend resolve a conta Google do dono automaticamente.
-          accountId: isSelf ? (accountId || undefined) : undefined,
-          ownerId: isSelf ? undefined : oid,
+          accountId: eventToEdit ? undefined : (isSelf ? (accountId || undefined) : undefined),
+          ownerId: eventToEdit ? undefined : (isSelf ? undefined : oid),
           force: force || undefined,
           title,
           startAt,
           endAt,
           description: description || undefined,
           location: location || undefined,
-          attendees: attendees.length > 0
+          attendees: eventToEdit ? undefined : (attendees.length > 0
             ? attendees.map((a) => ({ email: a.email, name: a.name ?? undefined }))
-            : undefined,
-          createMeetLink: createMeetLink || undefined,
+            : undefined),
+          createMeetLink: eventToEdit ? undefined : (createMeetLink || undefined),
           allDay,
         })
       }
 
-      // Cria 1 evento por dono. Em caso de conflito (409), pergunta UMA vez e,
-      // se confirmado, força os demais — os já criados não são refeitos (sem duplicar).
+      // Cria ou edita 1 evento por dono. Em caso de conflito (409), pergunta UMA vez.
       let forceAll = false
-      let created = 0
+      let processed = 0
       for (const oid of targets) {
         try {
-          await apiFetch('/calendar/events', { method: 'POST', body: bodyFor(oid, forceAll) })
-          created++
+          if (eventToEdit) {
+            await apiFetch(`/calendar/events/${eventToEdit.id}`, { method: 'PATCH', body: bodyFor(oid, forceAll) })
+          } else {
+            await apiFetch('/calendar/events', { method: 'POST', body: bodyFor(oid, forceAll) })
+          }
+          processed++
         } catch (err) {
           if (err instanceof ApiError && err.status === 409 && !forceAll) {
             const who = oid === currentUserId ? 'sua agenda' : (users.find((u) => u.id === oid)?.name ?? 'um dos selecionados')
             const ok = typeof window !== 'undefined' &&
               window.confirm(`Há conflito de horário em ${who}. Agendar mesmo assim para todos?`)
             if (!ok) {
-              if (created > 0) throw new Error(`PARCIAL:${created}`)
+              if (processed > 0) throw new Error(`PARCIAL:${processed}`)
               throw new Error(CANCELLED)
             }
             forceAll = true
-            await apiFetch('/calendar/events', { method: 'POST', body: bodyFor(oid, true) })
-            created++
+            if (eventToEdit) {
+              await apiFetch(`/calendar/events/${eventToEdit.id}`, { method: 'PATCH', body: bodyFor(oid, true) })
+            } else {
+              await apiFetch('/calendar/events', { method: 'POST', body: bodyFor(oid, true) })
+            }
+            processed++
           } else {
             throw err
           }
         }
       }
-      return created
+      return processed
     },
-    onSuccess: (created: number) => {
-      toast.success(created > 1 ? `Evento criado em ${created} agendas` : 'Evento criado com sucesso')
+    onSuccess: (processed: number) => {
+      toast.success(eventToEdit ? 'Evento atualizado' : (processed > 1 ? `Evento criado em ${processed} agendas` : 'Evento criado com sucesso'))
       onCreated()
       onClose()
       setTitle('')
@@ -732,9 +765,9 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
               <CalendarIcon className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-base font-semibold leading-tight">Novo evento</h2>
+              <h2 className="text-base font-semibold leading-tight">{eventToEdit ? 'Editar evento' : 'Novo evento'}</h2>
               <p className="text-xs text-muted-foreground">
-                {onlySelf ? 'Na sua agenda' : `Para ${ownerIds.length} agendas`}
+                {eventToEdit ? (eventToEdit.ownerId === currentUserId || !eventToEdit.ownerId ? 'Na sua agenda' : 'Agenda de terceiros') : (onlySelf ? 'Na sua agenda' : `Para ${ownerIds.length} agendas`)}
               </p>
             </div>
           </div>
@@ -758,7 +791,7 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           </div>
 
           {/* Owner (agenda compartilhada) — multi-seleção com busca e avatar */}
-          {canCreateForOthers && (
+          {canCreateForOthers && !eventToEdit && (
             <div className="space-y-1.5">
               <label className="text-sm font-medium flex items-center gap-1.5">
                 <Users className="h-3.5 w-3.5 text-muted-foreground" />
@@ -802,7 +835,7 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
               />
             </div>
 
-            {!allDay && !noSlots && (
+            {!allDay && (!noSlots || eventToEdit) && (
               <>
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium flex items-center gap-1.5">
@@ -813,6 +846,9 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
                     value={startTime}
                     onChange={(e) => onChangeStart(e.target.value)}
                   >
+                    {(!startOptions.includes(toMin(startTime)) && startTime) && (
+                      <option key="custom-start" value={startTime}>{startTime}</option>
+                    )}
                     {startOptions.map((m) => (
                       <option key={m} value={toHHMM(m)}>{toHHMM(m)}</option>
                     ))}
@@ -825,6 +861,9 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
                     value={endTime}
                     onChange={(e) => setEndTime(e.target.value)}
                   >
+                    {(!endOptions.includes(toMin(endTime)) && endTime) && (
+                      <option key="custom-end" value={endTime}>{endTime}</option>
+                    )}
                     {endOptions.map((m) => (
                       <option key={m} value={toHHMM(m)}>{toHHMM(m)}</option>
                     ))}
@@ -834,7 +873,7 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
             )}
           </div>
 
-          {!allDay && noSlots && (
+          {!allDay && noSlots && !eventToEdit && (
             <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-600 dark:text-amber-400">
               Nenhum horário em comum disponível neste dia para {onlySelf ? 'você' : 'todos os selecionados'}. Tente outra data ou remova alguém.
             </div>
@@ -867,7 +906,7 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           </div>
 
           {/* Google Meet */}
-          {accountId && (
+          {accountId && !eventToEdit && (
             <label htmlFor="createMeetLink" className="flex items-center gap-2.5 rounded-lg border px-3 py-2.5 cursor-pointer hover:bg-accent/40 transition-colors">
               <input
                 type="checkbox"
@@ -884,7 +923,7 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           )}
 
           {/* Account selector */}
-          {accounts.length > 0 && (
+          {accounts.length > 0 && !eventToEdit && (
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Conta Google</label>
               <select
@@ -925,13 +964,13 @@ function NewEventModal({ open, defaultDate, accounts, users, currentUserId, canC
           </button>
           <button
             onClick={() => mutation.mutate()}
-            disabled={!title.trim() || mutation.isPending || noSlots || timeInvalid || ownerIds.length === 0}
-            title={noSlots ? 'Nenhum horário disponível neste dia' : undefined}
+            disabled={!title.trim() || mutation.isPending || (noSlots && !eventToEdit) || timeInvalid || ownerIds.length === 0}
+            title={noSlots && !eventToEdit ? 'Nenhum horário disponível neste dia' : undefined}
             className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
           >
             {mutation.isPending
-              ? 'Criando...'
-              : onlySelf ? 'Criar evento' : `Criar para ${ownerIds.length} agendas`}
+              ? 'Salvando...'
+              : eventToEdit ? 'Salvar evento' : (onlySelf ? 'Criar evento' : `Criar para ${ownerIds.length} agendas`)}
           </button>
         </div>
       </div>
@@ -945,9 +984,11 @@ interface EventDetailSheetProps {
   event: CalendarEvent | null
   currentUserId: string
   canCancelOthers: boolean
+  canEditOthers: boolean
   users: WorkspaceUser[]
   onClose: () => void
   onDeleted: () => void
+  onEdit: () => void
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -962,7 +1003,7 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 line-through',
 }
 
-function EventDetailSheet({ event, currentUserId, canCancelOthers, users, onClose, onDeleted }: EventDetailSheetProps) {
+function EventDetailSheet({ event, currentUserId, canCancelOthers, canEditOthers, users, onClose, onDeleted, onEdit }: EventDetailSheetProps) {
   const deleteMutation = useMutation({
     mutationFn: () => apiFetch(`/calendar/events/${event!.id}`, { method: 'DELETE' }),
     onSuccess: () => {
@@ -983,6 +1024,10 @@ function EventDetailSheet({ event, currentUserId, canCancelOthers, users, onClos
     event.ownerId === currentUserId ||
     event.createdById === currentUserId ||
     canCancelOthers
+  const canEdit =
+    event.ownerId === currentUserId ||
+    event.createdById === currentUserId ||
+    canEditOthers
   const isOwnAgenda = !event.ownerId || event.ownerId === currentUserId
   const ownerLabel = isOwnAgenda ? 'Sua agenda' : (users.find((u) => u.id === event.ownerId)?.name ?? 'Outro usuário')
 
@@ -1122,19 +1167,27 @@ function EventDetailSheet({ event, currentUserId, canCancelOthers, users, onClos
         </div>
 
         {/* Footer */}
-        <div className="p-6 pt-4 border-t shrink-0">
+        <div className="p-6 pt-4 border-t shrink-0 flex gap-2">
+          {canEdit && (
+            <button
+              onClick={onEdit}
+              className="flex-1 flex items-center justify-center gap-2 rounded-md border px-4 py-2 text-sm hover:bg-accent transition-colors"
+            >
+              Editar evento
+            </button>
+          )}
           {canDelete ? (
             <button
               onClick={() => deleteMutation.mutate()}
               disabled={deleteMutation.isPending}
-              className="flex items-center gap-2 rounded-md border border-destructive text-destructive px-4 py-2 text-sm hover:bg-destructive/10 disabled:opacity-50 transition-colors w-full justify-center"
+              className="flex-1 flex items-center justify-center gap-2 rounded-md border border-destructive text-destructive px-4 py-2 text-sm hover:bg-destructive/10 disabled:opacity-50 transition-colors"
             >
               <Trash2 className="h-4 w-4" />
-              {deleteMutation.isPending ? 'Removendo...' : 'Remover evento'}
+              {deleteMutation.isPending ? 'Removendo...' : 'Remover'}
             </button>
           ) : (
-            <p className="text-xs text-muted-foreground text-center">
-              Só o dono da agenda ou quem criou o evento pode removê-lo.
+            <p className="text-xs text-muted-foreground text-center w-full">
+              Só o dono da agenda ou quem criou o evento pode editá-lo ou removê-lo.
             </p>
           )}
         </div>
@@ -1292,11 +1345,26 @@ export default function CalendarPage() {
 
   const [currentDate, setCurrentDate] = useState(today)
   const [view, setView] = useState<'month' | 'week' | 'day'>('month')
+
+  useEffect(() => {
+    const saved = localStorage.getItem('calendar_view')
+    if (saved === 'month' || saved === 'week' || saved === 'day') {
+      setView(saved)
+    }
+  }, [])
+
+  const changeView = (v: 'month' | 'week' | 'day') => {
+    setView(v)
+    localStorage.setItem('calendar_view', v)
+  }
+
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth()
 
   const [newEventOpen, setNewEventOpen] = useState(false)
   const [newEventDate, setNewEventDate] = useState(toLocalDateStr(today))
+  const [newEventTime, setNewEventTime] = useState<string | undefined>(undefined)
+  const [eventToEdit, setEventToEdit] = useState<CalendarEvent | null>(null)
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
 
   // ── Agenda compartilhada ────────────────────────────────────────────────────
@@ -1304,6 +1372,7 @@ export default function CalendarPage() {
   const canViewOthers = usePermission('calendar.viewOthers')
   const canCreateForOthers = usePermission('calendar.createForOthers')
   const canCancelOthers = usePermission('calendar.cancelOthers')
+  const canEditOthers = usePermission('calendar.editOthers')
   // Donos selecionados pra visualizar. Vazio = só o próprio.
   const [viewOwnerIds, setViewOwnerIds] = useState<string[]>([])
 
@@ -1385,7 +1454,7 @@ export default function CalendarPage() {
 
   // ── Dias fechados (empresa não atende) ──────────────────────────────────────
   // Bloqueia clique em fim de semana/dias fora do expediente e feriados.
-  const { data: companyHours = [] } = useQuery<{ weekday: number }[]>({
+  const { data: companyHours = [] } = useQuery<{ weekday: number; startMin?: number; endMin?: number }[]>({
     queryKey: ['company-hours'],
     queryFn: () => apiFetch('/calendar/company-hours'),
     staleTime: 5 * 60 * 1000,
@@ -1544,8 +1613,15 @@ export default function CalendarPage() {
     return `${pad(startOfWeek.getDate())}/${pad(startOfWeek.getMonth() + 1)} - ${pad(endOfWeek.getDate())}/${pad(endOfWeek.getMonth() + 1)}`
   }, [view, currentDate, month, year, from, to])
 
-  function openNewEvent(day: Date) {
+  function openNewEvent(day: Date, timeStr?: string) {
+    setEventToEdit(null)
     setNewEventDate(toLocalDateStr(day))
+    setNewEventTime(timeStr)
+    setNewEventOpen(true)
+  }
+
+  function openEditEvent(event: CalendarEvent) {
+    setEventToEdit(event)
     setNewEventOpen(true)
   }
 
@@ -1587,7 +1663,7 @@ export default function CalendarPage() {
             {(['month', 'week', 'day'] as const).map(v => (
               <button
                 key={v}
-                onClick={() => setView(v)}
+                onClick={() => changeView(v)}
                 className={`px-3 py-1 text-xs font-medium rounded transition-colors ${view === v ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 {v === 'month' ? 'Mês' : v === 'week' ? 'Semana' : 'Dia'}
@@ -1836,6 +1912,27 @@ export default function CalendarPage() {
                       const closed = isDayClosed(day)
                       const dayEvents = (eventsByDay[dayStr] ?? []).filter(e => !e.allDay)
                       const dayBlocks = blocksByDay[dayStr] ?? []
+                      
+                      // Calculate out of office blocks based on companyHours
+                      const oooBlocks: { startMin: number, endMin: number }[] = []
+                      if (companyConfigured && !closed) {
+                        const dayHours = companyHours.filter(h => h.weekday === day.getDay())
+                        if (dayHours.length > 0) {
+                          const sorted = [...dayHours].sort((a, b) => (a.startMin || 0) - (b.startMin || 0))
+                          let currentMin = 0
+                          for (const h of sorted) {
+                            if (h.startMin !== undefined && h.startMin > currentMin) {
+                              oooBlocks.push({ startMin: currentMin, endMin: h.startMin })
+                            }
+                            if (h.endMin !== undefined) {
+                              currentMin = Math.max(currentMin, h.endMin)
+                            }
+                          }
+                          if (currentMin < 1440) {
+                            oooBlocks.push({ startMin: currentMin, endMin: 1440 })
+                          }
+                        }
+                      }
 
                       return (
                         <div
@@ -1843,13 +1940,40 @@ export default function CalendarPage() {
                           className={`border-r last:border-r-0 relative ${closed ? 'bg-muted/20 cursor-not-allowed' : 'hover:bg-accent/10 cursor-pointer'} ${isToday && !closed ? 'bg-primary/[0.02]' : ''}`}
                           onClick={(e) => {
                             if (closed) return;
-                            openNewEvent(day)
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            const y = e.clientY - rect.top
+                            const totalMins = Math.floor((y / rect.height) * 1440)
+                            const startMins = Math.floor(totalMins / 30) * 30
+                            const startHour = Math.floor(startMins / 60)
+                            const startMinute = startMins % 60
+                            const timeStr = `${pad(startHour)}:${pad(startMinute)}`
+                            openNewEvent(day, timeStr)
                           }}
                         >
                           {/* Hour lines */}
                           {hours.map(h => (
                             <div key={h} className="h-[60px] border-b pointer-events-none" />
                           ))}
+
+                          {/* Out of Office Blocks */}
+                          {oooBlocks.map((b, idx) => {
+                            const top = (b.startMin / 1440) * 100
+                            const height = ((b.endMin - b.startMin) / 1440) * 100
+                            return (
+                              <div
+                                key={`ooo-${idx}`}
+                                className="absolute left-0 right-0 pointer-events-auto cursor-not-allowed bg-muted/20"
+                                style={{
+                                  top: `${top}%`, height: `${height}%`,
+                                  backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,0.02) 10px, rgba(0,0,0,0.02) 20px)'
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  toast.error('Horário fora do expediente da empresa')
+                                }}
+                              />
+                            )
+                          })}
 
                           {/* Blocks */}
                           {dayBlocks.map(b => {
@@ -1917,6 +2041,8 @@ export default function CalendarPage() {
       <NewEventModal
         open={newEventOpen}
         defaultDate={newEventDate}
+        defaultTime={newEventTime}
+        eventToEdit={eventToEdit}
         accounts={accounts}
         users={users}
         currentUserId={currentUserId}
@@ -1940,9 +2066,14 @@ export default function CalendarPage() {
         event={selectedEvent}
         currentUserId={currentUserId}
         canCancelOthers={canCancelOthers}
+        canEditOthers={canEditOthers}
         users={users}
         onClose={() => setSelectedEvent(null)}
         onDeleted={invalidateEvents}
+        onEdit={() => {
+          setSelectedEvent(null)
+          openEditEvent(selectedEvent!)
+        }}
       />
     </div>
   )
