@@ -667,4 +667,58 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
     },
   )
+
+  // ── Buscar TODAS as mensagens de TODAS as conversas de um contato ───────
+  app.get(
+    '/contacts/:id/messages',
+    {
+      onRequest: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string() }),
+        querystring: z.object({
+          q: z.string().optional(),
+          startDate: z.string().optional(),
+          endDate: z.string().optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const { id } = req.params
+      const { q, startDate, endDate } = req.query
+
+      const contact = await prisma.contact.findFirst({
+        where: { id, workspaceId, mergedIntoId: null },
+      })
+      if (!contact) return reply.notFound('Contato não encontrado')
+
+      const messages = await prisma.message.findMany({
+        where: {
+          workspaceId,
+          conversation: { contactId: id },
+          ...(q && { body: { contains: q } }),
+          ...(startDate || endDate ? {
+            sentAt: {
+              ...(startDate && { gte: new Date(startDate) }),
+              ...(endDate && { lte: new Date(endDate) }),
+            }
+          } : {})
+        },
+        orderBy: { sentAt: 'desc' },
+        take: 100, // Limite para evitar travar o frontend em buscas vazias com contatos gigantes
+        select: {
+          id: true,
+          body: true,
+          direction: true,
+          sentAt: true,
+          attachments: true,
+          metadata: true,
+          conversationId: true,
+        }
+      })
+
+      // Ordenar por data crescente para a interface exibir de cima para baixo
+      return { messages: messages.reverse() }
+    },
+  )
 }

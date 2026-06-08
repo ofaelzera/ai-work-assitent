@@ -24,6 +24,7 @@ interface GroupItem {
 interface NewConversationModalProps {
   onClose: () => void
   onCreated: (conversationId: string) => void
+  initialContactId?: string
 }
 
 function Avatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }) {
@@ -40,7 +41,7 @@ function Avatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }
   )
 }
 
-export default function NewConversationModal({ onClose, onCreated }: NewConversationModalProps) {
+export default function NewConversationModal({ onClose, onCreated, initialContactId }: NewConversationModalProps) {
   const [search, setSearch] = useState('')
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null)
   const [selectedGroup, setSelectedGroup] = useState<GroupItem | null>(null)
@@ -52,6 +53,18 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
   const [waCheck, setWaCheck] = useState<'idle' | 'checking' | 'yes' | 'no'>('idle')
   const [targetMode, setTargetMode] = useState<'contact' | 'group'>('contact')
   const waCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Fetch initial contact if provided
+  useQuery({
+    queryKey: ['contacts', initialContactId],
+    queryFn: async () => {
+      if (!initialContactId) return null
+      const contact = await apiFetch<Contact>(`/contacts/${initialContactId}`)
+      setSelectedContact(contact)
+      return contact
+    },
+    enabled: !!initialContactId,
+  })
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -232,8 +245,8 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
             </div>
           </div>
 
-          {/* Toggle Contato/Grupo (apenas WhatsApp) */}
-          {isWhatsAppChannel && !selectedContact && !selectedGroup && (
+          {/* Toggle Contato/Grupo (apenas WhatsApp) - Escondido se veio com initialContactId */}
+          {isWhatsAppChannel && !initialContactId && !selectedContact && !selectedGroup && (
             <div className="flex gap-1 p-0.5 rounded-lg bg-muted/50 w-fit">
               <button
                 onClick={() => setTargetMode('contact')}
@@ -327,7 +340,7 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
           )}
 
           {/* Busca de contato */}
-          {targetMode === 'contact' && (
+          {targetMode === 'contact' && !initialContactId && (
           <div>
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">
               {selectedContact ? 'Contato selecionado' : 'Buscar contato'}
@@ -439,6 +452,46 @@ export default function NewConversationModal({ onClose, onCreated }: NewConversa
                   </div>
                 )}
               </>
+            )}
+          </div>
+          )}
+
+          {/* Contato inicial fornecido fixo */}
+          {targetMode === 'contact' && initialContactId && selectedContact && (
+          <div>
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">
+              Contato selecionado
+            </label>
+            <div className="flex items-center gap-3 p-2.5 rounded-lg border bg-primary/5">
+              <Avatar name={selectedContact.name ?? selectedContact.phone ?? '?'} avatarUrl={(selectedContact.metadata as any)?.avatarUrl} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{selectedContact.name ?? 'Sem nome'}</p>
+                <p className="text-xs text-muted-foreground truncate">{selectedContact.phone ?? selectedContact.email}</p>
+              </div>
+            </div>
+            
+            {/* Se o canal é WhatsApp e o contato NÃO tem telefone, exibe input para telefone */}
+            {selectedChannel?.type === 'WHATSAPP' && !selectedContact.phone && (
+              <div className="mt-2">
+                <label className="text-xs text-muted-foreground block mb-1">Contato sem telefone, digite um número:</label>
+                <div className="relative">
+                  <input
+                    value={maskPhone(manualPhone)}
+                    onChange={e => { setManualPhone(e.target.value.replace(/\D/g, '')); setWaCheck('idle') }}
+                    placeholder="+55 (11) 99999-9999"
+                    className={cn(
+                      'w-full rounded-md border bg-transparent px-3 py-1.5 pr-8 text-sm focus:outline-none focus:ring-1 focus:ring-ring',
+                      waCheck === 'no' && 'border-amber-400',
+                      waCheck === 'yes' && 'border-green-400',
+                    )}
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                    {waCheck === 'checking' && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                    {waCheck === 'yes' && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />}
+                    {waCheck === 'no' && <AlertCircle className="h-3.5 w-3.5 text-amber-500" />}
+                  </div>
+                </div>
+              </div>
             )}
           </div>
           )}

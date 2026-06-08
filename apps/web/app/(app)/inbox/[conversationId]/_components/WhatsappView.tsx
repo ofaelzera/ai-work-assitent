@@ -287,7 +287,7 @@ function DocumentBubble({ msgId, filename, mimetype }: { msgId: string; filename
   )
 }
 
-function MediaBubble({ msg }: { msg: Message }) {
+export function MediaBubble({ msg }: { msg: Message }) {
   const att = msg.attachments?.[0]
   if (!att) return <p className="whitespace-pre-wrap break-words text-sm"><WhatsappText text={msg.body} /></p>
   if (att.type === 'image' || att.type === 'sticker') return <MediaImage msgId={msg.id} caption={att.caption} />

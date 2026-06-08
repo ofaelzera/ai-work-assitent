@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -11,8 +12,11 @@ import {
   Clock,
   Ticket,
   Loader2,
-  CalendarDays
+  CalendarDays,
+  Plus
 } from 'lucide-react'
+import { Message, MediaBubble } from '@/app/(app)/inbox/[conversationId]/_components/WhatsappView'
+import NewConversationModal from './NewConversationModal'
 
 interface ContactHistoryModalProps {
   contactId: string
@@ -33,13 +37,7 @@ interface Conversation {
   createdAt: string
   lastMessageAt: string | null
   unreadCount: number
-}
-
-interface Message {
-  id: string
-  body: string
-  sentAt: string
-  direction: 'INBOUND' | 'OUTBOUND'
+  channel: { type: string; label: string | null } | null
 }
 
 function formatDuration(seconds: number) {
@@ -52,7 +50,9 @@ function formatDuration(seconds: number) {
 }
 
 export function ContactHistoryModal({ contactId, contactName, onClose }: ContactHistoryModalProps) {
-  const [selectedConvId, setSelectedConvId] = useState<string | null>(null)
+  const router = useRouter()
+  const [selectedConvId, setSelectedConvId] = useState<string | null>('ALL')
+  const [newConvOpen, setNewConvOpen] = useState(false)
   const [q, setQ] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
@@ -78,7 +78,10 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
   const { data: msgsData, isLoading: msgsLoading } = useQuery<{ messages: Message[] }>({
     queryKey: ['conversations', selectedConvId, 'messages', debouncedQ, startDate, endDate],
     queryFn: () => {
-      let url = `/conversations/${selectedConvId}/messages?limit=200`
+      let url = selectedConvId === 'ALL'
+        ? `/contacts/${contactId}/messages?limit=200`
+        : `/conversations/${selectedConvId}/messages?limit=200`
+        
       if (debouncedQ) url += `&q=${encodeURIComponent(debouncedQ)}`
       if (startDate) url += `&startDate=${startDate}T00:00:00.000Z`
       if (endDate) url += `&endDate=${endDate}T23:59:59.999Z`
@@ -99,6 +102,12 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
             <h2 className="text-lg font-semibold text-foreground">Histórico de Atendimentos</h2>
             <p className="text-sm text-muted-foreground">{contactName}</p>
           </div>
+          <button
+            onClick={() => setNewConvOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="w-4 h-4" /> Novo Atendimento
+          </button>
           <button
             onClick={onClose}
             className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
@@ -136,6 +145,26 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
               <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-2 pt-2">
                 Atendimentos
               </h3>
+              
+              <div className="space-y-1 mb-2">
+                <button
+                  onClick={() => setSelectedConvId('ALL')}
+                  className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                    selectedConvId === 'ALL' ? 'bg-primary/12 border-primary/25' : 'bg-transparent hover:bg-black/5 dark:hover:bg-white/5 border-transparent'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-medium text-sm truncate pr-2 text-foreground">
+                      Todas as Conversas
+                    </span>
+                  </div>
+                  <div className="flex items-center text-xs text-muted-foreground">
+                    <MessageSquare className="w-3 h-3 mr-1" />
+                    Histórico completo
+                  </div>
+                </button>
+              </div>
+
               {convsLoading ? (
                 <div className="flex justify-center p-4"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
               ) : convsData?.conversations.length === 0 ? (
@@ -152,7 +181,7 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
                     >
                       <div className="flex items-center justify-between mb-1">
                         <span className="font-medium text-sm truncate pr-2 text-foreground">
-                          {conv.subject || 'Ticket sem assunto'}
+                          {conv.subject || (conv.channel ? (conv.channel.label || conv.channel.type) : 'Atendimento')}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
                           conv.status === 'RESOLVED' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
@@ -225,7 +254,7 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
                         return (
                           <div key={msg.id} className={`flex flex-col max-w-[80%] ${isOutbound ? 'self-end items-end' : 'self-start items-start'}`}>
                             <div className={`p-3 rounded-2xl ${isOutbound ? 'bg-primary text-primary-foreground rounded-tr-sm shadow-sm' : 'bg-white dark:bg-white/10 border border-black/10 dark:border-white/5 shadow-sm rounded-tl-sm text-foreground'}`}>
-                              <p className="text-sm whitespace-pre-wrap">{msg.body}</p>
+                              <MediaBubble msg={msg as any} />
                             </div>
                             <span className="text-[10px] text-muted-foreground mt-1 px-1">
                               {format(new Date(msg.sentAt), "dd/MM/yyyy HH:mm")}
@@ -241,6 +270,18 @@ export function ContactHistoryModal({ contactId, contactName, onClose }: Contact
           </div>
         </div>
       </div>
+
+      {newConvOpen && (
+        <NewConversationModal
+          initialContactId={contactId}
+          onClose={() => setNewConvOpen(false)}
+          onCreated={(convId) => {
+            setNewConvOpen(false)
+            onClose() // Fecha modal de histórico
+            router.push(`/inbox/${convId}`)
+          }}
+        />
+      )}
     </div>
   )
 }
