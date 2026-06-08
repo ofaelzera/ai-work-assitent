@@ -1944,6 +1944,27 @@ export default function CalendarPage() {
                             const y = e.clientY - rect.top
                             const totalMins = Math.floor((y / rect.height) * 1440)
                             const startMins = Math.floor(totalMins / 30) * 30
+                            
+                            // Verificar se o horário clicado está dentro de um bloqueio de expediente
+                            const isOoo = oooBlocks.some(b => startMins >= b.startMin && startMins < b.endMin)
+                            if (isOoo) {
+                              toast.error('Horário fora do expediente da empresa')
+                              return
+                            }
+                            
+                            // Verificar se o horário clicado está dentro de um bloqueio pessoal
+                            const isBlocked = dayBlocks.some(b => {
+                              const s = new Date(b.startAt)
+                              const e = new Date(b.endAt)
+                              const bStartMin = s.getHours() * 60 + s.getMinutes()
+                              const bEndMin = e.getHours() * 60 + e.getMinutes()
+                              return startMins >= bStartMin && startMins < bEndMin
+                            })
+                            if (isBlocked) {
+                              toast.error('Horário bloqueado na agenda')
+                              return
+                            }
+
                             const startHour = Math.floor(startMins / 60)
                             const startMinute = startMins % 60
                             const timeStr = `${pad(startHour)}:${pad(startMinute)}`

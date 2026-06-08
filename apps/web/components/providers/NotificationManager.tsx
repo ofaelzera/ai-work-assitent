@@ -12,6 +12,7 @@ export function NotificationManager() {
   
   // Guardamos o estado de quantas não lidas "globais" recebemos desde que a aba perdeu o foco
   const [unreadSinceBlur, setUnreadSinceBlur] = useState(0)
+  const [lastSenderName, setLastSenderName] = useState<string | null>(null)
 
   useEffect(() => {
     // Inicializa o áudio
@@ -43,6 +44,7 @@ export function NotificationManager() {
   useEffect(() => {
     const handleFocus = () => {
       setUnreadSinceBlur(0)
+      setLastSenderName(null)
       stopBlink()
     }
     window.addEventListener('focus', handleFocus)
@@ -63,14 +65,15 @@ export function NotificationManager() {
       if (!blinkIntervalRef.current) {
         let showNew = true
         blinkIntervalRef.current = setInterval(() => {
-          document.title = showNew ? `(${unreadSinceBlur}) Nova Mensagem` : originalTitleRef.current
+          const titleMsg = lastSenderName ? `de ${lastSenderName}` : ''
+          document.title = showNew ? `(${unreadSinceBlur}) Nova Mensagem ${titleMsg}`.trim() : originalTitleRef.current
           showNew = !showNew
         }, 1000)
       }
     } else {
       stopBlink()
     }
-  }, [unreadSinceBlur])
+  }, [unreadSinceBlur, lastSenderName])
 
   const stopBlink = () => {
     if (blinkIntervalRef.current) {
@@ -86,8 +89,8 @@ export function NotificationManager() {
     // Apenas mensagens recebidas importam para o alerta
     if (ev.type !== 'message.received') return
 
-    // O payload recebido: { conversationId, body, direction, ... }
-    const { conversationId, direction, body } = (ev.payload as any) || {}
+    // O payload recebido: { conversationId, body, direction, senderName, ... }
+    const { conversationId, direction, body, senderName } = (ev.payload as any) || {}
     
     // Só notificamos INBOUND
     if (direction !== 'INBOUND') return
@@ -105,6 +108,7 @@ export function NotificationManager() {
     
     // 1. Incrementa contador para o título piscar
     setUnreadSinceBlur(prev => prev + 1)
+    if (senderName) setLastSenderName(senderName)
 
     // 2. Tocar som
     if (audioRef.current) {
@@ -118,7 +122,8 @@ export function NotificationManager() {
     // 3. Mostrar Notificação Desktop (Browser Push)
     if ('Notification' in window && Notification.permission === 'granted') {
       // Previne várias notificações do mesmo remetente ao mesmo tempo
-      const notification = new Notification('Nova mensagem recebida', {
+      const title = senderName ? `Nova mensagem de ${senderName}` : 'Nova mensagem recebida'
+      const notification = new Notification(title, {
         body: body || 'Você tem uma nova mensagem.',
         icon: '/favicon.ico',
         tag: `msg-${conversationId}`, // Usa a mesma tag para sobrescrever e não inundar a tela

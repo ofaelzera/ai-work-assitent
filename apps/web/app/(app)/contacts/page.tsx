@@ -14,6 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/lib/usePermission'
 import { PermissionGate } from '@/components/PermissionGate'
+import { ContactHistoryModal } from '@/components/ContactHistoryModal'
 
 interface Company { id: string; name: string; color: string }
 interface ContactCompanyLink { source: 'MANUAL' | 'GROUP_SYNC'; company: Company }
@@ -545,6 +546,7 @@ function ContactsPageInner() {
   const [companyFilter, setCompanyFilter] = useState('')
   const [formModal, setFormModal]   = useState<null | 'new' | Contact>(null)
   const [mergeModal, setMergeModal] = useState<Contact | null>(null)
+  const [historyModal, setHistoryModal] = useState<Contact | null>(null)
   const [deduping, setDeduping]     = useState(false)
 
   const { data: result, isLoading } = useQuery({
@@ -847,13 +849,14 @@ function ContactsPageInner() {
 
                 {/* Ações (aparecem no hover) */}
                 <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {/* Substituído o link pro inbox por abrir o modal de histórico */}
                   {convCount > 0 && (
-                    <a
-                      href={`/inbox`}
+                    <button
+                      onClick={() => setHistoryModal(contact)}
                       className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground transition-colors"
-                      title="Ver conversas">
+                      title="Ver histórico de conversas">
                       <MessageSquare className="h-3.5 w-3.5" />
-                    </a>
+                    </button>
                   )}
                   {canEditContact && (
                     <button onClick={() => setMergeModal(contact)}
@@ -900,6 +903,13 @@ function ContactsPageInner() {
           onClose={() => setMergeModal(null)}
           onMerge={mergeWithId => mergeMutation.mutate({ id: mergeModal.id, mergeWithId })}
           isPending={mergeMutation.isPending}
+        />
+      )}
+      {historyModal && (
+        <ContactHistoryModal
+          contactId={historyModal.id}
+          contactName={historyModal.name ?? historyModal.phone ?? historyModal.email ?? 'Contato'}
+          onClose={() => setHistoryModal(null)}
         />
       )}
     </div>

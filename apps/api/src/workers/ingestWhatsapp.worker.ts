@@ -428,6 +428,7 @@ export function startIngestWhatsappWorker() {
         messageId: msg.id,
         conversationId: conversation.id,
         contactId: contact?.id ?? null,
+        senderName: pushName || contact?.name || contact?.phone || 'Cliente',
         channelId,
         channelType: 'WHATSAPP',
         conversationExternalId: conversation.externalId,

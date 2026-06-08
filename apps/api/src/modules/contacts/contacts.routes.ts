@@ -613,4 +613,58 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
       return reply.code(201).send({ ok: true, avatarUrl })
     },
   )
+
+  // ── KPIs do Contato ────────────────────────────────────────────────────────
+  app.get(
+    '/contacts/:id/kpis',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const { id } = req.params
+
+      const contact = await prisma.contact.findFirst({
+        where: { id, workspaceId, mergedIntoId: null },
+      })
+      if (!contact) return reply.notFound('Contato não encontrado')
+
+      const [totalTickets, totalMessages] = await Promise.all([
+        prisma.conversation.count({ where: { contactId: id, workspaceId } }),
+        prisma.message.count({ where: { conversation: { contactId: id }, workspaceId } }),
+      ])
+
+      // Cálculo de SLA médio em segundos (firstResponseAt - createdAt)
+      // Somente para conversas do contato onde a primeira resposta foi dada
+      const respondedConvs = await prisma.conversation.findMany({
+        where: {
+          contactId: id,
+          workspaceId,
+          firstResponseAt: { not: null },
+        },
+        select: {
+          createdAt: true,
+          firstResponseAt: true,
+        },
+      })
+
+      let avgSlaSeconds = 0
+      if (respondedConvs.length > 0) {
+        let totalSeconds = 0
+        for (const conv of respondedConvs) {
+          if (conv.firstResponseAt) {
+            totalSeconds += (conv.firstResponseAt.getTime() - conv.createdAt.getTime()) / 1000
+          }
+        }
+        avgSlaSeconds = totalSeconds / respondedConvs.length
+      }
+
+      return {
+        totalTickets,
+        totalMessages,
+        avgSlaSeconds,
+      }
+    },
+  )
 }

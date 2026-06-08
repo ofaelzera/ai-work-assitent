@@ -86,12 +86,13 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           filter: z.enum(['all', 'unread', 'favorites', 'groups', 'archived', 'resolved']).default('all'),
           status: z.enum(['all', 'active']).optional(),
           includeImported: z.coerce.boolean().optional(),  // default false — esconde conversas IMPORTED
+          contactId: z.string().optional(),
         }),
       },
     },
     async (req) => {
       const { workspaceId, sub: userId } = req.user
-      const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, companyId, teamId, inbox, q, cursor, limit, filter, status, includeImported } = req.query
+      const { channelId, channelType, channelTypeIn, excludeChannelType, folder, assigneeId, companyId, teamId, inbox, q, cursor, limit, filter, status, includeImported, contactId } = req.query
 
       // Resolve filtro de canal por tipo (single, CSV-in ou CSV-not-in)
       const channelTypeFilter: Record<string, unknown> = {}
@@ -205,6 +206,7 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           // Esconde conversas IMPORTED do inbox padrão (visíveis só via ContactDrawer/Histórico)
           ...(!includeImported && { source: 'LIVE' }),
           ...(channelId && { channelId }),
+          ...(contactId && { contactId }),
           ...(Object.keys(channelTypeFilter).length && { channel: channelTypeFilter as any }),
           ...(folder && { folder }),
           ...(askedForInternal
@@ -450,13 +452,16 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
         querystring: z.object({
           cursor: z.string().optional(),
           limit: z.coerce.number().default(50),
+          q: z.string().optional(),
+          startDate: z.string().optional(),
+          endDate: z.string().optional(),
         }),
       },
     },
     async (req) => {
       const { workspaceId } = req.user
       const { id } = req.params
-      const { cursor, limit } = req.query
+      const { cursor, limit, q, startDate, endDate } = req.query
 
       // Marca a conversa como lida (por usuário). Na abertura inicial (!cursor):
       //  • registra MINHA leitura (limpa o badge só pra mim);
@@ -492,6 +497,14 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
           conversationId: id,
           workspaceId,
           ...(cursor && { sentAt: { lt: new Date(cursor) } }),
+          ...(q && { body: { contains: q } }),
+          ...(startDate || endDate ? {
+            sentAt: {
+              ...(startDate && { gte: new Date(startDate) }),
+              ...(endDate && { lte: new Date(endDate) }),
+              ...(cursor && { lt: new Date(cursor) })
+            }
+          } : {}),
         },
         orderBy: { sentAt: 'desc' },
         take: limit,
