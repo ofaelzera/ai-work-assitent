@@ -654,8 +654,38 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
   })
 
   useSSE((event) => {
-    if (
-      event.type === 'message.received' ||
+    if (event.type === 'message.received') {
+      const payload = event.payload as any
+      queryClient.setQueriesData<{ conversations: Conversation[], queueCount: number }>({ queryKey: ['conversations'] }, (old) => {
+        if (!old?.conversations) return old
+        const convIndex = old.conversations.findIndex((c) => c.id === payload.conversationId)
+        if (convIndex > -1) {
+          const conv = old.conversations[convIndex]
+          const updatedConv = {
+            ...conv,
+            unreadCount: payload.direction === 'INBOUND' ? conv.unreadCount + 1 : conv.unreadCount,
+            unreadForMe: payload.direction === 'INBOUND' ? true : conv.unreadForMe,
+            lastMessageAt: new Date().toISOString(),
+            messages: [
+              {
+                id: payload.messageId,
+                body: payload.body,
+                direction: payload.direction,
+                sentAt: new Date().toISOString(),
+                attachments: [],
+              },
+              ...conv.messages,
+            ],
+          }
+          const newConversations = [...old.conversations]
+          newConversations.splice(convIndex, 1)
+          newConversations.unshift(updatedConv)
+          return { ...old, conversations: newConversations }
+        }
+        return old
+      })
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+    } else if (
       event.type === 'conversation.read' ||
       event.type === 'conversation.status_changed' ||
       event.type === 'conversation.claimed' ||
