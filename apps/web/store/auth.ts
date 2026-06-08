@@ -6,6 +6,9 @@ interface User {
   workspaceId: string
   role: 'ADMIN' | 'MEMBER'
   permissions?: string[]
+  name?: string | null
+  email?: string
+  settings?: any
 }
 
 interface AuthState {
