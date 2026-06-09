@@ -27,6 +27,12 @@ export function createSmtpTransport(cfg: SmtpConfig) {
   })
 }
 
+export interface EmailAttachment {
+  filename: string
+  path: string // caminho absoluto no storage local
+  contentType?: string
+}
+
 export async function sendEmail(
   cfg: SmtpConfig,
   to: string,
@@ -34,6 +40,7 @@ export async function sendEmail(
   text: string,
   html?: string,
   inReplyTo?: string,
+  attachments?: EmailAttachment[],
 ): Promise<string> {
   const transport = createSmtpTransport(cfg)
   const info = await transport.sendMail({
@@ -43,6 +50,9 @@ export async function sendEmail(
     text,
     html,
     ...(inReplyTo && { inReplyTo, references: inReplyTo }),
+    ...(attachments && attachments.length > 0 && {
+      attachments: attachments.map((a) => ({ filename: a.filename, path: a.path, contentType: a.contentType })),
+    }),
   })
   return info.messageId
 }

@@ -88,7 +88,7 @@ const navGroups: NavGroup[] = [
   {
     title: 'MARKETING & ANÚNCIOS',
     items: [
-      { href: '/admin/campaigns', label: 'Campanhas', icon: Megaphone, perm: 'admin.settings', badge: { text: 'Beta', variant: 'beta' } },
+      { href: '/admin/campaigns', label: 'Campanhas', icon: Megaphone, perm: 'campaigns.view', badge: { text: 'Beta', variant: 'beta' } },
       // Exemplo de item caso queiram links/UTMs
     ]
   },
