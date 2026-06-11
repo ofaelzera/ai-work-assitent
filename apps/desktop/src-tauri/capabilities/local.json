@@ -4,6 +4,8 @@
   "description": "Permissões da página local de configuração do servidor",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-get-server-url",
+    "allow-connect-to-server"
   ]
 }

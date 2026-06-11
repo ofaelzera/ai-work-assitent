@@ -44,9 +44,16 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
           // Não lidas do ponto de vista DESTE usuário: só conversas que ele ainda
           // não abriu (reads none). Ao ler, o ConversationRead some daqui mesmo que
           // o unreadCount global siga >0 (conversa de outro atendente / fila).
+          // Mesmos filtros do badge do inbox (/inbox/badges) — sem eles o KPI conta
+          // conversas invisíveis no inbox (resolvidas, sincronizadas, Status do
+          // WhatsApp) que ficam com unreadCount > 0 pra sempre.
           prisma.conversation.aggregate({
             where: {
               workspaceId, archived: false,
+              source: 'LIVE',
+              type: 'EXTERNAL',
+              status: { in: ['OPEN', 'WAITING'] },
+              NOT: { externalId: 'status@broadcast' },
               unreadCount: { gt: 0 },
               reads: { none: { userId } },
             },
@@ -184,9 +191,18 @@ export const dashboardRoutes: FastifyPluginAsyncZod = async (app) => {
         }),
 
         // Total de mensagens não lidas APENAS nas conversas atribuídas a mim
-        // (mensagens em conversas na fila ficam zeradas pra esse usuário até ele assumir)
+        // (mensagens em conversas na fila ficam zeradas pra esse usuário até ele assumir).
+        // Mesmos filtros do badge "minhas não lidas" do inbox (/inbox/badges).
         prisma.conversation.aggregate({
-          where: { workspaceId, archived: false, assigneeId: userId },
+          where: {
+            workspaceId, archived: false, assigneeId: userId,
+            source: 'LIVE',
+            type: 'EXTERNAL',
+            status: { in: ['OPEN', 'WAITING'] },
+            NOT: { externalId: 'status@broadcast' },
+            unreadCount: { gt: 0 },
+            reads: { none: { userId } },
+          },
           _sum: { unreadCount: true },
         }),
 
