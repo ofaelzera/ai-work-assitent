@@ -46,6 +46,11 @@ model Workspace {
   scheduleBlocks        ScheduleBlock[]
   companyHours          CompanyHours[]
   holidays              Holiday[]
+  campaigns             Campaign[]
+  broadcastLists        BroadcastList[]
+  commMessages          CommMessage[]
+  commAttachments       CommAttachment[]
+  commApiKeys           CommApiKey[]
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -210,6 +215,8 @@ model Contact {
   sentMessages   Message[]        @relation("MessageSender")
   tasks          Task[]
   calendarEvents CalendarEvent[]
+  broadcastListMemberships BroadcastListMember[]
+  commMessages             CommMessage[]
 
   @@index([workspaceId, phone])
   @@index([workspaceId, lid])
@@ -1319,4 +1326,175 @@ model FlowExecution {
 
   @@index([conversationId, status])
   @@index([workspaceId, status])
+}
+
+// ─── Central de Comunicação ──────────────────────────────────────────────────
+// Camada única de envios (WhatsApp/Email hoje, outros canais no futuro). Nenhum
+// módulo fala direto com Evolution/SMTP — todos passam por communication.service.
+
+enum CommChannel {
+  WHATSAPP
+  EMAIL
+}
+
+enum CommStatus {
+  PENDING // pronta pra enviar imediatamente
+  SCHEDULED // aguardando horário agendado
+  PROCESSING // worker pegou o job
+  SENT // entregue ao provedor
+  FAILED // esgotou tentativas
+  CANCELED // cancelada manualmente
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELED
+}
+
+// Campanha de envio em massa. Materializa N CommMessage no disparo.
+model Campaign {
+  id          String         @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?        @db.Text
+  channelType CommChannel
+  channelId   String? // Channel específico; null = auto (1º conectado do tipo)
+  subject     String? // usado em e-mail
+  body        String         @db.Text
+  status      CampaignStatus @default(DRAFT)
+  listId      String? // BroadcastList alvo
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdBy   String? // User.id
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id])
+  list        BroadcastList?   @relation(fields: [listId], references: [id])
+  messages    CommMessage[]
+  attachments CommAttachment[]
+
+  @@index([workspaceId, status])
+  @@index([listId])
+}
+
+// Lista de transmissão reutilizável (só Contatos cadastrados).
+model BroadcastList {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace             @relation(fields: [workspaceId], references: [id])
+  members   BroadcastListMember[]
+  campaigns Campaign[]
+
+  @@index([workspaceId])
+}
+
+model BroadcastListMember {
+  id        String   @id @default(cuid())
+  listId    String
+  contactId String
+  createdAt DateTime @default(now())
+
+  list    BroadcastList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, contactId])
+  @@index([contactId])
+}
+
+// Item da fila / log de uma mensagem individual.
+model CommMessage {
+  id          String      @id @default(cuid())
+  workspaceId String
+  campaignId  String? // null = envio avulso (API/módulo interno)
+  contactId   String? // null = destinatário avulso (string crua via API)
+  channelType CommChannel
+  channelId   String? // Channel resolvido; null = auto no dispatch
+  to          String // destinatário (telefone/email)
+  subject     String?
+  body        String      @db.Text
+  status      CommStatus  @default(PENDING)
+  priority    Int         @default(0) // maior = mais prioritário
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  attempts    Int         @default(0)
+  lastError   String?     @db.Text
+  externalId  String? // id da mensagem no provedor (Evolution/Meta/SMTP)
+  source      String      @default("api") // campaign | api | billing | crm | ...
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id])
+  campaign    Campaign?        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact     Contact?         @relation(fields: [contactId], references: [id])
+  attachments CommAttachment[]
+  logs        CommMessageLog[]
+
+  @@index([workspaceId, status])
+  @@index([campaignId])
+  @@index([scheduledAt])
+}
+
+// Anexo já normalizado e gravado no storage (nunca Base64 cru no worker).
+model CommAttachment {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  campaignId    String?
+  commMessageId String?
+  filename      String
+  mimeType      String
+  sizeBytes     Int
+  storageKey    String // caminho relativo a STORAGE_PATH
+  createdAt     DateTime @default(now())
+
+  workspace  Workspace    @relation(fields: [workspaceId], references: [id])
+  campaign   Campaign?    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  commMessage CommMessage? @relation(fields: [commMessageId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([commMessageId])
+}
+
+// Histórico/auditoria de cada envio.
+model CommMessageLog {
+  id            String   @id @default(cuid())
+  commMessageId String
+  // RECEIVED | CREATED | PROCESSING | PROVIDER_OK | PROVIDER_ERROR | RETRY | CANCELED
+  type          String
+  detail        Json?
+  createdAt     DateTime @default(now())
+
+  commMessage CommMessage @relation(fields: [commMessageId], references: [id], onDelete: Cascade)
+
+  @@index([commMessageId])
+}
+
+// API key para integração externa com a Central de Comunicação.
+model CommApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  prefix      String // primeiros 8 chars (visível na listagem)
+  keyHash     String // hash SHA-256 do segredo completo
+  scopes      Json // ex: ["messages.send"]
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdBy   String? // User.id
+  createdAt   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([prefix])
+  @@index([workspaceId])
 }

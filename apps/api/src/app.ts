@@ -38,6 +38,8 @@ import { routingRulesRoutes } from './modules/routing/rules.routes.js'
 import { flowsRoutes } from './modules/flows/flows.routes.js'
 import { systemSettingsRoutes } from './modules/system-settings/system-settings.routes.js'
 import { integrationsRoutes } from './modules/integrations/integrations.routes.js'
+import { communicationRoutes } from './modules/communication/communication.routes.js'
+import { commPublicApiRoutes } from './modules/communication/comm-public-api.routes.js'
 import type { JwtPayload } from '@aiwa/shared'
 
 declare module '@fastify/jwt' {
@@ -227,6 +229,8 @@ export async function buildApp() {
   await app.register(routingRulesRoutes)
   await app.register(flowsRoutes)
   await app.register(integrationsRoutes)
+  await app.register(communicationRoutes)
+  await app.register(commPublicApiRoutes)
 
   return app
 }
