@@ -38,6 +38,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSSE } from '@/lib/sse'
 import { useTheme } from 'next-themes'
 import { NotificationManager } from '@/components/providers/NotificationManager'
+import { DesktopBridge } from '@/components/providers/DesktopBridge'
 
 /**
  * Estrutura de grupos do menu lateral.
@@ -515,6 +516,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </main>
       <NotificationManager />
+      <DesktopBridge />
     </div>
   )
 }

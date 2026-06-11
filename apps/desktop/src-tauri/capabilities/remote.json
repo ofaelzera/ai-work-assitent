@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "remote-app",
+  "description": "Permissões mínimas para o web app remoto (notificações, eventos, badge). A navegação é restrita em Rust (on_navigation) ao servidor configurado pelo usuário.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["https://*", "http://localhost:*", "http://127.0.0.1:*"]
+  },
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "notification:default"
+  ]
+}
