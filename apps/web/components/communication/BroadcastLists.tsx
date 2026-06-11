@@ -4,12 +4,13 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Trash2, Pencil, Users, Download, Upload, X, Search } from 'lucide-react'
+import { Plus, Trash2, Pencil, Users, Download, Upload, X, Search, CheckCircle2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm-dialog'
-import { BroadcastList, BroadcastListDetail, ListContact } from './types'
-import { Modal, Field, IconBtn, inputCls } from './CampaignsTab'
+import { BroadcastList, BroadcastListDetail, ListContact, CompanyRef } from './types'
+import { Modal, Field, IconBtn, ContactAvatar, inputCls } from './ui'
 
-export function ListsTab() {
+export function BroadcastLists() {
   const qc = useQueryClient()
   const confirm = useConfirm()
   const [editing, setEditing] = useState<BroadcastList | null>(null)
@@ -108,9 +109,13 @@ export function ListsTab() {
   )
 }
 
+type VerifiedFilter = 'all' | 'verified' | 'unverified'
+
 function ManageMembersModal({ listId, onClose }: { listId: string; onClose: () => void }) {
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
+  const [companyId, setCompanyId] = useState('')
+  const [verified, setVerified] = useState<VerifiedFilter>('all')
   const [showImport, setShowImport] = useState(false)
   const [csv, setCsv] = useState('')
 
@@ -118,10 +123,22 @@ function ManageMembersModal({ listId, onClose }: { listId: string; onClose: () =
     queryKey: ['broadcast-list', listId],
     queryFn: () => apiFetch<BroadcastListDetail>(`/comm/broadcast-lists/${listId}`),
   })
+  const { data: companies = [] } = useQuery({
+    queryKey: ['companies'],
+    queryFn: () => apiFetch<CompanyRef[]>('/companies'),
+  })
+
+  const hasFilter = search.length >= 2 || !!companyId || verified !== 'all'
   const { data: searchResults = [] } = useQuery({
-    queryKey: ['contacts-search', search],
-    queryFn: () => apiFetch<ListContact[]>(`/contacts?q=${encodeURIComponent(search)}&limit=20`),
-    enabled: search.length >= 2,
+    queryKey: ['contacts-search', search, companyId, verified],
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: '30' })
+      if (search.length >= 2) params.set('q', search)
+      if (companyId) params.set('companyId', companyId)
+      if (verified !== 'all') params.set('verified', verified)
+      return apiFetch<{ items: ListContact[] }>(`/contacts?${params.toString()}`).then((r) => r.items ?? [])
+    },
+    enabled: hasFilter,
   })
 
   const addMutation = useMutation({
@@ -171,31 +188,62 @@ function ManageMembersModal({ listId, onClose }: { listId: string; onClose: () =
 
       <div className="relative mb-2">
         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar contato para adicionar (mín. 2 letras)…" className={`${inputCls} pl-8`} />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar contato por nome, telefone ou email…" className={`${inputCls} pl-8`} />
       </div>
-      {search.length >= 2 && (
-        <div className="rounded-lg border divide-y mb-3 max-h-40 overflow-y-auto">
-          {searchResults.filter((c) => !memberIds.has(c.id)).map((c) => (
-            <button key={c.id} onClick={() => addMutation.mutate([c.id])} className="w-full flex items-center justify-between px-3 py-2 hover:bg-muted text-left">
-              <span className="text-sm truncate">{c.name ?? c.phone ?? c.email ?? 'Sem nome'}</span>
-              <Plus className="h-4 w-4 text-primary shrink-0" />
-            </button>
-          ))}
+      <div className={cn('grid gap-2 mb-2', companies.length > 0 ? 'grid-cols-2' : 'grid-cols-1')}>
+        {companies.length > 0 && (
+          <select value={companyId} onChange={(e) => setCompanyId(e.target.value)} className={inputCls}>
+            <option value="">Todas as empresas</option>
+            {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        )}
+        <select value={verified} onChange={(e) => setVerified(e.target.value as VerifiedFilter)} className={inputCls}>
+          <option value="all">Verificados e não verificados</option>
+          <option value="verified">Só verificados</option>
+          <option value="unverified">Só não verificados</option>
+        </select>
+      </div>
+
+      {hasFilter && (
+        <div className="rounded-lg border divide-y mb-3 max-h-48 overflow-y-auto">
+          {searchResults.filter((c) => !memberIds.has(c.id)).map((c) => {
+            const label = c.name ?? c.phone ?? c.email ?? 'Sem nome'
+            return (
+              <button key={c.id} onClick={() => addMutation.mutate([c.id])} className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-black/5 dark:hover:bg-white/5 text-left">
+                <ContactAvatar name={label} avatarUrl={c.metadata?.avatarUrl} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm truncate flex items-center gap-1.5">
+                    {label}
+                    {c.verified && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />}
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate">{c.phone ?? c.email ?? '—'}{c.company ? ` · ${c.company.name}` : ''}</p>
+                </div>
+                <Plus className="h-4 w-4 text-primary shrink-0" />
+              </button>
+            )
+          })}
           {searchResults.filter((c) => !memberIds.has(c.id)).length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">Nenhum contato novo encontrado.</p>}
         </div>
       )}
 
       <p className="text-xs font-medium text-muted-foreground mb-1">{list?.members.length ?? 0} contatos na lista</p>
       <div className="rounded-lg border divide-y max-h-64 overflow-y-auto">
-        {list?.members.map((m) => (
-          <div key={m.id} className="flex items-center justify-between px-3 py-2">
-            <div className="min-w-0">
-              <p className="text-sm truncate">{m.contact.name ?? 'Sem nome'}</p>
-              <p className="text-xs text-muted-foreground truncate">{m.contact.phone ?? m.contact.email ?? '—'}</p>
+        {list?.members.map((m) => {
+          const label = m.contact.name ?? m.contact.phone ?? m.contact.email ?? 'Sem nome'
+          return (
+            <div key={m.id} className="flex items-center gap-2.5 px-3 py-2">
+              <ContactAvatar name={label} avatarUrl={m.contact.metadata?.avatarUrl} size="sm" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm truncate flex items-center gap-1.5">
+                  {m.contact.name ?? 'Sem nome'}
+                  {m.contact.verified && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />}
+                </p>
+                <p className="text-xs text-muted-foreground truncate">{m.contact.phone ?? m.contact.email ?? '—'}{m.contact.company ? ` · ${m.contact.company.name}` : ''}</p>
+              </div>
+              <button onClick={() => removeMutation.mutate(m.contact.id)} className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10"><X className="h-4 w-4 text-muted-foreground" /></button>
             </div>
-            <button onClick={() => removeMutation.mutate(m.contact.id)} className="p-1 rounded hover:bg-muted"><X className="h-4 w-4 text-muted-foreground" /></button>
-          </div>
-        ))}
+          )
+        })}
         {(list?.members.length ?? 0) === 0 && <p className="px-3 py-3 text-xs text-muted-foreground text-center">Lista vazia.</p>}
       </div>
     </Modal>

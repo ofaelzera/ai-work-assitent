@@ -8,6 +8,7 @@ import { startFlowExecutorWorker } from './flowExecutor.worker.js'
 import { startWhatsappGroupsSyncWorker } from './whatsappGroupsSync.worker.js'
 import { startCommDispatchWorker } from './commDispatch.worker.js'
 import { startCampaignDispatchWorker } from './campaignDispatch.worker.js'
+import { startCommScheduler } from './commScheduler.js'
 import { syncAllCronAgents } from '../modules/ai/cronSync.js'
 import { logger } from '../lib/logger.js'
 
@@ -26,9 +27,12 @@ export function startWorkers() {
   // Dispatcher é só listeners no eventBus, não retorna Worker
   startAgentDispatcher()
 
+  // Scheduler da Central de Comunicação (varredura de agendados a cada 30s)
+  startCommScheduler()
+
   // Sweep inicial dos crons de agente (alinha BullMQ com o DB)
   syncAllCronAgents().catch((err) => logger.error({ err }, 'syncAllCronAgents inicial falhou'))
 
-  logger.info(`${workers.length} worker(s) iniciado(s) + dispatcher + cron sweep`)
+  logger.info(`${workers.length} worker(s) iniciado(s) + dispatcher + scheduler + cron sweep`)
   return workers
 }

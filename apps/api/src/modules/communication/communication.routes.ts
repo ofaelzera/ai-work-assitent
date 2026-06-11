@@ -6,6 +6,7 @@ import { enqueueMessage, cancelMessage, retryMessage } from './communication.ser
 import { dispatchCampaign, campaignMetrics } from './campaigns.service.js'
 import { importContactsToList, exportListToCsv } from './broadcast-lists.service.js'
 import { createApiKey, listApiKeys, revokeApiKey } from './comm-api-keys.service.js'
+import { storeAttachments, deleteAttachmentFile, type AttachmentInput } from './comm-attachments.service.js'
 
 const channelEnum = z.enum(['WHATSAPP', 'EMAIL'])
 
@@ -39,6 +40,7 @@ export const communicationRoutes: FastifyPluginAsyncZod = async (app) => {
       orderBy: { createdAt: 'desc' },
       include: {
         list: { select: { id: true, name: true } },
+        attachments: { select: { id: true, filename: true, mimeType: true, sizeBytes: true } },
         _count: { select: { messages: true } },
       },
     })
@@ -195,7 +197,9 @@ export const communicationRoutes: FastifyPluginAsyncZod = async (app) => {
         where: { id: campaign.id },
         data: { status: isScheduled ? 'SCHEDULED' : 'RUNNING', scheduledAt, ...(isScheduled ? {} : { startedAt: new Date() }) },
       })
-      await dispatchCampaign(campaign.id, isScheduled ? scheduledAt : null)
+      // Agendada: a varredura (sweepScheduledCampaigns) dispara no horário.
+      // Imediata: dispara agora.
+      if (!isScheduled) await dispatchCampaign(campaign.id)
       return updated
     },
   )
@@ -219,6 +223,52 @@ export const communicationRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
+  // ── Anexos de campanha ────────────────────────────────────────────────────
+  // Upload via multipart (arquivos) — armazenados no storage e enviados a cada
+  // destinatário no disparo. Compartilhados (1 arquivo, N envios).
+  app.post('/comm/campaigns/:id/attachments', { onRequest: [app.authenticate] }, async (req: any, reply) => {
+    if (!(await requireManage(req.user, reply))) return
+    const { workspaceId } = req.user
+    const campaignId = req.params.id as string
+    const campaign = await prisma.campaign.findFirst({ where: { id: campaignId, workspaceId }, select: { id: true } })
+    if (!campaign) return reply.code(404).send({ error: 'Campanha não encontrada' })
+    if (!req.isMultipart()) return reply.code(400).send({ error: 'Envie os arquivos como multipart/form-data' })
+
+    const inputs: AttachmentInput[] = []
+    for await (const part of req.parts()) {
+      if (part.type === 'file') {
+        const chunks: Buffer[] = []
+        for await (const chunk of part.file) chunks.push(chunk)
+        inputs.push({ tipo: 'buffer', nome: part.filename ?? 'arquivo', buffer: Buffer.concat(chunks), mime_type: part.mimetype })
+      }
+    }
+    if (inputs.length === 0) return reply.code(400).send({ error: 'Nenhum arquivo recebido' })
+
+    await storeAttachments(workspaceId, inputs, { campaignId })
+    const attachments = await prisma.commAttachment.findMany({
+      where: { campaignId },
+      select: { id: true, filename: true, mimeType: true, sizeBytes: true },
+    })
+    return reply.code(201).send(attachments)
+  })
+
+  app.delete(
+    '/comm/campaigns/:id/attachments/:attId',
+    { onRequest: [app.authenticate], schema: { params: z.object({ id: z.string(), attId: z.string() }) } },
+    async (req, reply) => {
+      if (!(await requireManage(req.user, reply))) return
+      const { workspaceId } = req.user
+      const att = await prisma.commAttachment.findFirst({
+        where: { id: req.params.attId, campaignId: req.params.id, workspaceId },
+        select: { id: true, storageKey: true },
+      })
+      if (!att) return reply.code(404).send({ error: 'Anexo não encontrado' })
+      await prisma.commAttachment.delete({ where: { id: att.id } })
+      await deleteAttachmentFile(att.storageKey)
+      return reply.code(204).send()
+    },
+  )
+
   // ════════════════════════ LISTAS DE TRANSMISSÃO ════════════════════════
   app.get('/comm/broadcast-lists', { onRequest: [app.authenticate] }, async (req, reply) => {
     if (!(await requireView(req.user, reply))) return
@@ -237,7 +287,17 @@ export const communicationRoutes: FastifyPluginAsyncZod = async (app) => {
       const list = await prisma.broadcastList.findFirst({
         where: { id: req.params.id, workspaceId: req.user.workspaceId },
         include: {
-          members: { include: { contact: { select: { id: true, name: true, phone: true, email: true } } } },
+          members: {
+            include: {
+              contact: {
+                select: {
+                  id: true, name: true, phone: true, email: true, verified: true, metadata: true,
+                  company: { select: { id: true, name: true, color: true } },
+                },
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+          },
         },
       })
       if (!list) return reply.code(404).send({ error: 'Lista não encontrada' })

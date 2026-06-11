@@ -3,12 +3,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { Send, Clock, AlertTriangle, TrendingUp, Play, CheckCircle2 } from 'lucide-react'
-import { CommDashboard } from './types'
+import { CommDashboard as CommDashboardData } from './types'
 
-export function DashboardTab() {
+export function CommDashboard() {
   const { data, isLoading } = useQuery({
     queryKey: ['comm-dashboard'],
-    queryFn: () => apiFetch<CommDashboard>('/comm/dashboard'),
+    queryFn: () => apiFetch<CommDashboardData>('/comm/dashboard'),
     refetchInterval: 5000,
   })
 

@@ -37,13 +37,12 @@ export interface EnqueueResult {
   status: CommStatus
 }
 
-/** Adiciona um job de despacho à fila, respeitando agendamento e prioridade. */
-async function queueDispatch(messageId: string, scheduledAt: Date | null, priority: number): Promise<void> {
-  const delay = scheduledAt ? Math.max(0, scheduledAt.getTime() - Date.now()) : 0
+/** Adiciona um job de despacho IMEDIATO à fila, respeitando prioridade. */
+async function queueDispatch(messageId: string, priority: number): Promise<void> {
   await commDispatchQueue.add(
     'dispatch',
     { messageId },
-    { ...DEFAULT_JOB_OPTS, delay, priority: priority > 0 ? Math.max(1, 100 - priority) : undefined },
+    { ...DEFAULT_JOB_OPTS, priority: priority > 0 ? Math.max(1, 100 - priority) : undefined },
   )
 }
 
@@ -88,9 +87,33 @@ export async function enqueueMessage(input: EnqueueInput): Promise<EnqueueResult
     },
   })
 
-  await queueDispatch(message.id, isScheduled ? scheduledAt : null, input.priority ?? 0)
+  // Agendadas ficam SCHEDULED e são promovidas pela varredura (sweepScheduledMessages).
+  // Imediatas vão direto pra fila.
+  if (!isScheduled) {
+    await queueDispatch(message.id, input.priority ?? 0)
+  }
 
   return { messageId: message.id, status }
+}
+
+/**
+ * Varredura de mensagens agendadas: promove as SCHEDULED cujo horário já chegou
+ * para PENDING e as enfileira. Roda em intervalo fixo no scheduler — robusto a
+ * reagendamentos e quedas do servidor.
+ */
+export async function sweepScheduledMessages(now: Date = new Date()): Promise<number> {
+  const due = await prisma.commMessage.findMany({
+    where: { status: 'SCHEDULED', scheduledAt: { lte: now } },
+    select: { id: true, priority: true },
+  })
+  for (const m of due) {
+    const res = await prisma.commMessage.updateMany({
+      where: { id: m.id, status: 'SCHEDULED' },
+      data: { status: 'PENDING' },
+    })
+    if (res.count > 0) await queueDispatch(m.id, m.priority)
+  }
+  return due.length
 }
 
 /** Re-enfileira uma mensagem que falhou ou foi cancelada (botão "tentar de novo"). */
@@ -108,7 +131,7 @@ export async function retryMessage(workspaceId: string, messageId: string): Prom
   await prisma.commMessageLog.create({
     data: { commMessageId: msg.id, type: 'RETRY', detail: { manual: true } },
   })
-  await queueDispatch(msg.id, null, 0)
+  await queueDispatch(msg.id, 0)
 }
 
 /** Marca uma mensagem como cancelada (o worker pula CANCELED). */

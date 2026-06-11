@@ -34,6 +34,18 @@ export function startCampaignDispatchWorker() {
         return
       }
 
+      // Idempotência: se os destinatários já foram materializados (job duplicado
+      // ou re-disparo), não materializa de novo — evita envio em dobro.
+      const already = await prisma.commMessage.count({ where: { campaignId: campaign.id } })
+      if (already > 0) {
+        logger.info({ campaignId, already }, 'campaignDispatch: destinatários já materializados — pulando')
+        await prisma.campaign.update({
+          where: { id: campaign.id },
+          data: { status: 'COMPLETED', completedAt: campaign.completedAt ?? new Date() },
+        })
+        return
+      }
+
       await prisma.campaign.update({
         where: { id: campaign.id },
         data: { status: 'RUNNING', startedAt: campaign.startedAt ?? new Date() },

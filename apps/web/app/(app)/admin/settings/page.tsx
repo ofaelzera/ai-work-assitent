@@ -6,13 +6,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { maskPhone, maskCNPJ } from '@/lib/masks'
 import { toast } from 'sonner'
-import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2, Clock, CalendarDays, Trash2, Plus, Palette, Server, type LucideIcon } from 'lucide-react'
+import { Shield, Plug, Key, Save, RefreshCw, CheckCircle2, AlertCircle, Users, Building2, Clock, CalendarDays, Trash2, Plus, Palette, Server, Radio, Copy, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
 import { AdminSection } from '@/components/admin/AdminSection'
 import { BrandingPanel } from '@/components/admin/BrandingPanel'
 import { EvolutionServersPanel } from '@/components/admin/EvolutionServersPanel'
 import { WeeklyHoursEditor, type HoursRow } from '@/components/WeeklyHoursEditor'
+import { ApiKeys as CommApiKeysPanel } from '@/components/communication/ApiKeys'
 
 interface Channel {
   id: string
@@ -558,6 +559,14 @@ function IntegrationsPanel() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">{ch.label}</p>
                 <p className="text-xs text-muted-foreground">{CHANNEL_TYPE_LABEL[ch.type] ?? ch.type}</p>
+                <button
+                  type="button"
+                  onClick={() => { navigator.clipboard.writeText(ch.id); toast.success('ID do canal copiado') }}
+                  title="Copiar ID do canal (use em canal_id na API)"
+                  className="mt-1 inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  ID: {ch.id} <Copy className="h-3 w-3" />
+                </button>
               </div>
               <div className="flex items-center gap-1 text-xs">
                 {ch.status === 'CONNECTED' ? (
@@ -773,6 +782,14 @@ function SettingsPageInner() {
       title: 'Widgets',
       description: 'Ative os widgets e seções do dashboard e configure chaves de APIs públicas. O usuário escolhe no perfil quais exibir.',
       render: () => <ApiIntegrationsPanel />,
+    } as TabDef] : []),
+    ...(isAdmin ? [{
+      id: 'comm-api-keys',
+      label: 'API de Comunicação',
+      icon: Radio,
+      title: 'API de Comunicação',
+      description: 'Chaves de integração externa da Central de Comunicação (POST /api/v1/messages)',
+      render: () => <CommApiKeysPanel />,
     } as TabDef] : []),
     ...(isAdmin ? [{
       id: 'maintenance',

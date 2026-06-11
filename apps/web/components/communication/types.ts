@@ -4,6 +4,13 @@ export type CampaignStatus = 'DRAFT' | 'SCHEDULED' | 'RUNNING' | 'PAUSED' | 'COM
 
 export type CommStatus = 'PENDING' | 'SCHEDULED' | 'PROCESSING' | 'SENT' | 'FAILED' | 'CANCELED'
 
+export interface AttachmentRef {
+  id: string
+  filename: string
+  mimeType: string
+  sizeBytes: number
+}
+
 export interface Campaign {
   id: string
   name: string
@@ -19,6 +26,7 @@ export interface Campaign {
   completedAt: string | null
   createdAt: string
   list?: { id: string; name: string } | null
+  attachments?: AttachmentRef[]
   _count?: { messages: number }
 }
 
@@ -48,6 +56,15 @@ export interface ListContact {
   name: string | null
   phone: string | null
   email: string | null
+  verified?: boolean
+  metadata?: { avatarUrl?: string } | null
+  company?: { id: string; name: string; color?: string | null } | null
+}
+
+export interface CompanyRef {
+  id: string
+  name: string
+  color?: string | null
 }
 
 export interface BroadcastListDetail extends BroadcastList {

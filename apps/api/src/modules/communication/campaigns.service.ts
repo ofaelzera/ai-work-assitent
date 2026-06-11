@@ -23,10 +23,32 @@ export interface CampaignInput {
   scheduledAt?: Date | null
 }
 
-/** Enfileira o disparo de uma campanha (imediato ou agendado). */
-export async function dispatchCampaign(campaignId: string, scheduledAt: Date | null): Promise<void> {
-  const delay = scheduledAt ? Math.max(0, scheduledAt.getTime() - Date.now()) : 0
-  await campaignDispatchQueue.add('dispatch', { campaignId }, { ...CAMPAIGN_JOB_OPTS, delay })
+/** Enfileira o disparo IMEDIATO de uma campanha (materialização dos destinatários). */
+export async function dispatchCampaign(campaignId: string): Promise<void> {
+  await campaignDispatchQueue.add('dispatch', { campaignId }, CAMPAIGN_JOB_OPTS)
+}
+
+/**
+ * Varredura de campanhas agendadas: pega as SCHEDULED cujo horário já chegou,
+ * marca RUNNING (idempotente — sai da query) e enfileira o disparo. Roda em
+ * intervalo fixo no scheduler, então sobrevive a reagendamentos e quedas do
+ * servidor (campanhas atrasadas disparam na próxima varredura). Sem jobs com
+ * delay que ficam "presos" no horário antigo.
+ */
+export async function sweepScheduledCampaigns(now: Date = new Date()): Promise<number> {
+  const due = await prisma.campaign.findMany({
+    where: { status: 'SCHEDULED', scheduledAt: { lte: now } },
+    select: { id: true },
+  })
+  for (const c of due) {
+    // Transição atômica SCHEDULED→RUNNING: só enfileira se ESTE update pegou a linha.
+    const res = await prisma.campaign.updateMany({
+      where: { id: c.id, status: 'SCHEDULED' },
+      data: { status: 'RUNNING', startedAt: now },
+    })
+    if (res.count > 0) await dispatchCampaign(c.id)
+  }
+  return due.length
 }
 
 /** Métricas agregadas de uma campanha a partir das CommMessage materializadas. */

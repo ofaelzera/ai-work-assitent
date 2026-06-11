@@ -66,6 +66,7 @@ export const commPublicApiRoutes: FastifyPluginAsync = async (app) => {
     if (!auth) return
 
     let canal: string | undefined
+    let canalId: string | undefined
     let destinatario: string | undefined
     let assunto: string | undefined
     let mensagem: string | undefined
@@ -87,6 +88,7 @@ export const commPublicApiRoutes: FastifyPluginAsync = async (app) => {
           const v = part.value as string
           switch (part.fieldname) {
             case 'canal': canal = v; break
+            case 'canal_id': canalId = v; break
             case 'destinatario': destinatario = v; break
             case 'assunto': assunto = v; break
             case 'mensagem': mensagem = v; break
@@ -97,6 +99,7 @@ export const commPublicApiRoutes: FastifyPluginAsync = async (app) => {
     } else {
       const b = req.body ?? {}
       canal = b.canal
+      canalId = b.canal_id ?? b.channelId
       destinatario = b.destinatario
       assunto = b.assunto
       mensagem = b.mensagem
@@ -119,6 +122,7 @@ export const commPublicApiRoutes: FastifyPluginAsync = async (app) => {
       const result = await enqueueMessage({
         workspaceId: auth.workspaceId,
         channelType,
+        channelId: canalId || null,
         to: destinatario,
         subject: assunto,
         body: mensagem,

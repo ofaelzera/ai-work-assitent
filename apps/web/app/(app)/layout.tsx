@@ -19,13 +19,15 @@ import {
   CheckSquare,
   UserCircle,
   ChevronRight, 
-  Megaphone, 
-  LineChart, 
-  BarChart2, 
-  Activity, 
-  Workflow, 
-  Mails, 
-  PieChart
+  Megaphone,
+  LineChart,
+  BarChart2,
+  Activity,
+  Workflow,
+  Mails,
+  PieChart,
+  ListChecks,
+  Radio
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -89,13 +91,14 @@ const navGroups: NavGroup[] = [
     title: 'MARKETING & ANÚNCIOS',
     items: [
       { href: '/admin/campaigns', label: 'Campanhas', icon: Megaphone, perm: 'campaigns.view', badge: { text: 'Beta', variant: 'beta' } },
-      // Exemplo de item caso queiram links/UTMs
+      { href: '/admin/broadcast-lists', label: 'Listas de Transmissão', icon: ListChecks, perm: 'campaigns.view' },
     ]
   },
   {
     title: 'RESULTADOS',
     items: [
       { href: '/admin/reports', label: 'Painel Geral', icon: BarChart2, perm: 'reports.view' },
+      { href: '/admin/communication', label: 'Central de Comunicação', icon: Radio, perm: 'campaigns.view' },
       { href: '/admin/ai-logs', label: 'Logs IA', icon: Activity, perm: 'admin.agents' },
       { href: '/admin/events', label: 'Eventos', icon: Activity, perm: 'admin.events' },
     ]

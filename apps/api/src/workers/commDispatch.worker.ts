@@ -17,14 +17,20 @@ export function startCommDispatchWorker() {
     async (job) => {
       const { messageId } = job.data as { messageId: string }
 
-      const msg = await prisma.commMessage.findUnique({
-        where: { id: messageId },
-        include: { attachments: { select: { filename: true, mimeType: true, storageKey: true } } },
-      })
+      const msg = await prisma.commMessage.findUnique({ where: { id: messageId } })
       if (!msg) {
         logger.warn({ messageId }, 'commDispatch: mensagem não encontrada — ignorada')
         return
       }
+
+      // Anexos: os da própria mensagem + os de nível de campanha (compartilhados
+      // por todos os destinatários, sem duplicar arquivo no storage).
+      const attOr: any[] = [{ commMessageId: msg.id }]
+      if (msg.campaignId) attOr.push({ campaignId: msg.campaignId, commMessageId: null })
+      const attachments = await prisma.commAttachment.findMany({
+        where: { OR: attOr },
+        select: { filename: true, mimeType: true, storageKey: true },
+      })
       // Cancelada entre o enqueue e o processamento → pula
       if (msg.status === 'CANCELED' || msg.status === 'SENT') {
         return
@@ -45,7 +51,7 @@ export function startCommDispatchWorker() {
           to: msg.to,
           subject: msg.subject,
           body: msg.body,
-          attachments: msg.attachments,
+          attachments,
         })
 
         await prisma.commMessage.update({

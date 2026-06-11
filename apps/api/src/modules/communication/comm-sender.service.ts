@@ -35,6 +35,25 @@ function waRecipient(to: string): string {
   return to.includes('@') ? to : to.replace(/\D/g, '')
 }
 
+/** Detecta se o conteúdo já é HTML (campanhas/mensagens de e-mail usam editor rico). */
+function looksLikeHtml(s: string): boolean {
+  return /<\/?[a-z][\s\S]*>/i.test(s)
+}
+
+/** Fallback de texto puro a partir de HTML (para o multipart `text` do e-mail). */
+function htmlToText(html: string): string {
+  return html
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/\s*(p|div|li|h[1-6])\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 /**
  * Envia uma mensagem através do canal físico já resolvido, reusando os clientes
  * existentes (Evolution / Meta / SMTP). Lança em caso de falha — o worker trata
@@ -89,12 +108,16 @@ export async function sendThroughChannel(channel: ResolvedChannel, input: SendIn
         path: attachmentAbsolutePath(a.storageKey),
         contentType: a.mimeType,
       }))
+      // E-mail: conteúdo rico vai como HTML, com fallback de texto puro.
+      const isHtml = looksLikeHtml(input.body)
+      const html = isHtml ? input.body : undefined
+      const text = isHtml ? htmlToText(input.body) : input.body
       const messageId = await sendEmail(
         cfg,
         input.to,
         input.subject?.trim() || '(sem assunto)',
-        input.body,
-        undefined,
+        text,
+        html,
         undefined,
         emailAtts,
       )

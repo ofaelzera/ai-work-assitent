@@ -4,25 +4,29 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, X, Send, Copy, Trash2, Pencil, BarChart3, Ban } from 'lucide-react'
+import { Plus, Send, Copy, Trash2, Pencil, BarChart3, Ban, Paperclip, X, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import {
-  Campaign, CampaignMetrics, BroadcastList, Channel, CommChannel,
+  Campaign, CampaignMetrics, BroadcastList, Channel, CommChannel, AttachmentRef,
   STATUS_COLORS, STATUS_LABELS, channelMatches,
 } from './types'
+import { Modal, Field, IconBtn, Stat, inputCls, formatBytes } from './ui'
+import { MessageField } from './MessageField'
 
 const EMPTY = {
   name: '', description: '', channelType: 'WHATSAPP' as CommChannel,
   channelId: '', subject: '', body: '', listId: '', scheduledAt: '',
 }
 
-export function CampaignsTab() {
+export function CampaignsList() {
   const qc = useQueryClient()
   const confirm = useConfirm()
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(EMPTY)
+  const [existingAtts, setExistingAtts] = useState<AttachmentRef[]>([])
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [metricsFor, setMetricsFor] = useState<string | null>(null)
 
   const { data: campaigns = [], isLoading } = useQuery({
@@ -43,10 +47,31 @@ export function CampaignsTab() {
   const saveMutation = useMutation({
     mutationFn: (payload: any) =>
       editingId
-        ? apiFetch(`/comm/campaigns/${editingId}`, { method: 'PATCH', body: JSON.stringify(payload) })
-        : apiFetch('/comm/campaigns', { method: 'POST', body: JSON.stringify(payload) }),
-    onSuccess: () => { invalidate(); toast.success(editingId ? 'Campanha atualizada' : 'Campanha criada'); closeModal() },
+        ? apiFetch<Campaign>(`/comm/campaigns/${editingId}`, { method: 'PATCH', body: JSON.stringify(payload) })
+        : apiFetch<Campaign>('/comm/campaigns', { method: 'POST', body: JSON.stringify(payload) }),
+    onSuccess: async (saved: Campaign) => {
+      // Sobe os arquivos novos selecionados (multipart) para a campanha salva
+      if (pendingFiles.length > 0) {
+        const fd = new FormData()
+        pendingFiles.forEach((f) => fd.append('files', f))
+        try {
+          await apiFetch(`/comm/campaigns/${saved.id}/attachments`, { method: 'POST', body: fd })
+        } catch {
+          toast.error('Campanha salva, mas houve falha ao enviar os anexos')
+        }
+      }
+      invalidate()
+      toast.success(editingId ? 'Campanha atualizada' : 'Campanha criada')
+      closeModal()
+    },
     onError: (e: any) => toast.error(e?.message ?? 'Erro ao salvar'),
+  })
+
+  const deleteAttMutation = useMutation({
+    mutationFn: ({ campaignId, attId }: { campaignId: string; attId: string }) =>
+      apiFetch(`/comm/campaigns/${campaignId}/attachments/${attId}`, { method: 'DELETE' }),
+    onSuccess: (_d, vars) => { setExistingAtts((a) => a.filter((x) => x.id !== vars.attId)); invalidate() },
+    onError: () => toast.error('Erro ao remover anexo'),
   })
 
   const actionMutation = useMutation({
@@ -62,9 +87,7 @@ export function CampaignsTab() {
     onError: () => toast.error('Erro ao remover'),
   })
 
-  function openCreate() {
-    setEditingId(null); setForm(EMPTY); setModalOpen(true)
-  }
+  function openCreate() { setEditingId(null); setForm(EMPTY); setExistingAtts([]); setPendingFiles([]); setModalOpen(true) }
   function openEdit(c: Campaign) {
     setEditingId(c.id)
     setForm({
@@ -72,9 +95,11 @@ export function CampaignsTab() {
       channelId: c.channelId ?? '', subject: c.subject ?? '', body: c.body,
       listId: c.listId ?? '', scheduledAt: c.scheduledAt ? c.scheduledAt.slice(0, 16) : '',
     })
+    setExistingAtts(c.attachments ?? [])
+    setPendingFiles([])
     setModalOpen(true)
   }
-  function closeModal() { setModalOpen(false); setEditingId(null); setForm(EMPTY) }
+  function closeModal() { setModalOpen(false); setEditingId(null); setForm(EMPTY); setExistingAtts([]); setPendingFiles([]) }
 
   function submit() {
     if (!form.name.trim() || !form.body.trim()) { toast.error('Nome e mensagem são obrigatórios'); return }
@@ -148,6 +173,7 @@ export function CampaignsTab() {
                   {c.channelType === 'WHATSAPP' ? 'WhatsApp' : 'E-mail'}
                   {c.list ? ` · Lista: ${c.list.name}` : ' · sem lista'}
                   {c._count ? ` · ${c._count.messages} msgs` : ''}
+                  {c.attachments?.length ? ` · ${c.attachments.length} anexo(s)` : ''}
                   {c.scheduledAt ? ` · ${new Date(c.scheduledAt).toLocaleString('pt-BR')}` : ''}
                 </p>
               </div>
@@ -199,8 +225,39 @@ export function CampaignsTab() {
               </Field>
             )}
             <Field label="Mensagem" required>
-              <textarea value={form.body} onChange={(e) => setForm((p) => ({ ...p, body: e.target.value }))} rows={5} className={inputCls} placeholder="Conteúdo da campanha…" />
+              <MessageField channelType={form.channelType} value={form.body} onChange={(v) => setForm((p) => ({ ...p, body: v }))} />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {form.channelType === 'WHATSAPP'
+                  ? 'Formatação WhatsApp: *negrito*, _itálico_, ~riscado~, `mono`.'
+                  : 'Editor com formatação rica — enviado como HTML no e-mail.'}
+              </p>
             </Field>
+
+            <Field label="Anexos">
+              <div className="space-y-2">
+                {existingAtts.map((a) => (
+                  <div key={a.id} className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm">
+                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <span className="truncate flex-1">{a.filename}</span>
+                    <span className="text-xs text-muted-foreground">{formatBytes(a.sizeBytes)}</span>
+                    <button type="button" onClick={() => editingId && deleteAttMutation.mutate({ campaignId: editingId, attId: a.id })} className="p-1 rounded hover:bg-muted"><X className="h-4 w-4 text-muted-foreground" /></button>
+                  </div>
+                ))}
+                {pendingFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-1.5 text-sm">
+                    <FileText className="h-4 w-4 text-primary shrink-0" />
+                    <span className="truncate flex-1">{f.name}</span>
+                    <span className="text-xs text-muted-foreground">novo</span>
+                    <button type="button" onClick={() => setPendingFiles((p) => p.filter((_, j) => j !== i))} className="p-1 rounded hover:bg-muted"><X className="h-4 w-4 text-muted-foreground" /></button>
+                  </div>
+                ))}
+                <label className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed cursor-pointer text-sm text-muted-foreground hover:text-foreground hover:border-primary/40 w-fit">
+                  <Paperclip className="h-4 w-4" /> Adicionar anexo
+                  <input type="file" multiple className="hidden" onChange={(e) => { const fs = Array.from(e.target.files ?? []); setPendingFiles((p) => [...p, ...fs]); e.target.value = '' }} />
+                </label>
+              </div>
+            </Field>
+
             <div className="grid grid-cols-2 gap-4">
               <Field label="Lista de transmissão">
                 <select value={form.listId} onChange={(e) => setForm((p) => ({ ...p, listId: e.target.value }))} className={inputCls}>
@@ -256,47 +313,5 @@ function MetricsModal({ campaignId, onClose }: { campaignId: string; onClose: ()
         </div>
       )}
     </Modal>
-  )
-}
-
-// ─── primitivos compartilhados ───────────────────────────────────────────────
-export const inputCls = 'w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50'
-
-export function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="text-xs font-medium">{label} {required && <span className="text-destructive">*</span>}</label>
-      <div className="mt-1.5">{children}</div>
-    </div>
-  )
-}
-
-export function IconBtn({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button title={title} onClick={onClick} className="p-1.5 rounded-lg hover:bg-muted transition-colors">{children}</button>
-  )
-}
-
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border bg-card p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <p className="font-semibold">{title}</p>
-          <button onClick={onClose} className="p-1 rounded hover:bg-muted"><X className="h-4 w-4 text-muted-foreground" /></button>
-        </div>
-        {children}
-      </div>
-    </div>
-  )
-}
-
-function Stat({ label, value, tone }: { label: string; value: number; tone?: 'emerald' | 'amber' | 'red' }) {
-  const toneCls = tone === 'emerald' ? 'text-emerald-600' : tone === 'amber' ? 'text-amber-600' : tone === 'red' ? 'text-red-600' : ''
-  return (
-    <div className="rounded-lg border p-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={cn('text-xl font-bold mt-0.5', toneCls)}>{value}</p>
-    </div>
   )
 }
