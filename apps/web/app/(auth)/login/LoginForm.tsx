@@ -9,8 +9,9 @@ import { LoginSchema, type LoginInput } from '@aiwa/shared'
 import { login } from '@/lib/auth'
 import { useAuthStore } from '@/store/auth'
 import { apiFetch, getAccessToken } from '@/lib/api'
-import { Bot } from 'lucide-react'
+import { Bot, Server } from 'lucide-react'
 import { useTheme } from 'next-themes'
+import { isDesktop, resetServer } from '@/lib/desktop'
 
 function GoogleIcon() {
   return (
@@ -166,6 +167,18 @@ export default function LoginForm() {
               {loading ? 'Entrando...' : 'Entrar'}
             </button>
           </form>
+
+          {/* No app desktop, permite voltar à tela de configuração do servidor */}
+          {isDesktop() && (
+            <button
+              type="button"
+              onClick={() => resetServer()}
+              className="mt-4 mx-auto flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Server className="h-3.5 w-3.5" />
+              Trocar servidor
+            </button>
+          )}
         </div>
       </div>
     </div>

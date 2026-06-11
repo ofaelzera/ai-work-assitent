@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { useSSE } from '@/lib/sse'
+import { isDesktop, notifyNative, setUnreadBadge } from '@/lib/desktop'
 
 export function NotificationManager() {
   const pathname = usePathname()
@@ -24,6 +25,8 @@ export function NotificationManager() {
 
     // Solicitar permissão de notificação nativa ao focar/clicar na janela pela primeira vez
     const requestPerm = () => {
+      // No desktop a permissão é do SO, gerenciada pelo plugin nativo
+      if (isDesktop()) return
       if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission()
       }
@@ -46,6 +49,7 @@ export function NotificationManager() {
       setUnreadSinceBlur(0)
       setLastSenderName(null)
       stopBlink()
+      setUnreadBadge(0)
     }
     window.addEventListener('focus', handleFocus)
     
@@ -58,6 +62,11 @@ export function NotificationManager() {
       window.removeEventListener('focus', handleFocus)
     }
   }, [])
+
+  // Badge nativo de não lidas (dock/tray) no app desktop
+  useEffect(() => {
+    setUnreadBadge(unreadSinceBlur)
+  }, [unreadSinceBlur])
 
   // Pisca-pisca no título da aba
   useEffect(() => {
@@ -119,10 +128,15 @@ export function NotificationManager() {
       })
     }
 
-    // 3. Mostrar Notificação Desktop (Browser Push)
+    // 3. Mostrar Notificação Desktop
+    const title = senderName ? `Nova mensagem de ${senderName}` : 'Nova mensagem recebida'
+    if (isDesktop()) {
+      // App desktop: notificação nativa do SO via Tauri
+      notifyNative(title, body || 'Você tem uma nova mensagem.')
+      return
+    }
     if ('Notification' in window && Notification.permission === 'granted') {
       // Previne várias notificações do mesmo remetente ao mesmo tempo
-      const title = senderName ? `Nova mensagem de ${senderName}` : 'Nova mensagem recebida'
       const notification = new Notification(title, {
         body: body || 'Você tem uma nova mensagem.',
         icon: '/favicon.ico',

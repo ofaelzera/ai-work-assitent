@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aiwa",
+  "version": "0.1.0",
+  "identifier": "com.aiwa.desktop",
+  "build": {
+    "frontendDist": "../bootstrap"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": []
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["aiwa"]
+      }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1MzMzQUNFMzZDRjNEMkEKUldRcVBjODJ6am96MVlvN0s5elREcEcycm1hY3FYN0ZxZWN1ay81aHRzVGc3WjVXMFNpVzhTWloK",
+      "endpoints": [
+        "https://github.com/ofaelzera/ai-work-assitent/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "nsis", "deb", "appimage"],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

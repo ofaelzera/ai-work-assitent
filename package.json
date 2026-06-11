@@ -5,6 +5,8 @@
   "scripts": {
     "dev:api": "pnpm --filter api dev",
     "dev:web": "pnpm --filter web dev",
+    "dev:desktop": "pnpm --filter desktop tauri:dev",
+    "build:desktop": "pnpm --filter desktop tauri:build",
     "build": "pnpm -r build",
     "install:all": "pnpm install && pnpm --filter api db:push && pnpm --filter api db:seed && pnpm build",
     "start": "pm2 start ecosystem.config.cjs",
