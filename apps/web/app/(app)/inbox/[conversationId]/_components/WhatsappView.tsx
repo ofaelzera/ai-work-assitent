@@ -30,6 +30,7 @@ import { useAuthStore } from '@/store/auth'
 import { ChatInput } from '@/components/ChatInput'
 import { GroupPanel } from './GroupPanel'
 import { getApiUrl } from '@/lib/runtime-config'
+import { saveBlob } from '@/lib/saveFile'
 
 // ─── Cores por remetente ──────────────────────────────────────────────────────
 const SENDER_COLORS = [
@@ -261,9 +262,7 @@ function DocumentBubble({ msgId, filename, mimetype }: { msgId: string; filename
       if (r.status === 410) { toast.error('Mídia expirada'); return }
       if (!r.ok) throw new Error()
       const blob = await r.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a'); a.href = url; a.download = filename ?? 'arquivo'; a.click()
-      URL.revokeObjectURL(url)
+      await saveBlob(blob, filename ?? 'arquivo')
     } catch { toast.error('Erro ao baixar arquivo') }
   }
   if (error === 'expired') return <ExpiredMedia type="Documento" />

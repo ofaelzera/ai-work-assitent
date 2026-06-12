@@ -32,6 +32,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { saveBlob } from '@/lib/saveFile'
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -632,12 +633,7 @@ function AttachmentItem({ att, onDelete }: { att: Attachment; onDelete?: () => v
     })
     if (!r.ok) { toast.error('Não foi possível baixar o arquivo'); return }
     const blob = await r.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = att.filename
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(url)
+    await saveBlob(blob, att.filename)
   }
 
   return (

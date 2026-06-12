@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/api'
 import { BarChart3, Users as UsersIcon, MessageSquare, Bot, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
+import { saveBlob } from '@/lib/saveFile'
 
 type TabKey = 'agents' | 'channels' | 'queue' | 'ai'
 
@@ -57,10 +58,7 @@ function exportCsv(filename: string, rows: Record<string, unknown>[]) {
     ...rows.map((r) => headers.map((h) => JSON.stringify(r[h] ?? '')).join(',')),
   ]
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename; a.click()
-  URL.revokeObjectURL(url)
+  void saveBlob(blob, filename)
 }
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, Url};
@@ -65,6 +66,70 @@ pub fn take_pending_deep_link(app: AppHandle) -> Option<String> {
     let state = app.state::<AppState>();
     let pending = state.pending_deep_link.lock().unwrap().take();
     pending
+}
+
+/// Salva um arquivo baixado pelo web app na pasta Downloads do usuário.
+/// O WKWebView não suporta `<a download>` com blobs, então o web app envia os
+/// bytes crus pelo IPC (header x-filename com o nome percent-encoded).
+#[tauri::command]
+pub fn save_download(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    use percent_encoding::percent_decode_str;
+    use tauri::ipc::InvokeBody;
+
+    let raw_name = request
+        .headers()
+        .get("x-filename")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| "Nome do arquivo ausente.".to_string())?;
+    let decoded = percent_decode_str(raw_name)
+        .decode_utf8()
+        .map_err(|_| "Nome de arquivo inválido.".to_string())?;
+
+    // Sanitiza: só o nome base, sem separadores de caminho.
+    let filename = decoded
+        .replace(['/', '\\'], "_")
+        .trim_start_matches('.')
+        .to_string();
+    if filename.is_empty() {
+        return Err("Nome de arquivo inválido.".to_string());
+    }
+
+    let bytes = match request.body() {
+        InvokeBody::Raw(bytes) => bytes.clone(),
+        _ => return Err("Payload inválido.".to_string()),
+    };
+
+    let dir = app
+        .path()
+        .download_dir()
+        .map_err(|_| "Pasta de Downloads não encontrada.".to_string())?;
+
+    let path = unique_path(&dir, &filename);
+    std::fs::write(&path, bytes).map_err(|e| format!("Falha ao salvar: {e}"))?;
+
+    // Mostra o arquivo no Finder/Explorer (best-effort).
+    let _ = tauri_plugin_opener::reveal_item_in_dir(&path);
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Evita sobrescrever: "nome.ext" → "nome (1).ext", "nome (2).ext"…
+fn unique_path(dir: &std::path::Path, filename: &str) -> PathBuf {
+    let candidate = dir.join(filename);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let (stem, ext) = match filename.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (filename.to_string(), String::new()),
+    };
+    for i in 1.. {
+        let candidate = dir.join(format!("{stem} ({i}){ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
 }
 
 pub fn navigate_to_server(app: &AppHandle, url: Url) -> Result<(), String> {

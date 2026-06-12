@@ -10,7 +10,13 @@
  */
 
 type TauriGlobal = {
-  core: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<any> }
+  core: {
+    invoke: (
+      cmd: string,
+      args?: Record<string, unknown> | ArrayBuffer | Uint8Array,
+      options?: { headers?: Record<string, string> },
+    ) => Promise<any>
+  }
   event: {
     listen: (
       event: string,
@@ -58,6 +64,25 @@ export async function setUnreadBadge(count: number): Promise<void> {
     await tauri.core.invoke('set_unread_badge', { count })
   } catch {
     // silencioso: badge é best-effort
+  }
+}
+
+/**
+ * Salva um blob na pasta Downloads via shell nativo. O WKWebView (macOS) ignora
+ * `<a download>` com blob URLs, então no desktop os bytes vão pelo IPC.
+ * Retorna o caminho salvo, ou null se não estiver no desktop / falhar.
+ */
+export async function saveBlobNative(blob: Blob, filename: string): Promise<string | null> {
+  const tauri = getTauri()
+  if (!tauri) return null
+  try {
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    const path = await tauri.core.invoke('save_download', bytes, {
+      headers: { 'x-filename': encodeURIComponent(filename) },
+    })
+    return typeof path === 'string' ? path : null
+  } catch {
+    return null
   }
 }
 

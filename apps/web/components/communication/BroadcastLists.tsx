@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { BroadcastList, BroadcastListDetail, ListContact, CompanyRef } from './types'
 import { Modal, Field, IconBtn, ContactAvatar, inputCls } from './ui'
+import { saveBlob } from '@/lib/saveFile'
 
 export function BroadcastLists() {
   const qc = useQueryClient()
@@ -162,10 +163,7 @@ function ManageMembersModal({ listId, onClose }: { listId: string; onClose: () =
     try {
       const { filename, csv: text } = await apiFetch<{ filename: string; csv: string }>(`/comm/broadcast-lists/${listId}/export`)
       const blob = new Blob([text], { type: 'text/csv' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = filename; a.click()
-      URL.revokeObjectURL(url)
+      await saveBlob(blob, filename)
     } catch { toast.error('Erro ao exportar') }
   }
 

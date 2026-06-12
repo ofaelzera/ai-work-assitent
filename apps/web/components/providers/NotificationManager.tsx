@@ -108,16 +108,21 @@ export function NotificationManager() {
     const isCurrentConversation = pathname.startsWith(`/inbox/${conversationId}`) || pathname.startsWith(`/chat/${conversationId}`)
     
     // Se a aba estiver visível E o usuário já estiver na tela da conversa, NÃO toca som/notificação
-    const isWindowActive = document.visibilityState === 'visible'
+    const isWindowActive = document.visibilityState === 'visible' && document.hasFocus()
     if (isWindowActive && isCurrentConversation) {
       return
     }
 
     // Se chegou até aqui, o usuário precisa ser notificado (está em outra aba ou outra conversa)
-    
-    // 1. Incrementa contador para o título piscar
-    setUnreadSinceBlur(prev => prev + 1)
-    if (senderName) setLastSenderName(senderName)
+
+    // 1. Incrementa contador (título piscando / badge do desktop) SÓ quando a janela
+    // não está em foco. Com a janela ativa o usuário já vê os indicadores do inbox,
+    // e o reset depende do evento 'focus' — que nunca dispara se ela já está focada
+    // (badge "fantasma" que não some).
+    if (!isWindowActive) {
+      setUnreadSinceBlur(prev => prev + 1)
+      if (senderName) setLastSenderName(senderName)
+    }
 
     // 2. Tocar som
     if (audioRef.current) {

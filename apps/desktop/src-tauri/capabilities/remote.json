@@ -13,6 +13,7 @@
     "notification:default",
     "allow-reset-server",
     "allow-set-unread-badge",
-    "allow-take-pending-deep-link"
+    "allow-take-pending-deep-link",
+    "allow-save-download"
   ]
 }

@@ -26,6 +26,8 @@ import { usePresenceMap } from './usePresenceMap'
 import LibraryPickerModal from '@/components/LibraryPickerModal'
 import { ChatInput } from '@/components/ChatInput'
 import { getApiUrl } from '@/lib/runtime-config'
+import { saveBlob } from '@/lib/saveFile'
+import { isDesktop } from '@/lib/desktop'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -486,6 +488,11 @@ function AttachmentInline({
     })
       .then((r) => r.blob())
       .then((blob) => {
+        // No desktop o webview não abre blob em nova janela — salva em Downloads.
+        if (isDesktop()) {
+          void saveBlob(blob, att.filename ?? 'arquivo')
+          return
+        }
         const url = URL.createObjectURL(blob)
         window.open(url, '_blank', 'noopener')
         setTimeout(() => URL.revokeObjectURL(url), 60_000)

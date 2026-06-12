@@ -15,6 +15,7 @@ import EditFileModal from '@/components/EditFileModal'
 import MoveToFolderModal from '@/components/MoveToFolderModal'
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { getApiUrl } from '@/lib/runtime-config'
+import { saveBlob } from '@/lib/saveFile'
 
 interface Folder {
   id: string
@@ -223,11 +224,7 @@ export default function StoragePage() {
     })
     if (!r.ok) { toast.error('Não foi possível baixar'); return }
     const blob = await r.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = file.filename
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(url)
+    await saveBlob(blob, file.filename)
   }
 
   return (

@@ -49,6 +49,7 @@ pub fn run() {
             commands::reset_server,
             commands::set_unread_badge,
             commands::take_pending_deep_link,
+            commands::save_download,
         ])
         .setup(|app| {
             app.manage(AppState::default());

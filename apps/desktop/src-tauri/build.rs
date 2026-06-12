@@ -8,6 +8,7 @@ fn main() {
             "reset_server",
             "set_unread_badge",
             "take_pending_deep_link",
+            "save_download",
         ])),
     )
     .expect("failed to run tauri-build");
