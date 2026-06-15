@@ -449,6 +449,7 @@ model Board {
   columns    Column[]
   shares     BoardShare[]
   teamShares BoardTeamShare[]
+  tags       BoardTag[]
 
   @@index([workspaceId])
   @@index([workspaceId, ownerId])
@@ -510,6 +511,35 @@ model CardAssignee {
   @@index([userId])
 }
 
+// Tag/etiqueta gerenciável por board (nome + cor), reutilizável entre cards.
+model BoardTag {
+  id          String   @id @default(cuid())
+  workspaceId String
+  boardId     String
+  name        String
+  color       String // hex, ex "#ef4444"
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  board Board     @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  cards CardTag[]
+
+  @@index([boardId])
+}
+
+// Junção N:N entre Card e BoardTag.
+model CardTag {
+  cardId    String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  card Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  tag  BoardTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([cardId, tagId])
+  @@index([tagId])
+}
+
 model Column {
   id        String   @id @default(cuid())
   boardId   String
@@ -560,6 +590,7 @@ model Card {
   comments     CardComment[]
   attachments  Attachment[]
   tasks        Task[]
+  cardTags     CardTag[]
 
   @@index([workspaceId, columnId, position])
   @@index([workspaceId, companyId])

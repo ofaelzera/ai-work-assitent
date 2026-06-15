@@ -176,6 +176,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
                 include: {
                   contact: { select: { id: true, name: true, phone: true } },
                   conversation: { select: { id: true, externalId: true } },
+                  cardTags: { include: { tag: { select: { id: true, name: true, color: true } } } },
                 },
               },
             },
@@ -183,7 +184,17 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
       if (!fullBoard) return reply.notFound()
-      return fullBoard
+      // Achata cardTags[].tag → tags[] em cada card pra simplificar a UI.
+      return {
+        ...fullBoard,
+        columns: fullBoard.columns.map(col => ({
+          ...col,
+          cards: col.cards.map(card => ({
+            ...card,
+            tags: card.cardTags.map(ct => ct.tag),
+          })),
+        })),
+      }
     },
   )
 
@@ -730,18 +741,19 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       const card = await prisma.card.findFirst({
         where: { id: req.params.id, workspaceId: req.user.workspaceId, deletedAt: null },
         include: {
-          contact: { select: { id: true, name: true, phone: true } },
-          company: { select: { id: true, name: true, color: true } },
+          contact: { select: { id: true, name: true, phone: true, metadata: true } },
+          company: { select: { id: true, name: true, color: true, logoUrl: true } },
           conversation: { select: { id: true, externalId: true } },
           creator: { select: { id: true, name: true, email: true } },
           comments: { orderBy: { createdAt: 'asc' } },
           column: { select: { id: true, name: true, boardId: true } },
           contacts: {
-            include: { contact: { select: { id: true, name: true, phone: true } } },
+            include: { contact: { select: { id: true, name: true, phone: true, metadata: true } } },
           },
           assignees: {
             include: { user: { select: { id: true, name: true, email: true, settings: true } } },
           },
+          cardTags: { include: { tag: { select: { id: true, name: true, color: true } } } },
         },
       })
       if (!card) return reply.notFound()
@@ -764,6 +776,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         })),
         contacts: card.contacts.map(c => c.contact),
         assignees: card.assignees.map(a => a.user),
+        tags: card.cardTags.map(ct => ct.tag),
       }
     },
   )
@@ -871,6 +884,167 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
 
       await prisma.cardAssignee.deleteMany({
         where: { cardId: req.params.id, userId: req.params.userId },
+      })
+      return reply.code(204).send()
+    },
+  )
+
+  // ── Tags do board (gerenciáveis) ───────────────────────────────────────────
+  const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Cor deve ser hex (#rrggbb)')
+
+  // GET: lista tags de um board (qualquer usuário com acesso ao board).
+  app.get(
+    '/kanban/boards/:boardId/tags',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ boardId: z.string() }) },
+    },
+    async (req, reply) => {
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.boardId, workspaceId: req.user.workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!board) return reply.notFound()
+      return prisma.boardTag.findMany({
+        where: { boardId: req.params.boardId },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true, name: true, color: true, position: true },
+      })
+    },
+  )
+
+  // POST: cria tag no board.
+  app.post(
+    '/kanban/boards/:boardId/tags',
+    {
+      onRequest: [app.authenticate, requirePerm('boards.manage')],
+      schema: {
+        params: z.object({ boardId: z.string() }),
+        body: z.object({ name: z.string().min(1).max(40), color: hexColor }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const board = await prisma.board.findFirst({
+        where: { id: req.params.boardId, workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!board) return reply.notFound()
+      const last = await prisma.boardTag.findFirst({
+        where: { boardId: req.params.boardId },
+        orderBy: { position: 'desc' },
+        select: { position: true },
+      })
+      const tag = await prisma.boardTag.create({
+        data: {
+          workspaceId,
+          boardId: req.params.boardId,
+          name: req.body.name.trim(),
+          color: req.body.color,
+          position: (last?.position ?? -1) + 1,
+        },
+        select: { id: true, name: true, color: true, position: true },
+      })
+      return reply.code(201).send(tag)
+    },
+  )
+
+  // PATCH: edita nome/cor da tag.
+  app.patch(
+    '/kanban/tags/:id',
+    {
+      onRequest: [app.authenticate, requirePerm('boards.manage')],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ name: z.string().min(1).max(40).optional(), color: hexColor.optional() }),
+      },
+    },
+    async (req, reply) => {
+      const { name, color } = req.body
+      if (name === undefined && color === undefined) return reply.badRequest('Nada para atualizar')
+      const tag = await prisma.boardTag.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId },
+        select: { id: true },
+      })
+      if (!tag) return reply.notFound()
+      return prisma.boardTag.update({
+        where: { id: req.params.id },
+        data: {
+          ...(name !== undefined && { name: name.trim() }),
+          ...(color !== undefined && { color }),
+        },
+        select: { id: true, name: true, color: true, position: true },
+      })
+    },
+  )
+
+  // DELETE: remove a tag (cascade limpa os vínculos CardTag).
+  app.delete(
+    '/kanban/tags/:id',
+    {
+      onRequest: [app.authenticate, requirePerm('boards.manage')],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const tag = await prisma.boardTag.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId },
+        select: { id: true },
+      })
+      if (!tag) return reply.notFound()
+      await prisma.boardTag.delete({ where: { id: req.params.id } })
+      return reply.code(204).send()
+    },
+  )
+
+  // ── Card ↔ Tag (multi) ──────────────────────────────────────────────────────
+  app.post(
+    '/kanban/cards/:id/tags',
+    {
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
+      schema: {
+        params: z.object({ id: z.string() }),
+        body: z.object({ tagId: z.string() }),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const card = await prisma.card.findFirst({
+        where: { id: req.params.id, workspaceId, deletedAt: null },
+        select: { id: true, column: { select: { boardId: true } } },
+      })
+      if (!card) return reply.notFound()
+      // A tag precisa pertencer ao mesmo board do card.
+      const tag = await prisma.boardTag.findFirst({
+        where: { id: req.body.tagId, boardId: card.column.boardId, workspaceId },
+        select: { id: true },
+      })
+      if (!tag) return reply.badRequest('Tag não pertence a este board')
+
+      await prisma.cardTag.upsert({
+        where: { cardId_tagId: { cardId: req.params.id, tagId: req.body.tagId } },
+        create: { cardId: req.params.id, tagId: req.body.tagId },
+        update: {},
+      })
+      return reply.code(204).send()
+    },
+  )
+
+  app.delete(
+    '/kanban/cards/:id/tags/:tagId',
+    {
+      onRequest: [app.authenticate, requirePerm('cards.edit')],
+      schema: { params: z.object({ id: z.string(), tagId: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const card = await prisma.card.findFirst({
+        where: { id: req.params.id, workspaceId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!card) return reply.notFound()
+
+      await prisma.cardTag.deleteMany({
+        where: { cardId: req.params.id, tagId: req.params.tagId },
       })
       return reply.code(204).send()
     },

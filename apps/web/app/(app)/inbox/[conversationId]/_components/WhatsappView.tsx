@@ -21,6 +21,7 @@ import { renderWhatsappText, stripWhatsappMarks, WhatsappText, MentionProvider }
 import { useMentionResolver } from '@/lib/useMentionResolver'
 import { toast } from 'sonner'
 import CreateCardModal from '@/components/CreateCardModal'
+import { AvatarImage } from '@/components/AvatarImage'
 import CreateTaskModal from '@/components/CreateTaskModal'
 import CreateEventModal from '@/components/CreateEventModal'
 import LibraryPickerModal from '@/components/LibraryPickerModal'
@@ -827,13 +828,16 @@ export function AssigneeChip({ assignee }: {
       className="flex items-center gap-1.5 text-[11px] font-medium rounded-full pl-0.5 pr-2 py-0.5 border bg-primary/10 border-primary/20 text-primary"
       title={`Em atendimento por ${assignee.name ?? assignee.email}`}
     >
-      {avatarUrl ? (
-        <img src={avatarUrl} alt={label} className="h-5 w-5 rounded-full object-cover shrink-0" />
-      ) : (
-        <span className="h-5 w-5 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[9px] font-semibold text-white shrink-0">
-          {ini}
-        </span>
-      )}
+      <AvatarImage
+        src={avatarUrl}
+        alt={label}
+        className="h-5 w-5 rounded-full object-cover shrink-0"
+        fallback={
+          <span className="h-5 w-5 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[9px] font-semibold text-white shrink-0">
+            {ini}
+          </span>
+        }
+      />
       <span className="max-w-[120px] truncate">{label}</span>
     </span>
   )
@@ -1897,22 +1901,21 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                       <div className="shrink-0 mb-0.5">
                         {isFirstOfSender
                           ? (
-                            msg.fromContact?.metadata?.avatarUrl ? (
-                              <img
-                                src={msg.fromContact.metadata.avatarUrl}
-                                alt={senderName ?? 'Contato'}
-                                title={senderName ?? undefined}
-                                className="h-7 w-7 rounded-full object-cover"
-                              />
-                            ) : (
-                              <div
-                                className="h-7 w-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
-                                style={{ background: senderColor(senderId) }}
-                                title={senderName ?? undefined}
-                              >
-                                {initials(senderName ?? 'D')}
-                              </div>
-                            )
+                            <AvatarImage
+                              src={msg.fromContact?.metadata?.avatarUrl}
+                              alt={senderName ?? 'Contato'}
+                              title={senderName ?? undefined}
+                              className="h-7 w-7 rounded-full object-cover"
+                              fallback={
+                                <div
+                                  className="h-7 w-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
+                                  style={{ background: senderColor(senderId) }}
+                                  title={senderName ?? undefined}
+                                >
+                                  {initials(senderName ?? 'D')}
+                                </div>
+                              }
+                            />
                           )
                           : <div className="h-7 w-7" />
                         }
@@ -1924,21 +1927,20 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
                     {isOut && msg.fromUser && (
                       <div className="shrink-0 mb-0.5 order-2">
                         {isFirstOfSender ? (
-                          msg.fromUser.settings?.avatarUrl ? (
-                            <img
-                              src={msg.fromUser.settings.avatarUrl}
-                              alt={msg.fromUser.name ?? msg.fromUser.email}
-                              title={`Enviado por ${msg.fromUser.name ?? msg.fromUser.email}`}
-                              className="h-7 w-7 rounded-full object-cover"
-                            />
-                          ) : (
-                            <div
-                              className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[10px] font-bold text-white"
-                              title={`Enviado por ${msg.fromUser.name ?? msg.fromUser.email}`}
-                            >
-                              {((msg.fromUser.name ?? msg.fromUser.email).trim()[0] ?? '?').toUpperCase()}
-                            </div>
-                          )
+                          <AvatarImage
+                            src={msg.fromUser.settings?.avatarUrl}
+                            alt={msg.fromUser.name ?? msg.fromUser.email}
+                            title={`Enviado por ${msg.fromUser.name ?? msg.fromUser.email}`}
+                            className="h-7 w-7 rounded-full object-cover"
+                            fallback={
+                              <div
+                                className="h-7 w-7 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-[10px] font-bold text-white"
+                                title={`Enviado por ${msg.fromUser.name ?? msg.fromUser.email}`}
+                              >
+                                {((msg.fromUser.name ?? msg.fromUser.email).trim()[0] ?? '?').toUpperCase()}
+                              </div>
+                            }
+                          />
                         ) : <div className="h-7 w-7" />}
                       </div>
                     )}
@@ -2711,11 +2713,12 @@ function ContactCardModal({ onClose, onSend, isPending }: {
                 )}
               >
                 <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center text-xs font-medium shrink-0 overflow-hidden">
-                  {avatarUrl ? (
-                    <img src={avatarUrl} alt={c.name!} className="h-full w-full object-cover" />
-                  ) : (
-                    initials(c.name!)
-                  )}
+                  <AvatarImage
+                    src={avatarUrl}
+                    alt={c.name!}
+                    className="h-full w-full object-cover"
+                    fallback={<>{initials(c.name!)}</>}
+                  />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="font-medium truncate">{c.name}</p>

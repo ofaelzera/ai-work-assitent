@@ -58,6 +58,7 @@ export interface Card {
   conversationId?: string | null
   checklist?: { text: string; done: boolean }[] | null
   labels?: string[] | null
+  tags?: { id: string; name: string; color: string }[] | null
   contact?: { id: string; name: string | null; phone: string | null } | null
 }
 
@@ -96,6 +97,17 @@ const priorityLabel: Record<string, string> = {
   MEDIUM: 'Média',
   HIGH: 'Alta',
   URGENT: 'Urgente',
+}
+
+/** Texto preto ou branco conforme a luminância da cor de fundo (hex #rrggbb). */
+function tagTextColor(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return '#fff'
+  const n = parseInt(m[1], 16)
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
+  // luminância relativa simplificada
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return lum > 0.6 ? '#1a1a1a' : '#fff'
 }
 
 /** Remove tags HTML e normaliza espaços/quebras pra preview de texto puro. */
@@ -149,6 +161,19 @@ function SortableCard({
           <GripVertical className="h-4 w-4" />
         </div>
         <div className="flex-1 min-w-0">
+          {card.tags && card.tags.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap mb-1.5">
+              {card.tags.map((tag) => (
+                <span
+                  key={tag.id}
+                  className="text-[10px] font-medium px-1.5 py-0.5 rounded-full leading-none"
+                  style={{ background: tag.color, color: tagTextColor(tag.color) }}
+                >
+                  {tag.name}
+                </span>
+              ))}
+            </div>
+          )}
           <p className="text-sm font-medium leading-snug">{card.title}</p>
           {card.description && (
             <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{stripHtml(card.description)}</p>

@@ -25,16 +25,18 @@ interface Props {
   avatarUrl?: string | null
   isGroup?: boolean
   online?: boolean
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'xs' | 'sm' | 'md' | 'lg'
 }
 
 export function UserAvatar({ name, avatarUrl, isGroup, online, size = 'md' }: Props) {
   const sizes = {
+    xs: 'h-6 w-6 text-[9px]',
     sm: 'h-8 w-8 text-[10px]',
     md: 'h-10 w-10 text-xs',
     lg: 'h-12 w-12 text-sm',
   }
   const dot = {
+    xs: 'h-1.5 w-1.5',
     sm: 'h-2 w-2',
     md: 'h-2.5 w-2.5',
     lg: 'h-3 w-3',

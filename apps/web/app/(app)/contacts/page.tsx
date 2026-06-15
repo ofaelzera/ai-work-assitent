@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { usePermission } from '@/lib/usePermission'
 import { PermissionGate } from '@/components/PermissionGate'
 import { ContactHistoryModal } from '@/components/ContactHistoryModal'
+import { AvatarImage } from '@/components/AvatarImage'
 
 interface Company { id: string; name: string; color: string }
 interface ContactCompanyLink { source: 'MANUAL' | 'GROUP_SYNC'; company: Company }
@@ -54,20 +55,17 @@ function ContactAvatar({ contact, size = 'md' }: { contact: Contact; size?: 'sm'
   const sizeClass = size === 'lg' ? 'h-20 w-20 text-2xl' : size === 'sm' ? 'h-8 w-8 text-xs' : 'h-10 w-10 text-sm'
   const avatarUrl = contact.metadata?.avatarUrl
 
-  if (avatarUrl) {
-    return (
-      <img
-        src={avatarUrl}
-        alt={label}
-        className={cn('rounded-full object-cover shrink-0', sizeClass)}
-        onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-      />
-    )
-  }
   return (
-    <div className={cn('rounded-full flex items-center justify-center font-semibold text-white shrink-0', colorClass, sizeClass)}>
-      {initials(label)}
-    </div>
+    <AvatarImage
+      src={avatarUrl}
+      alt={label}
+      className={cn('rounded-full object-cover shrink-0', sizeClass)}
+      fallback={
+        <div className={cn('rounded-full flex items-center justify-center font-semibold text-white shrink-0', colorClass, sizeClass)}>
+          {initials(label)}
+        </div>
+      }
+    />
   )
 }
 

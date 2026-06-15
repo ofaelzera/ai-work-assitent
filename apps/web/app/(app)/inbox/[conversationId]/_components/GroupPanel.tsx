@@ -11,6 +11,7 @@ import {
 import { cn } from '@/lib/utils'
 import { formatPhone } from '@/lib/phone'
 import { useConfirm } from '@/components/ui/confirm-dialog'
+import { AvatarImage } from '@/components/AvatarImage'
 
 interface GroupParticipant {
   jid: string
@@ -228,9 +229,12 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
               <div className="flex flex-col items-center pt-6 pb-4 px-4 border-b">
                 <div className="relative group">
                   <div className="h-24 w-24 rounded-full bg-muted overflow-hidden flex items-center justify-center text-2xl font-medium text-muted-foreground">
-                    {groupAvatarUrl
-                      ? <img src={groupAvatarUrl} alt="Grupo" className="h-full w-full object-cover" />
-                      : <Users className="h-12 w-12" />}
+                    <AvatarImage
+                      src={groupAvatarUrl}
+                      alt="Grupo"
+                      className="h-full w-full object-cover"
+                      fallback={<Users className="h-12 w-12" />}
+                    />
                   </div>
                   <button
                     onClick={() => fileInputRef.current?.click()}
@@ -439,9 +443,12 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
                   {sortedParticipants.map(p => (
                     <li key={p.jid} className="flex items-center gap-2 py-1.5 px-1 rounded-md hover:bg-accent group">
                       <div className="h-8 w-8 rounded-full bg-muted overflow-hidden flex items-center justify-center text-xs font-medium text-muted-foreground shrink-0">
-                        {p.avatarUrl
-                          ? <img src={p.avatarUrl} alt={p.name ?? p.number} className="h-full w-full object-cover" />
-                          : (p.name ?? p.number).slice(0, 2).toUpperCase()}
+                        <AvatarImage
+                          src={p.avatarUrl}
+                          alt={p.name ?? p.number}
+                          className="h-full w-full object-cover"
+                          fallback={<>{(p.name ?? p.number).slice(0, 2).toUpperCase()}</>}
+                        />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">

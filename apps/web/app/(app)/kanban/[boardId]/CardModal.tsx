@@ -8,8 +8,9 @@ import {
   X, Flag, Calendar, User, MessageSquare,
   Trash2, ExternalLink, Plus, Check, GripVertical, ListTodo,
   Paperclip, Download, FileText, Image as ImageIcon, Music, Video, Upload, Loader2,
-  Building2, Search, AlignLeft,
+  Building2, Search, AlignLeft, Tag, Pencil,
 } from 'lucide-react'
+import { UserAvatar } from '../../chat/_components/UserAvatar'
 
 import { getApiUrl } from '@/lib/runtime-config'
 import { cn } from '@/lib/utils'
@@ -49,17 +50,34 @@ interface CardDetail {
   companyId: string | null
   conversationId: string | null
   labels: string[] | null
+  tags: Array<{ id: string; name: string; color: string }>
   columnId: string
   createdAt: string
-  contact: { id: string; name: string | null; phone: string | null } | null
-  company: { id: string; name: string; color: string } | null
+  contact: { id: string; name: string | null; phone: string | null; metadata?: { avatarUrl?: string | null } | null } | null
+  company: { id: string; name: string; color: string; logoUrl?: string | null } | null
   conversation: { id: string; externalId: string } | null
   creator: { id: string; name: string | null; email: string } | null
-  contacts: Array<{ id: string; name: string | null; phone: string | null }>
+  contacts: Array<{ id: string; name: string | null; phone: string | null; metadata?: { avatarUrl?: string | null } | null }>
   assignees: Array<{ id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null }>
   comments: { id: string; userId: string | null; body: string; createdAt: string; user?: { id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null } | null }[]
   column: { id: string; name: string; boardId: string }
 }
+
+/** Texto preto ou branco conforme a luminância da cor de fundo (hex #rrggbb). */
+function tagTextColor(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return '#fff'
+  const n = parseInt(m[1], 16)
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return lum > 0.6 ? '#1a1a1a' : '#fff'
+}
+
+// Paleta de cores pré-definidas para novas tags.
+const TAG_COLORS = [
+  '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e',
+  '#10b981', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899',
+]
 
 // ── Section label ─────────────────────────────────────────────────────────
 
@@ -74,7 +92,7 @@ function SectionLabel({ icon, children }: { icon?: React.ReactNode; children: Re
 
 // ── Seletor reutilizável (empresa/contato) ────────────────────────────────
 
-function EntityPicker<T extends { id: string; name?: string | null; phone?: string | null; color?: string }>({
+function EntityPicker<T extends { id: string; name?: string | null; phone?: string | null; color?: string; logoUrl?: string | null }>({
   label, icon, current, fetchOptions, onPick, onClear, displayCurrent, placeholder,
 }: {
   label: string
@@ -166,7 +184,11 @@ function EntityPicker<T extends { id: string; name?: string | null; phone?: stri
                   onClick={() => { onPick(opt.id); setOpen(false); setQuery('') }}
                   className="w-full text-left px-2 py-1.5 rounded-md hover:bg-accent text-xs flex items-center gap-2"
                 >
-                  {opt.color && <span className="h-2 w-2 rounded-full shrink-0" style={{ background: opt.color }} />}
+                  {opt.logoUrl ? (
+                    <UserAvatar name={opt.name ?? '?'} avatarUrl={opt.logoUrl} size="xs" />
+                  ) : opt.color ? (
+                    <span className="h-2 w-2 rounded-full shrink-0" style={{ background: opt.color }} />
+                  ) : null}
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium">{opt.name ?? opt.phone ?? '(sem nome)'}</p>
                     {opt.phone && opt.name && (
@@ -185,9 +207,11 @@ function EntityPicker<T extends { id: string; name?: string | null; phone?: stri
 
 // ── Multi-picker: contatos vinculados ao card ─────────────────────────────
 
+type ContactOption = { id: string; name: string | null; phone: string | null; metadata?: { avatarUrl?: string | null } | null }
+
 function MultiContactsPicker({ cardId, contacts }: {
   cardId: string
-  contacts: Array<{ id: string; name: string | null; phone: string | null }>
+  contacts: Array<ContactOption>
 }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -198,9 +222,10 @@ function MultiContactsPicker({ cardId, contacts }: {
   const { data: options = [], isFetching } = useQuery({
     queryKey: ['contact-search', query],
     queryFn: async () => {
-      const params = new URLSearchParams({ limit: '30', excludeLid: 'true' })
+      // Apenas contatos verificados podem ser vinculados a um card.
+      const params = new URLSearchParams({ limit: '30', excludeLid: 'true', verified: 'verified' })
       if (query) params.set('q', query)
-      const res = await apiFetch<{ items: Array<{ id: string; name: string | null; phone: string | null }> }>(`/contacts?${params}`)
+      const res = await apiFetch<{ items: Array<ContactOption> }>(`/contacts?${params}`)
       return res.items
     },
     enabled: open,
@@ -235,6 +260,7 @@ function MultiContactsPicker({ cardId, contacts }: {
       <div className="space-y-1.5">
         {contacts.map(c => (
           <div key={c.id} className="bg-black/5 dark:bg-white/8 rounded-lg px-3 py-1.5 flex items-center gap-2">
+            <UserAvatar name={c.name ?? c.phone ?? '?'} avatarUrl={c.metadata?.avatarUrl} size="xs" />
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium truncate">{c.name ?? c.phone ?? '(sem nome)'}</p>
               {c.phone && c.name && <p className="text-[10px] text-muted-foreground font-mono">{c.phone}</p>}
@@ -281,6 +307,7 @@ function MultiContactsPicker({ cardId, contacts }: {
                       already ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent',
                     )}
                   >
+                    <UserAvatar name={opt.name ?? opt.phone ?? '?'} avatarUrl={opt.metadata?.avatarUrl} size="xs" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">{opt.name ?? opt.phone ?? '(sem nome)'}</p>
                       {opt.phone && opt.name && (
@@ -301,10 +328,12 @@ function MultiContactsPicker({ cardId, contacts }: {
 
 // ── Multi-picker: usuários responsáveis ───────────────────────────────────
 
+type AssigneeOption = { id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null }
+
 function MultiAssigneesPicker({ cardId, boardId, assignees }: {
   cardId: string
   boardId: string
-  assignees: Array<{ id: string; name: string | null; email: string }>
+  assignees: Array<AssigneeOption>
 }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -312,7 +341,7 @@ function MultiAssigneesPicker({ cardId, boardId, assignees }: {
   const containerRef = useRef<HTMLDivElement>(null)
   const linkedIds = new Set(assignees.map(a => a.id))
 
-  const { data: eligible = [] } = useQuery<Array<{ id: string; name: string | null; email: string }>>({
+  const { data: eligible = [] } = useQuery<Array<AssigneeOption>>({
     queryKey: ['board-eligible-users', boardId],
     queryFn: () => apiFetch(`/kanban/boards/${boardId}/eligible-users`),
     enabled: open,
@@ -352,9 +381,7 @@ function MultiAssigneesPicker({ cardId, boardId, assignees }: {
       <div className="space-y-1.5">
         {assignees.map(u => (
           <div key={u.id} className="bg-black/5 dark:bg-white/8 rounded-lg px-3 py-1.5 flex items-center gap-2">
-            <div className="h-6 w-6 rounded-full bg-primary/15 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
-              {(u.name ?? u.email)[0].toUpperCase()}
-            </div>
+            <UserAvatar name={u.name ?? u.email} avatarUrl={u.settings?.avatarUrl} size="xs" />
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium truncate">{u.name ?? u.email}</p>
             </div>
@@ -400,9 +427,7 @@ function MultiAssigneesPicker({ cardId, boardId, assignees }: {
                       already ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent',
                     )}
                   >
-                    <div className="h-5 w-5 rounded-full bg-primary/15 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
-                      {(u.name ?? u.email)[0].toUpperCase()}
-                    </div>
+                    <UserAvatar name={u.name ?? u.email} avatarUrl={u.settings?.avatarUrl} size="xs" />
                     <span className="truncate flex-1">{u.name ?? u.email}</span>
                     {already && <Check className="h-3 w-3 text-emerald-500 shrink-0" />}
                   </button>
@@ -410,6 +435,220 @@ function MultiAssigneesPicker({ cardId, boardId, assignees }: {
               })
             )}
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Tags do board ─────────────────────────────────────────────────────────
+
+type BoardTag = { id: string; name: string; color: string }
+
+function TagsPicker({ cardId, boardId, tags }: {
+  cardId: string
+  boardId: string
+  tags: BoardTag[]
+}) {
+  const qc = useQueryClient()
+  const canManage = usePermission('boards.manage')
+  const [open, setOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newColor, setNewColor] = useState(TAG_COLORS[0])
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const linkedIds = new Set(tags.map(t => t.id))
+
+  const { data: boardTags = [] } = useQuery<BoardTag[]>({
+    queryKey: ['board-tags', boardId],
+    queryFn: () => apiFetch(`/kanban/boards/${boardId}/tags`),
+    enabled: open,
+    staleTime: 30_000,
+  })
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['card', cardId] })
+    qc.invalidateQueries({ queryKey: ['board', boardId] })
+  }
+
+  const addToCard = useMutation({
+    mutationFn: (tagId: string) => apiFetch(`/kanban/cards/${cardId}/tags`, {
+      method: 'POST', body: JSON.stringify({ tagId }),
+    }),
+    onSuccess: invalidate,
+  })
+  const removeFromCard = useMutation({
+    mutationFn: (tagId: string) => apiFetch(`/kanban/cards/${cardId}/tags/${tagId}`, { method: 'DELETE' }),
+    onSuccess: invalidate,
+  })
+  const createTag = useMutation({
+    mutationFn: (data: { name: string; color: string }) =>
+      apiFetch<BoardTag>(`/kanban/boards/${boardId}/tags`, { method: 'POST', body: JSON.stringify(data) }),
+    onSuccess: async (tag) => {
+      qc.invalidateQueries({ queryKey: ['board-tags', boardId] })
+      await addToCard.mutateAsync(tag.id)
+      setNewName(''); setCreating(false)
+    },
+    onError: (e: any) => toast.error(e?.message ?? 'Erro ao criar tag'),
+  })
+  const updateTag = useMutation({
+    mutationFn: ({ id, ...data }: { id: string; name?: string; color?: string }) =>
+      apiFetch(`/kanban/tags/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['board-tags', boardId] })
+      invalidate()
+      setEditingId(null)
+    },
+  })
+  const deleteTag = useMutation({
+    mutationFn: (id: string) => apiFetch(`/kanban/tags/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['board-tags', boardId] })
+      invalidate()
+    },
+  })
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) { setOpen(false); setCreating(false); setEditingId(null) }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={containerRef}>
+      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+        <Tag className="h-3 w-3" /> Tags ({tags.length})
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {tags.map(t => (
+          <span
+            key={t.id}
+            className="text-[11px] font-medium pl-2 pr-1 py-0.5 rounded-full leading-none flex items-center gap-1"
+            style={{ background: t.color, color: tagTextColor(t.color) }}
+          >
+            {t.name}
+            <button
+              onClick={() => removeFromCard.mutate(t.id)}
+              className="opacity-70 hover:opacity-100"
+              style={{ color: tagTextColor(t.color) }}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="text-[11px] rounded-full border border-dashed border-border hover:border-primary/40 hover:bg-black/5 dark:hover:bg-white/5 px-2 py-0.5 text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+        >
+          <Plus className="h-3 w-3" /> Tag
+        </button>
+      </div>
+      {open && (
+        <div className="mt-1.5 rounded-lg border bg-popover shadow-lg p-2 space-y-1 z-10 relative">
+          <div className="max-h-56 overflow-y-auto space-y-0.5">
+            {boardTags.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground italic px-2 py-1">Nenhuma tag neste board</p>
+            ) : (
+              boardTags.map(t => {
+                const already = linkedIds.has(t.id)
+                if (editingId === t.id) {
+                  return (
+                    <div key={t.id} className="px-2 py-1.5 space-y-1.5">
+                      <input
+                        autoFocus
+                        defaultValue={t.name}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') updateTag.mutate({ id: t.id, name: (e.target as HTMLInputElement).value.trim() })
+                          if (e.key === 'Escape') setEditingId(null)
+                        }}
+                        className="w-full rounded-md border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                      />
+                      <div className="flex flex-wrap gap-1">
+                        {TAG_COLORS.map(c => (
+                          <button
+                            key={c}
+                            onClick={() => updateTag.mutate({ id: t.id, color: c })}
+                            className={cn('h-5 w-5 rounded-full', t.color === c && 'ring-2 ring-offset-1 ring-foreground')}
+                            style={{ background: c }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )
+                }
+                return (
+                  <div key={t.id} className="group flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-accent">
+                    <button
+                      onClick={() => already ? removeFromCard.mutate(t.id) : addToCard.mutate(t.id)}
+                      className="flex items-center gap-2 flex-1 min-w-0 text-left text-xs"
+                    >
+                      <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: t.color }} />
+                      <span className="truncate flex-1">{t.name}</span>
+                      {already && <Check className="h-3 w-3 text-emerald-500 shrink-0" />}
+                    </button>
+                    {canManage && (
+                      <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 shrink-0">
+                        <button onClick={() => setEditingId(t.id)} className="text-muted-foreground hover:text-foreground">
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button onClick={() => deleteTag.mutate(t.id)} className="text-muted-foreground hover:text-red-500">
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+
+          {canManage && (
+            creating ? (
+              <div className="border-t pt-2 space-y-1.5">
+                <input
+                  autoFocus
+                  value={newName}
+                  onChange={e => setNewName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { const n = newName.trim(); if (n) createTag.mutate({ name: n, color: newColor }) } }}
+                  placeholder="Nome da tag..."
+                  className="w-full rounded-md border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                <div className="flex flex-wrap gap-1">
+                  {TAG_COLORS.map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setNewColor(c)}
+                      className={cn('h-5 w-5 rounded-full', newColor === c && 'ring-2 ring-offset-1 ring-foreground')}
+                      style={{ background: c }}
+                    />
+                  ))}
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => { const n = newName.trim(); if (n) createTag.mutate({ name: n, color: newColor }) }}
+                    disabled={!newName.trim() || createTag.isPending}
+                    className="flex-1 rounded-md bg-primary text-primary-foreground text-xs py-1 disabled:opacity-40"
+                  >
+                    Criar
+                  </button>
+                  <button onClick={() => { setCreating(false); setNewName('') }} className="rounded-md border text-xs px-2 py-1">
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setCreating(true)}
+                className="w-full border-t pt-2 text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 px-2"
+              >
+                <Plus className="h-3 w-3" /> Criar nova tag
+              </button>
+            )
+          )}
         </div>
       )}
     </div>
@@ -1199,7 +1438,7 @@ export default function CardModal({
               icon={<Building2 className="h-3 w-3" />}
               current={card.company}
               fetchOptions={async (q) => {
-                const list = await apiFetch<Array<{ id: string; name: string; color: string }>>(`/companies`)
+                const list = await apiFetch<Array<{ id: string; name: string; color: string; logoUrl?: string | null }>>(`/companies`)
                 const filtered = q ? list.filter(c => c.name.toLowerCase().includes(q.toLowerCase())) : list
                 return filtered.slice(0, 50)
               }}
@@ -1207,12 +1446,18 @@ export default function CardModal({
               onClear={() => patchMutation.mutate({ companyId: null })}
               displayCurrent={(c) => (
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="h-2 w-2 rounded-full shrink-0" style={{ background: c.color }} />
+                  {c.logoUrl ? (
+                    <UserAvatar name={c.name} avatarUrl={c.logoUrl} size="xs" />
+                  ) : (
+                    <span className="h-2 w-2 rounded-full shrink-0" style={{ background: c.color }} />
+                  )}
                   <span className="text-sm font-medium truncate">{c.name}</span>
                 </div>
               )}
               placeholder="Buscar empresa..."
             />
+
+            <TagsPicker cardId={cardId} boardId={card.column.boardId} tags={card.tags} />
 
             <MultiContactsPicker cardId={cardId} contacts={card.contacts} />
             <MultiAssigneesPicker cardId={cardId} boardId={card.column.boardId} assignees={card.assignees} />
