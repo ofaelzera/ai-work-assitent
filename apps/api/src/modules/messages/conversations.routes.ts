@@ -2526,8 +2526,10 @@ export const conversationsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (req: any, reply) => {
       try {
         const { client, instanceName, groupJid } = await loadGroupConversation(req.params.id, req.user.workspaceId)
+        // Buscas independentes: se a info do grupo falhar, ainda mostramos os
+        // membros (e vice-versa), em vez de zerar o painel inteiro.
         const [info, members] = await Promise.all([
-          client.fetchGroupInfo(instanceName, groupJid),
+          client.fetchGroupInfo(instanceName, groupJid).catch(() => null),
           client.findGroupMembers(instanceName, groupJid).catch(() => ({ participants: [] })),
         ])
 

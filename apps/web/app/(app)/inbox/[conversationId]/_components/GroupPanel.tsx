@@ -64,11 +64,14 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
     return () => window.removeEventListener('keydown', h)
   }, [onClose])
 
-  const { data, isLoading, refetch } = useQuery<GroupData>({
+  const { data, isLoading, isError, error, refetch } = useQuery<GroupData>({
     queryKey: ['group-info', conversationId],
     queryFn: () => apiFetch<GroupData>(`/conversations/${conversationId}/group`),
     staleTime: 30_000,
   })
+
+  // Falha ao buscar do WhatsApp, ou conexão retornou grupo vazio.
+  const loadFailed = isError || (!!data && !data.info && (data.participants?.length ?? 0) === 0)
 
   // Sincroniza state com dados carregados
   useEffect(() => {
@@ -258,6 +261,24 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
             <div className="text-center text-sm text-muted-foreground py-12">Carregando…</div>
           ) : (
             <>
+              {loadFailed && (
+                <div className="m-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-700 dark:text-amber-400">
+                  <p className="font-medium">Não foi possível carregar o grupo do WhatsApp.</p>
+                  <p className="mt-0.5 text-amber-700/80 dark:text-amber-400/80">
+                    {isError
+                      ? ((error as any)?.message ?? 'Falha na conexão com o WhatsApp.')
+                      : 'A conexão não retornou os dados do grupo. Verifique se o número está conectado e tente recarregar.'}
+                  </p>
+                  <button
+                    onClick={() => refetch()}
+                    disabled={isLoading}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 px-2 py-1 font-medium hover:bg-amber-500/15 disabled:opacity-50"
+                  >
+                    <RefreshCw className={cn('h-3 w-3', isLoading && 'animate-spin')} /> Recarregar
+                  </button>
+                </div>
+              )}
+
               {/* Foto + nome */}
               <div className="flex flex-col items-center pt-6 pb-4 px-4 border-b">
                 <div className="relative group">

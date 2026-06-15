@@ -2513,7 +2513,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
       {showGroupPanel && (
         <GroupPanel
           conversationId={conversationId}
-          groupAvatarUrl={conv.contact?.metadata?.avatarUrl ?? null}
+          groupAvatarUrl={avatarUrl}
           currentCompanyId={conv.companyId ?? conv.company?.id ?? null}
           onClose={() => setShowGroupPanel(false)}
           onEditContact={c => setDrawerContact(c)}
