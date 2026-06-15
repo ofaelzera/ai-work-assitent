@@ -40,6 +40,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import CardModal from './CardModal'
+import { UserAvatar } from '../../chat/_components/UserAvatar'
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { usePermission } from '@/lib/usePermission'
 import { useAuthStore } from '@/store/auth'
@@ -60,6 +61,8 @@ export interface Card {
   labels?: string[] | null
   tags?: { id: string; name: string; color: string }[] | null
   contact?: { id: string; name: string | null; phone: string | null } | null
+  company?: { id: string; name: string; color: string } | null
+  assignees?: { id: string; name: string | null; email: string; settings?: { avatarUrl?: string | null } | null }[] | null
 }
 
 interface Column {
@@ -196,8 +199,28 @@ function SortableCard({
                 {card.contact.name ?? card.contact.phone}
               </span>
             )}
+            {card.company && (
+              <span className="text-[10px] flex items-center gap-1 bg-muted px-1.5 py-0.5 rounded truncate max-w-[100px]">
+                <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: card.company.color }} />
+                {card.company.name}
+              </span>
+            )}
           </div>
         </div>
+        {card.assignees && card.assignees.length > 0 && (
+          <div className="flex -space-x-1.5 shrink-0">
+            {card.assignees.slice(0, 3).map((u) => (
+              <div key={u.id} className="ring-2 ring-card rounded-full" title={u.name ?? u.email}>
+                <UserAvatar name={u.name ?? u.email} avatarUrl={u.settings?.avatarUrl} size="xs" />
+              </div>
+            ))}
+            {card.assignees.length > 3 && (
+              <div className="h-6 w-6 rounded-full ring-2 ring-card bg-muted flex items-center justify-center text-[9px] font-semibold shrink-0">
+                +{card.assignees.length - 3}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

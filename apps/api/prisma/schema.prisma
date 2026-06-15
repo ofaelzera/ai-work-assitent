@@ -274,6 +274,7 @@ model Company {
   contactLinks  ContactCompany[] // N:N (RF04)
   conversations Conversation[]
   cards         Card[]           @relation("CardCompany")
+  boards        Board[]          @relation("BoardCompany")
 
   @@index([workspaceId])
 }
@@ -441,11 +442,13 @@ model Board {
   ownerId     String? // null = legado (board global criado antes do enum)
   visibility  BoardVisibility @default(PRIVATE)
   name        String
+  companyId   String? // vínculo opcional a uma empresa (futuras regras de automação)
   deletedAt   DateTime?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
   workspace  Workspace        @relation(fields: [workspaceId], references: [id])
+  company    Company?         @relation("BoardCompany", fields: [companyId], references: [id])
   columns    Column[]
   shares     BoardShare[]
   teamShares BoardTeamShare[]
@@ -453,6 +456,7 @@ model Board {
 
   @@index([workspaceId])
   @@index([workspaceId, ownerId])
+  @@index([companyId])
 }
 
 model BoardShare {

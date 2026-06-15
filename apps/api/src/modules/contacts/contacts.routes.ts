@@ -189,6 +189,23 @@ export const contactsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   )
 
+  // ── Detalhe de um contato (cadastro estendido + empresas N:N) ──────────────
+  app.get(
+    '/contacts/:id',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const contact = await prisma.contact.findFirst({
+        where: { id: req.params.id, workspaceId: req.user.workspaceId },
+        select: contactSelect,
+      })
+      if (!contact) return reply.notFound()
+      return contact
+    },
+  )
+
   // ── Criar contato ─────────────────────────────────────────────────────────
   app.post(
     '/contacts',

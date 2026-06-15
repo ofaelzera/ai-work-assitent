@@ -16,6 +16,7 @@ interface Board {
   name: string
   ownerId: string | null
   visibility: Visibility
+  companyId: string | null
   isGlobal: boolean
   isShared: boolean
   isMine: boolean
@@ -25,6 +26,7 @@ interface Board {
 }
 
 interface WorkspaceUser { id: string; name: string; email: string }
+interface CompanyLite { id: string; name: string }
 
 // ─── Modal de criar board ────────────────────────────────────────────────────
 function NewBoardModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
@@ -167,10 +169,17 @@ function EditBoardModal({ board, onClose, onSaved }: { board: Board; onClose: ()
   const qc = useQueryClient()
   const [name, setName] = useState(board.name)
   const [visibility, setVisibility] = useState<Visibility>(board.visibility)
+  const [companyId, setCompanyId] = useState<string>(board.companyId ?? '')
 
   const { data: users = [] } = useQuery<WorkspaceUser[]>({
     queryKey: ['users'],
     queryFn: () => apiFetch('/users'),
+    staleTime: 60_000,
+  })
+
+  const { data: companies = [] } = useQuery<CompanyLite[]>({
+    queryKey: ['companies'],
+    queryFn: () => apiFetch('/companies'),
     staleTime: 60_000,
   })
 
@@ -232,6 +241,7 @@ function EditBoardModal({ board, onClose, onSaved }: { board: Board; onClose: ()
       body: JSON.stringify({
         ...(name.trim() && name.trim() !== board.name && { name: name.trim() }),
         ...(visibility !== board.visibility && { visibility }),
+        ...((companyId || null) !== (board.companyId ?? null) && { companyId: companyId || null }),
       }),
     }),
     onSuccess: () => { toast.success('Board atualizado'); onSaved(); onClose() },
@@ -273,6 +283,23 @@ function EditBoardModal({ board, onClose, onSaved }: { board: Board; onClose: ()
               value={name} onChange={e => setName(e.target.value)}
               className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">Empresa <span className="text-muted-foreground font-normal">(opcional)</span></label>
+            <select
+              value={companyId}
+              onChange={e => setCompanyId(e.target.value)}
+              className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            >
+              <option value="">— Sem empresa —</option>
+              {companies.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              Vincular a uma empresa permite aplicar regras de automação no futuro.
+            </p>
           </div>
 
           <div className="space-y-1.5">

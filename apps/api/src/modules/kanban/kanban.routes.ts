@@ -53,6 +53,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         name: true,
         ownerId: true,
         visibility: true,
+        companyId: true,
         createdAt: true,
         columns: {
           select: { _count: { select: { cards: { where: { deletedAt: null } } } } },
@@ -65,6 +66,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
       name: b.name,
       ownerId: b.ownerId,
       visibility: b.visibility,
+      companyId: b.companyId,
       isGlobal: b.visibility === 'PUBLIC',
       isShared: b.visibility === 'SHARED',
       isMine: b.ownerId === userId,
@@ -175,8 +177,12 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
                 orderBy: { position: 'asc' },
                 include: {
                   contact: { select: { id: true, name: true, phone: true } },
+                  company: { select: { id: true, name: true, color: true } },
                   conversation: { select: { id: true, externalId: true } },
                   cardTags: { include: { tag: { select: { id: true, name: true, color: true } } } },
+                  assignees: {
+                    include: { user: { select: { id: true, name: true, email: true, settings: true } } },
+                  },
                 },
               },
             },
@@ -184,7 +190,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       })
       if (!fullBoard) return reply.notFound()
-      // Achata cardTags[].tag → tags[] em cada card pra simplificar a UI.
+      // Achata relações p/ a UI: cardTags[].tag → tags[]; assignees[].user → assignees[].
       return {
         ...fullBoard,
         columns: fullBoard.columns.map(col => ({
@@ -192,6 +198,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
           cards: col.cards.map(card => ({
             ...card,
             tags: card.cardTags.map(ct => ct.tag),
+            assignees: card.assignees.map(a => a.user),
           })),
         })),
       }
@@ -207,6 +214,7 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         body: z.object({
           name: z.string().min(1).optional(),
           visibility: z.enum(['PRIVATE', 'SHARED', 'PUBLIC']).optional(),
+          companyId: z.string().nullable().optional(), // vínculo opcional a empresa
         }),
       },
     },
@@ -229,11 +237,21 @@ export const kanbanRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.forbidden('Sem permissão pra tornar board público')
       }
 
+      // Se informou empresa, valida que ela é do mesmo workspace.
+      if (req.body.companyId) {
+        const company = await prisma.company.findFirst({
+          where: { id: req.body.companyId, workspaceId: req.user.workspaceId },
+          select: { id: true },
+        })
+        if (!company) return reply.badRequest('Empresa não encontrada')
+      }
+
       await prisma.board.update({
         where: { id: req.params.id },
         data: {
           ...(req.body.name && { name: req.body.name }),
           ...(req.body.visibility && { visibility: req.body.visibility }),
+          ...(req.body.companyId !== undefined && { companyId: req.body.companyId }),
         },
       })
       return { ok: true }

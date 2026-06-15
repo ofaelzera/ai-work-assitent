@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { formatPhone } from '@/lib/phone'
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { AvatarImage } from '@/components/AvatarImage'
+import type { Contact } from './WhatsappView'
 
 interface GroupParticipant {
   jid: string
@@ -38,11 +39,12 @@ interface Props {
   groupAvatarUrl: string | null
   currentCompanyId: string | null
   onClose: () => void
+  onEditContact: (contact: Contact) => void
 }
 
 interface Company { id: string; name: string; color: string }
 
-export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, onClose }: Props) {
+export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, onClose, onEditContact }: Props) {
   const queryClient = useQueryClient()
   const confirm = useConfirm()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -174,6 +176,37 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
     },
     onError: (e: any) => toast.error(e?.message ?? 'Erro ao vincular empresa'),
   })
+
+  // Abre o editor de contato para um participante. Se ainda não houver
+  // contato cadastrado (contactId null), cria um a partir do número/nome.
+  const [openingContact, setOpeningContact] = useState<string | null>(null)
+  const handleEditParticipant = async (p: GroupParticipant) => {
+    if (p.contactId) {
+      onEditContact({
+        id: p.contactId,
+        name: p.name,
+        phone: p.number,
+        email: null,
+        metadata: p.avatarUrl ? { avatarUrl: p.avatarUrl } : null,
+        companyId: null,
+      })
+      return
+    }
+    // Sem contato ainda — cria a partir do participante.
+    setOpeningContact(p.jid)
+    try {
+      const created = await apiFetch<Contact>('/contacts', {
+        method: 'POST',
+        body: JSON.stringify({ name: p.name ?? undefined, phone: p.number }),
+      })
+      queryClient.invalidateQueries({ queryKey: ['group-info', conversationId] })
+      onEditContact(created)
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Erro ao criar contato')
+    } finally {
+      setOpeningContact(null)
+    }
+  }
 
   const isPending = updateGroupMut.isPending || updatePictureMut.isPending || membersMut.isPending
 
@@ -442,26 +475,39 @@ export function GroupPanel({ conversationId, groupAvatarUrl, currentCompanyId, o
                 <ul className="space-y-0.5">
                   {sortedParticipants.map(p => (
                     <li key={p.jid} className="flex items-center gap-2 py-1.5 px-1 rounded-md hover:bg-accent group">
-                      <div className="h-8 w-8 rounded-full bg-muted overflow-hidden flex items-center justify-center text-xs font-medium text-muted-foreground shrink-0">
-                        <AvatarImage
-                          src={p.avatarUrl}
-                          alt={p.name ?? p.number}
-                          className="h-full w-full object-cover"
-                          fallback={<>{(p.name ?? p.number).slice(0, 2).toUpperCase()}</>}
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm truncate">{p.name ?? formatPhone(p.number)}</span>
-                          {p.admin === 'superadmin' && (
-                            <Crown className="h-3 w-3 text-amber-500" aria-label="Criador" />
-                          )}
-                          {p.admin === 'admin' && (
-                            <ShieldCheck className="h-3 w-3 text-blue-500" aria-label="Admin" />
-                          )}
+                      <button
+                        type="button"
+                        onClick={() => handleEditParticipant(p)}
+                        disabled={openingContact === p.jid}
+                        title={p.contactId ? 'Editar / verificar contato' : 'Adicionar e verificar contato'}
+                        className="flex items-center gap-2 flex-1 min-w-0 text-left disabled:opacity-60"
+                      >
+                        <div className="h-8 w-8 rounded-full bg-muted overflow-hidden flex items-center justify-center text-xs font-medium text-muted-foreground shrink-0">
+                          <AvatarImage
+                            src={p.avatarUrl}
+                            alt={p.name ?? p.number}
+                            className="h-full w-full object-cover"
+                            fallback={<>{(p.name ?? p.number).slice(0, 2).toUpperCase()}</>}
+                          />
                         </div>
-                        {p.name && <p className="text-[11px] text-muted-foreground truncate">{formatPhone(p.number)}</p>}
-                      </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm truncate">{p.name ?? formatPhone(p.number)}</span>
+                            {p.admin === 'superadmin' && (
+                              <Crown className="h-3 w-3 text-amber-500 shrink-0" aria-label="Criador" />
+                            )}
+                            {p.admin === 'admin' && (
+                              <ShieldCheck className="h-3 w-3 text-blue-500 shrink-0" aria-label="Admin" />
+                            )}
+                            {openingContact === p.jid ? (
+                              <RefreshCw className="h-3 w-3 text-muted-foreground animate-spin shrink-0" />
+                            ) : (
+                              <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-60 shrink-0" />
+                            )}
+                          </div>
+                          {p.name && <p className="text-[11px] text-muted-foreground truncate">{formatPhone(p.number)}</p>}
+                        </div>
+                      </button>
 
                       {/* Ações por membro */}
                       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">

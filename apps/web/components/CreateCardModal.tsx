@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { X, Kanban, Check, ChevronDown, ChevronUp } from 'lucide-react'
+import { X, Kanban, Check, ChevronUp, User, Building2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
 
@@ -24,6 +24,8 @@ interface CreateCardModalProps {
   conversationId: string
   contactId?: string | null
   contactName?: string | null
+  companyId?: string | null
+  companyName?: string | null
   messages: Message[]
   onClose: () => void
   onCreated?: () => void
@@ -33,6 +35,8 @@ export default function CreateCardModal({
   conversationId,
   contactId,
   contactName,
+  companyId,
+  companyName,
   messages,
   onClose,
   onCreated,
@@ -100,6 +104,7 @@ export default function CreateCardModal({
           priority,
           conversationId,
           contactId: contactId ?? undefined,
+          companyId: companyId ?? undefined,
         }),
       })
 
@@ -245,6 +250,32 @@ export default function CreateCardModal({
               ))}
             </div>
           </div>
+
+          {/* Vínculos (contato/empresa) — pré-preenchidos a partir da conversa */}
+          {(contactName || companyName) && (
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">
+                Vínculos
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {contactName && (
+                  <span className="inline-flex items-center gap-1.5 text-xs rounded-full border bg-accent/40 px-2.5 py-1">
+                    <User className="h-3.5 w-3.5 text-muted-foreground" />
+                    {contactName}
+                  </span>
+                )}
+                {companyName && (
+                  <span className="inline-flex items-center gap-1.5 text-xs rounded-full border bg-accent/40 px-2.5 py-1">
+                    <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+                    {companyName}
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1.5">
+                Serão vinculados automaticamente ao card.
+              </p>
+            </div>
+          )}
 
           {/* Seleção de mensagens */}
           <div>

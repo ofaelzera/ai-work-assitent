@@ -11,12 +11,13 @@ import {
   ZoomIn, Download, Kanban, Phone, Mail, Reply,
   Check, CheckCheck, Sparkles, CheckCircle2, RotateCcw, Clock3, UserRound, ChevronDown,
   LogIn, LogOut, AlertCircle, Plus, ListTodo, CalendarPlus, FolderOpen, Save, History, MoreVertical, ChevronRight,
-  Smile, Trash2, Pencil, MapPin, Contact, BarChart2, Shield, ShieldOff, Mic
+  Smile, Trash2, Pencil, MapPin, Contact, BarChart2, Shield, ShieldOff, Mic,
+  Building2, BadgeCheck
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatTime, formatDate } from '@/lib/date'
 import { formatPhone, isInternalId } from '@/lib/phone'
-import { maskPhone } from '@/lib/masks'
+import { maskPhone, maskCPF } from '@/lib/masks'
 import { renderWhatsappText, stripWhatsappMarks, WhatsappText, MentionProvider } from '@/lib/whatsappText'
 import { useMentionResolver } from '@/lib/useMentionResolver'
 import { toast } from 'sonner'
@@ -516,7 +517,7 @@ function HistoryTicket({ conv, isCurrent }: { conv: any; isCurrent: boolean }) {
 
 // ─── Drawer de edição de contato ──────────────────────────────────────────────
 function ContactDrawer({ contact, onClose, onSave, currentConvId }: {
-  contact: Contact; onClose: () => void; onSave: (data: Partial<Contact>) => void; currentConvId?: string
+  contact: Contact; onClose: () => void; onSave: (data: Record<string, any>) => void; currentConvId?: string
 }) {
   const queryClient = useQueryClient()
   const rawPhone = contact.phone
@@ -529,6 +530,35 @@ function ContactDrawer({ contact, onClose, onSave, currentConvId }: {
   const [avatarUrl, setAvatarUrl] = useState<string | null>((contact.metadata as any)?.avatarUrl ?? null)
   const [syncingAvatar, setSyncingAvatar] = useState(false)
   const avatarInputRef = useRef<HTMLInputElement>(null)
+
+  // Cadastro estendido (empresa, verificação, CPF, nascimento)
+  const [companyId, setCompanyId] = useState<string>(contact.companyId ?? '')
+  const [verified, setVerified] = useState(false)
+  const [cpf, setCpf] = useState('')
+  const [birthDate, setBirthDate] = useState('')
+
+  const { data: companies = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['companies'],
+    queryFn: () => apiFetch('/companies'),
+    staleTime: 60_000,
+  })
+
+  // Carrega o cadastro completo do contato (verified/cpf/nascimento/empresa principal).
+  const { data: fullContact } = useQuery<{
+    verified: boolean; cpf: string | null; birthDate: string | null; companyId: string | null
+  }>({
+    queryKey: ['contact-detail', contact.id],
+    queryFn: () => apiFetch(`/contacts/${contact.id}`),
+    enabled: tab === 'info',
+  })
+
+  useEffect(() => {
+    if (!fullContact) return
+    setVerified(fullContact.verified)
+    setCpf(fullContact.cpf ?? '')
+    setBirthDate(fullContact.birthDate ? fullContact.birthDate.slice(0, 10) : '')
+    setCompanyId(fullContact.companyId ?? '')
+  }, [fullContact])
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -570,7 +600,15 @@ function ContactDrawer({ contact, onClose, onSave, currentConvId }: {
 
   const handleSave = () => {
     setSaving(true)
-    onSave({ name: name || undefined, phone: phone || undefined, email: email || undefined })
+    onSave({
+      name: name || undefined,
+      phone: phone || undefined,
+      email: email || undefined,
+      companyIds: companyId ? [companyId] : [],
+      verified,
+      cpf: cpf ? cpf.replace(/\D/g, '') : null,
+      birthDate: birthDate || null,
+    })
   }
 
   const displayLabel = contact.name || (!phoneIsId && rawPhone ? formatPhone(rawPhone) : null) || contact.email || 'Sem nome'
@@ -667,6 +705,57 @@ function ContactDrawer({ contact, onClose, onSave, currentConvId }: {
                 <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="email@exemplo.com"
                   className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
               </div>
+
+              {/* Empresa vinculada */}
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Building2 className="h-3.5 w-3.5" /> Empresa
+                </label>
+                <select value={companyId} onChange={e => setCompanyId(e.target.value)}
+                  className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
+                  <option value="">— Sem empresa —</option>
+                  {companies.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* CPF e nascimento */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">CPF</label>
+                  <input value={maskCPF(cpf)} onChange={e => setCpf(e.target.value.replace(/\D/g, ''))} placeholder="000.000.000-00"
+                    className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Nascimento</label>
+                  <input type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)}
+                    className="w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+                </div>
+              </div>
+
+              {/* Verificação */}
+              <button
+                type="button"
+                onClick={() => setVerified(v => !v)}
+                className={cn(
+                  'w-full flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition-colors',
+                  verified
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    : 'hover:bg-accent text-muted-foreground',
+                )}
+              >
+                <span className="flex items-center gap-1.5">
+                  <BadgeCheck className="h-4 w-4" />
+                  {verified ? 'Contato verificado' : 'Marcar como verificado'}
+                </span>
+                <span className={cn(
+                  'h-4 w-4 rounded-full border flex items-center justify-center',
+                  verified ? 'bg-emerald-500 border-emerald-500' : 'border-muted-foreground/40',
+                )}>
+                  {verified && <Check className="h-2.5 w-2.5 text-white" />}
+                </span>
+              </button>
             </div>
             <div className="px-4 py-3 border-t shrink-0">
               <button onClick={handleSave} disabled={saving}
@@ -1081,7 +1170,8 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
   const [saveToLibraryMsg, setSaveToLibraryMsg] = useState<{ id: string; filename?: string } | null>(null)
   const [showCreateMenu, setShowCreateMenu] = useState(false)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
-  const [showContact, setShowContact] = useState(false)
+  // Contato aberto no drawer de edição (da conversa ou de um participante do grupo).
+  const [drawerContact, setDrawerContact] = useState<Contact | null>(null)
   const [showGroupPanel, setShowGroupPanel] = useState(false)
   const [showRelease, setShowRelease] = useState(false)
   const [showForward, setShowForward] = useState(false)
@@ -1384,11 +1474,13 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
 
   const updateContactMutation = useMutation({
     mutationFn: (data: any) =>
-      apiFetch(`/contacts/${conv?.contact?.id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    onSuccess: () => {
+      apiFetch(`/contacts/${drawerContact?.id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    onSuccess: (_res, _vars) => {
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
-      setShowContact(false)
+      if (drawerContact) queryClient.invalidateQueries({ queryKey: ['contact-detail', drawerContact.id] })
+      queryClient.invalidateQueries({ queryKey: ['group-info', conversationId] })
+      setDrawerContact(null)
       toast.success('Contato atualizado!')
     },
     onError: () => toast.error('Erro ao atualizar contato'),
@@ -1581,7 +1673,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
       <div className="flex flex-col h-full">
         {/* ── Header ── */}
         <div className="flex items-center gap-3 px-4 py-2.5 border-b bg-card shrink-0 z-10">
-          <button onClick={() => isGroup ? setShowGroupPanel(true) : conv.contact && setShowContact(true)}
+          <button onClick={() => isGroup ? setShowGroupPanel(true) : conv.contact && setDrawerContact(conv.contact)}
             className={cn('shrink-0', (isGroup || conv.contact) && 'cursor-pointer hover:opacity-80 transition-opacity')}
             disabled={!isGroup && !conv.contact}
             title={isGroup ? 'Detalhes do grupo' : undefined}>
@@ -1612,7 +1704,7 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
 
           <button
             className={cn('flex-1 min-w-0 text-left', (isGroup || conv.contact) && 'cursor-pointer hover:opacity-80 transition-opacity')}
-            onClick={() => isGroup ? setShowGroupPanel(true) : conv.contact && setShowContact(true)}
+            onClick={() => isGroup ? setShowGroupPanel(true) : conv.contact && setDrawerContact(conv.contact)}
             disabled={!isGroup && !conv.contact}
             title={isGroup ? 'Detalhes do grupo' : undefined}>
             <p className="font-semibold text-sm truncate">{contactName}</p>
@@ -2370,6 +2462,8 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           conversationId={conversationId}
           contactId={conv.contact?.id}
           contactName={conv.contact?.name ?? conv.contact?.phone ?? undefined}
+          companyId={conv.company?.id ?? conv.companyId ?? undefined}
+          companyName={conv.company?.name ?? undefined}
           messages={messages}
           onClose={() => setShowCardModal(false)}
         />
@@ -2416,21 +2510,23 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
         />
       )}
 
-      {showContact && conv.contact && (
-        <ContactDrawer
-          contact={conv.contact}
-          onClose={() => setShowContact(false)}
-          onSave={data => updateContactMutation.mutate(data)}
-          currentConvId={conversationId}
-        />
-      )}
-
       {showGroupPanel && (
         <GroupPanel
           conversationId={conversationId}
           groupAvatarUrl={conv.contact?.metadata?.avatarUrl ?? null}
           currentCompanyId={conv.companyId ?? conv.company?.id ?? null}
           onClose={() => setShowGroupPanel(false)}
+          onEditContact={c => setDrawerContact(c)}
+        />
+      )}
+
+      {/* Drawer de contato — renderizado por último p/ ficar acima do painel do grupo */}
+      {drawerContact && (
+        <ContactDrawer
+          contact={drawerContact}
+          onClose={() => setDrawerContact(null)}
+          onSave={data => updateContactMutation.mutate(data)}
+          currentConvId={conversationId}
         />
       )}
 
