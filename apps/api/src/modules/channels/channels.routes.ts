@@ -139,6 +139,8 @@ export const channelsRoutes: FastifyPluginAsyncZod = async (app) => {
         body: z.object({
           ignoreGroups: z.boolean().optional(),
           archiveGroups: z.boolean().optional(),
+          // Canal "apenas fluxos": sem fila/atendimento/armazenamento; só dispara fluxos.
+          flowsOnly: z.boolean().optional(),
           autoResolveOnRead: z.boolean().optional(),
           prefixSenderName: z.boolean().optional(),
           distributionMode: z.enum(['all', 'fixed', 'round_robin']).optional(),

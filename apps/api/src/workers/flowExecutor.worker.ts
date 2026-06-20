@@ -17,6 +17,7 @@ import {
   startFlowForConversation,
   handleIncomingFlowMessage,
   runFlow,
+  runFlowDetached,
 } from '../modules/flows/flow.executor.js'
 
 export type FlowJobData =
@@ -34,6 +35,11 @@ export type FlowJobData =
   | {
       kind: 'resume'
       flowExecutionId: string
+    }
+  | {
+      kind: 'cron'
+      workspaceId: string
+      flowId: string
     }
 
 export const flowQueue = new Queue<FlowJobData>('flowExecutor', { connection: redis })
@@ -60,6 +66,10 @@ export function startFlowExecutorWorker() {
       }
       if (data.kind === 'resume') {
         await runFlow({ flowExecutionId: data.flowExecutionId })
+        return { ok: true }
+      }
+      if (data.kind === 'cron') {
+        await runFlowDetached({ workspaceId: data.workspaceId, flowId: data.flowId })
         return { ok: true }
       }
       return { ok: false, reason: 'unknown kind' }

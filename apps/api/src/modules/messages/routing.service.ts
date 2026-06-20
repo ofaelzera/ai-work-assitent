@@ -40,6 +40,8 @@ export interface RouteResult {
   flowId?: string | null
   /** ID da regra que casou (quando source='rule'). */
   ruleId?: string | null
+  /** Tags a aplicar na conversa/contato (ações add_tag da regra). */
+  addTags?: string[]
 }
 
 interface RouteArgs {
@@ -50,6 +52,8 @@ interface RouteArgs {
   channelType?: ChannelType | null
   /** Indica se é grupo (WA) — usado por matchers. */
   isGroup?: boolean
+  /** externalId/JID da conversa — usado por matcher de grupo específico. */
+  conversationExternalId?: string | null
   /** Corpo da primeira mensagem — usado por matchers de keyword. */
   messageBody?: string | null
   /**
@@ -70,6 +74,7 @@ export async function routeNewConversation(args: RouteArgs): Promise<RouteResult
     fallbackUserId = null,
     isGroup = false,
     messageBody = null,
+    conversationExternalId = null,
   } = args
 
   // Carrega canal (sempre precisamos pra defaultTeamId/defaultFlowId/settings)
@@ -92,9 +97,18 @@ export async function routeNewConversation(args: RouteArgs): Promise<RouteResult
     channelType,
     contactId,
     isGroup,
+    conversationExternalId,
     messageBody,
     trigger: 'new_conversation',
   })
+
+  // Tags vindas de ações add_tag (aplicadas pelo caller na conversa criada).
+  const addTags: string[] | undefined = matched
+    ? (() => {
+        const t = matched.actions.filter((a) => a.type === 'add_tag').flatMap((a) => a.tags ?? [])
+        return t.length ? Array.from(new Set(t)) : undefined
+      })()
+    : undefined
 
   if (matched) {
     const action = matched.action
@@ -123,6 +137,7 @@ export async function routeNewConversation(args: RouteArgs): Promise<RouteResult
         source: 'rule',
         ruleId: matched.ruleId,
         flowId: channel?.defaultFlowId ?? null,
+        addTags,
       }
     }
     if (action.type === 'assign_user' && action.userId) {
@@ -134,6 +149,7 @@ export async function routeNewConversation(args: RouteArgs): Promise<RouteResult
         source: 'rule',
         ruleId: matched.ruleId,
         flowId: channel?.defaultFlowId ?? null,
+        addTags,
       }
     }
     if (action.type === 'start_flow' && action.flowId) {
@@ -146,6 +162,7 @@ export async function routeNewConversation(args: RouteArgs): Promise<RouteResult
         source: 'rule',
         ruleId: matched.ruleId,
         flowId: action.flowId,
+        addTags,
       }
     }
     // add_tag etc — continua avaliando próximos níveis (não retorna)
@@ -171,6 +188,7 @@ export async function routeNewConversation(args: RouteArgs): Promise<RouteResult
         distMode: 'fixed',
         source: 'fallback',
         flowId: channel?.defaultFlowId ?? null,
+        addTags,
       }
     }
   }
@@ -191,6 +209,7 @@ export async function routeNewConversation(args: RouteArgs): Promise<RouteResult
         distMode: 'round_robin',
         source: 'fallback',
         flowId: channel?.defaultFlowId ?? null,
+        addTags,
       }
     }
   }

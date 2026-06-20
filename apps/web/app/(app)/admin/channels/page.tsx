@@ -524,6 +524,7 @@ function ChannelRulesPanel({ channelId, channelType }: { channelId: string; chan
   const isWa = channelType === 'WHATSAPP'
 
   type Settings = {
+    flowsOnly?: boolean
     ignoreGroups?: boolean
     archiveGroups?: boolean
     autoResolveOnRead?: boolean
@@ -578,6 +579,17 @@ function ChannelRulesPanel({ channelId, channelType }: { channelId: string; chan
       {/* WhatsApp-only */}
       {isWa && (
         <div className="space-y-4">
+          <Toggle
+            value={s.flowsOnly ?? false}
+            onChange={(v) => patch({ flowsOnly: v })}
+            label="Apenas fluxos (sem atendimento)"
+            description="Canal de automação: não entra na fila, não cria conversas/mensagens (sem histórico). Só dispara fluxos a partir das regras de roteamento (mensagem recebida) e de crons."
+          />
+          {s.flowsOnly && (
+            <p className="text-[11px] text-amber-600 -mt-2 pl-1">
+              ⚠️ Com isso ligado, mensagens recebidas não aparecem no inbox. Crie regras de roteamento (gatilho "Mensagem recebida") apontando para fluxos; no fluxo, use o nó "Enviar mensagem" com destino <code>{'{{sender}}'}</code> e canal <code>{'{{channelId}}'}</code> para responder.
+            </p>
+          )}
           <Toggle
             value={s.ignoreGroups ?? false}
             onChange={(v) => patch({ ignoreGroups: v })}

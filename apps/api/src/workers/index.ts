@@ -10,6 +10,7 @@ import { startCommDispatchWorker } from './commDispatch.worker.js'
 import { startCampaignDispatchWorker } from './campaignDispatch.worker.js'
 import { startCommScheduler } from './commScheduler.js'
 import { syncAllCronAgents } from '../modules/ai/cronSync.js'
+import { syncAllCronFlows } from '../modules/flows/flowCronSync.js'
 import { logger } from '../lib/logger.js'
 
 export function startWorkers() {
@@ -32,6 +33,8 @@ export function startWorkers() {
 
   // Sweep inicial dos crons de agente (alinha BullMQ com o DB)
   syncAllCronAgents().catch((err) => logger.error({ err }, 'syncAllCronAgents inicial falhou'))
+  // Sweep inicial dos crons de fluxo
+  syncAllCronFlows().catch((err) => logger.error({ err }, 'syncAllCronFlows inicial falhou'))
 
   logger.info(`${workers.length} worker(s) iniciado(s) + dispatcher + scheduler + cron sweep`)
   return workers

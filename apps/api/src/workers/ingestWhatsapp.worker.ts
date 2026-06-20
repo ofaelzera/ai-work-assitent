@@ -18,6 +18,124 @@ import { sendSystemMessage } from '../lib/systemMessages.js'
 import { dedupChatConversations } from '../modules/messages/dedup.service.js'
 import { routeNewConversation } from '../modules/messages/routing.service.js'
 
+/** Cooldown padrão (min) do gatilho de palavra-chave quando a regra não define. */
+const KEYWORD_FLOW_COOLDOWN_DEFAULT_MIN = 5
+
+/**
+ * Avalia regras de roteamento 'message_received' para uma conversa JÁ existente
+ * e dispara o fluxo correspondente. Guard-rails:
+ *  - só quando NÃO há atendente humano (assigneeId null)
+ *  - só quando NÃO há fluxo ativo (RUNNING/WAITING_INPUT)
+ *  - cooldown por fluxo para não redisparar em rajada de mensagens
+ * Também aplica ações add_tag da regra.
+ */
+async function maybeTriggerKeywordFlow(args: {
+  workspaceId: string
+  channelId: string
+  remoteJid: string
+  conversationId: string
+  contactId: string | null
+  messageBody: string
+}): Promise<void> {
+  const { workspaceId, channelId, remoteJid, conversationId, contactId, messageBody } = args
+
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { assigneeId: true, tags: true },
+  })
+  if (conv?.assigneeId) return // atendente humano cuidando — não interrompe
+
+  const activeFlow = await prisma.flowExecution.findFirst({
+    where: { conversationId, status: { in: ['RUNNING', 'WAITING_INPUT'] } },
+    select: { id: true },
+  })
+  if (activeFlow) return
+
+  const { evaluateRoutingRules } = await import('../modules/routing/rules.service.js')
+  const matched = await evaluateRoutingRules({
+    workspaceId,
+    channelId,
+    channelType: 'WHATSAPP',
+    contactId,
+    isGroup: false,
+    conversationExternalId: remoteJid,
+    messageBody,
+    trigger: 'message_received',
+  })
+  if (!matched) return
+
+  // add_tag → aplica na conversa
+  const tags = matched.actions.filter((a) => a.type === 'add_tag').flatMap((a) => a.tags ?? [])
+  if (tags.length) {
+    const existing = Array.isArray(conv?.tags) ? (conv!.tags as string[]) : []
+    const merged = Array.from(new Set([...existing, ...tags]))
+    await prisma.conversation.update({ where: { id: conversationId }, data: { tags: merged as any } }).catch(() => {})
+  }
+
+  const flowAction = matched.actions.find((a) => a.type === 'start_flow')
+  if (!flowAction?.flowId) return
+
+  // Cooldown: já rodou esse fluxo recentemente nesta conversa? (configurável por regra)
+  const cooldownMin = typeof matched.cooldownMin === 'number' ? matched.cooldownMin : KEYWORD_FLOW_COOLDOWN_DEFAULT_MIN
+  const recent = cooldownMin > 0 ? await prisma.flowExecution.findFirst({
+    where: {
+      conversationId,
+      flowId: flowAction.flowId,
+      startedAt: { gte: new Date(Date.now() - cooldownMin * 60 * 1000) },
+    },
+    select: { id: true },
+  }) : null
+  if (recent) {
+    logger.info({ conversationId, flowId: flowAction.flowId }, 'Keyword flow em cooldown — ignorado')
+    return
+  }
+
+  const { flowQueue } = await import('./flowExecutor.worker.js')
+  await flowQueue.add('start', { kind: 'start', workspaceId, flowId: flowAction.flowId, conversationId })
+  logger.info({ conversationId, flowId: flowAction.flowId, ruleId: matched.ruleId }, 'Fluxo disparado por palavra-chave')
+}
+
+/**
+ * Canal "apenas fluxos" (automação pessoal): NÃO cria conversa/contato/mensagem
+ * nem entra na fila de atendimento. Apenas avalia regras 'message_received'
+ * (casando por telefone do remetente / palavra-chave / JID) e roda o fluxo
+ * de forma DESACOPLADA, semeando o contexto com remetente e mensagem.
+ * O fluxo responde via send_message (to '{{sender}}', channelId '{{channelId}}').
+ */
+async function handleFlowsOnlyChannel(args: {
+  workspaceId: string
+  channelId: string
+  remoteJid: string
+  senderPhone: string
+  body: string
+  mediaType: string | null
+}): Promise<void> {
+  const { workspaceId, channelId, remoteJid, senderPhone, body, mediaType } = args
+  const { evaluateRoutingRules } = await import('../modules/routing/rules.service.js')
+  const matched = await evaluateRoutingRules({
+    workspaceId,
+    channelId,
+    channelType: 'WHATSAPP',
+    contactId: null,
+    isGroup: false,
+    contactPhone: senderPhone,
+    conversationExternalId: remoteJid,
+    messageBody: body,
+    trigger: 'message_received',
+  })
+  if (!matched) return
+  const flowAction = matched.actions.find((a) => a.type === 'start_flow')
+  if (!flowAction?.flowId) return
+
+  const { runFlowDetached } = await import('../modules/flows/flow.executor.js')
+  await runFlowDetached({
+    workspaceId,
+    flowId: flowAction.flowId,
+    vars: { sender: senderPhone, senderJid: remoteJid, message: body, channelId, mediaType },
+  })
+  logger.info({ channelId, flowId: flowAction.flowId, senderPhone }, 'flowsOnly: fluxo disparado (sem armazenamento)')
+}
+
 /**
  * Tenta baixar a mídia de uma mensagem WhatsApp e salva localmente.
  * Retorna o storageKey relativo se salvo com sucesso, ou null se falhar
@@ -133,6 +251,21 @@ export function startIngestWhatsappWorker() {
       const body = rawText ?? (mediaInfo ? mediaTypeLabel(mediaInfo.type) : '[mídia]')
       const sentAt = new Date((message.messageTimestamp ?? Date.now() / 1000) * 1000)
 
+      // ── Canal "apenas fluxos" (automação pessoal) ────────────────────────
+      // NÃO entra na rotina de atendimento: sem fila, sem conversa/contato/mensagem.
+      // Só dispara fluxos a partir de mensagens recebidas (1:1, não fromMe).
+      if (channelSettings.flowsOnly === true) {
+        const fromMeFlows = message.key?.fromMe ?? false
+        if (!isGroup && !fromMeFlows && body) {
+          const senderPhone = remoteJid.split('@')[0].replace(/\D/g, '')
+          await handleFlowsOnlyChannel({
+            workspaceId, channelId, remoteJid, senderPhone, body,
+            mediaType: mediaInfo?.type ?? null,
+          }).catch((err) => logger.warn({ err, remoteJid }, 'flowsOnly: falha no gatilho de fluxo'))
+        }
+        return
+      }
+
       // Quoted message (reply/citação)
       const contextInfo = message.message?.extendedTextMessage?.contextInfo
         ?? message.message?.imageMessage?.contextInfo
@@ -236,6 +369,8 @@ export function startIngestWhatsappWorker() {
         },
         orderBy: { createdAt: 'desc' },
       })
+      // Marca se a conversa já existia (para o gatilho de palavra-chave em conversa existente).
+      const conversationExisted = !!conversation
 
       // Se não tem ativa, vamos criar uma nova.
       // Mas antes, verifica se essa mesma mensagem já está salva (em qualquer conv desse chat)
@@ -263,6 +398,7 @@ export function startIngestWhatsappWorker() {
           channelId,
           contactId: contact?.id ?? null,
           isGroup,
+          conversationExternalId: remoteJid,
           messageBody: body ?? null,
           autoAssign: false,
         })
@@ -315,6 +451,16 @@ export function startIngestWhatsappWorker() {
           { conversationId: conversation.id, contactId: contact.id, eligible: route.eligibleAssigneeIds, source: route.source, distMode: route.distMode },
           'Novo ticket criado (na fila)',
         )
+
+        // Tags vindas de ações add_tag da regra de roteamento
+        if (route.addTags?.length) {
+          const existingTags = Array.isArray(conversation.tags) ? (conversation.tags as string[]) : []
+          const merged = Array.from(new Set([...existingTags, ...route.addTags]))
+          await prisma.conversation.update({
+            where: { id: conversation.id },
+            data: { tags: merged as any },
+          }).catch((err) => logger.warn({ err, conversationId: conversation!.id }, 'Falha ao aplicar addTags'))
+        }
 
         // ── Flow automático (se houver) ────────────────────────────────────
         // Quando o canal/regra indica um flow inicial, ele substitui o welcome
@@ -448,6 +594,16 @@ export function startIngestWhatsappWorker() {
           conversationId: conversation.id,
           messageBody: body,
         })
+      } else if (conversationExisted && body && !isGroup && !(message.key?.fromMe ?? false)) {
+        // ── Gatilho de fluxo por palavra-chave (conversa JÁ existente) ─────
+        // Dispara regras 'message_received' SÓ quando: sem atendente humano,
+        // sem fluxo ativo, e respeitando um cooldown por fluxo (anti-rajada).
+        await maybeTriggerKeywordFlow({
+          workspaceId, channelId, remoteJid,
+          conversationId: conversation.id,
+          contactId: contact?.id ?? null,
+          messageBody: body,
+        }).catch((err) => logger.warn({ err, remoteJid }, 'Gatilho de palavra-chave falhou (ignorado)'))
       }
 
       // ── Auto-dedup do chat ───────────────────────────────────────────────

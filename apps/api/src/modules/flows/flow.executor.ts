@@ -19,6 +19,10 @@
  * Side effects (sendText, assignTeam, etc) acontecem dentro do nó usando
  * helpers idempotentes — mesmo se o worker re-roda o job, não duplica.
  */
+import vm from 'node:vm'
+import dns from 'node:dns/promises'
+import net from 'node:net'
+import axios from 'axios'
 import { prisma } from '../../lib/prisma.js'
 import { Prisma } from '@prisma/client'
 import { logger } from '../../lib/logger.js'
@@ -31,6 +35,7 @@ import {
   findFreeSlots,
 } from '../calendar/availability.service.js'
 import { createCalendarEvent, CalendarConflictError } from '../calendar/calendar.service.js'
+import { interpolate, resolveExpr, loadFlowScope, type FlowScope } from './expr.js'
 import type {
   FlowEdge,
   FlowGraph,
@@ -46,6 +51,18 @@ import type {
   CheckUserAvailableNodeData,
   FindFreeSlotsNodeData,
   CreateAppointmentNodeData,
+  StartBotNodeData,
+  InputNodeData,
+  HttpRequestNodeData,
+  SetVariableNodeData,
+  CodeNodeData,
+  SwitchNodeData,
+  LoopNodeData,
+  CallFlowNodeData,
+  CloseConversationNodeData,
+  AiGenerateNodeData,
+  SendMessageNodeData,
+  CheckNotifiedNodeData,
 } from './flow.types.js'
 
 interface RunFlowArgs {
@@ -116,12 +133,13 @@ export async function startFlowForConversation(args: {
   })
 
   const ctx: FlowContext = {
+    ...args.initialContext,
     vars: {
       ...(convForCtx?.channel
         ? { channelType: convForCtx.channel.type, channelLabel: convForCtx.channel.label }
         : {}),
+      ...(args.initialContext?.vars ?? {}),
     },
-    ...args.initialContext,
   }
 
   const exec = await prisma.flowExecution.create({
@@ -157,6 +175,7 @@ export async function runFlow({ flowExecutionId, maxSteps = MAX_STEPS_DEFAULT }:
   const graph = exec.flow.graph as unknown as FlowGraph
   const ctx = ((exec.context as unknown) as FlowContext | null) ?? { vars: {} }
   const trace = Array.isArray(exec.trace) ? [...(exec.trace as any[])] : []
+  const scope = await loadFlowScope(exec.conversation.id, ctx)
 
   let currentId: string | null = exec.currentNodeId
   let steps = 0
@@ -171,12 +190,14 @@ export async function runFlow({ flowExecutionId, maxSteps = MAX_STEPS_DEFAULT }:
     }
 
     trace.push({ nodeId: node.id, type: node.type, at: new Date().toISOString() })
-    const result = await executeNode(node, exec.conversation.id, exec.conversation.workspaceId, ctx)
+    const result = await executeNodeWithPolicy(node, exec.conversation.id, exec.conversation.workspaceId, ctx, scope, graph)
 
     if (!result.advance) {
       status = result.status
       break
     }
+    // Avançou: limpa qualquer marcação de espera anterior.
+    if (ctx.waiting) delete ctx.waiting
 
     const nextId = pickNextNodeId(node.id, result.nextHandle ?? null, graph.edges)
     if (!nextId) {
@@ -223,10 +244,24 @@ export async function handleIncomingFlowMessage(args: {
   if (!exec) return false
 
   const graph = exec.flow.graph as unknown as FlowGraph
+  const ctxFull = ((exec.context as unknown) as FlowContext | null) ?? { vars: {} }
   const node = graph.nodes.find((n) => n.id === exec.currentNodeId)
-  if (!node || node.type !== 'menu') {
-    // Só menu pausa em WAITING_INPUT; se chegou aqui é estado inconsistente
-    logger.warn({ flowExecutionId: exec.id, nodeId: exec.currentNodeId }, 'Input recebido em estado não-menu — ignorado')
+  if (!node) {
+    logger.warn({ flowExecutionId: exec.id, nodeId: exec.currentNodeId }, 'Nó atual inexistente — ignorado')
+    return false
+  }
+
+  // Despacha pela razão da pausa (retomada generalizada). Fallback: o tipo do nó.
+  const waitKind = ctxFull.waiting?.kind ?? (node.type === 'menu' ? 'menu' : null)
+
+  if (waitKind === 'input') {
+    return resumeInputNode(exec, node, ctxFull, graph, args)
+  }
+  if (waitKind === 'bot') {
+    return resumeBotNode(exec, node, ctxFull, graph, args)
+  }
+  if (waitKind !== 'menu' || node.type !== 'menu') {
+    logger.warn({ flowExecutionId: exec.id, nodeId: exec.currentNodeId, waitKind }, 'Input recebido em estado não-retomável — ignorado')
     return false
   }
 
@@ -264,9 +299,10 @@ export async function handleIncomingFlowMessage(args: {
   }
 
   // Atualiza context com a escolha e avança
-  const ctx = ((exec.context as unknown) as FlowContext | null) ?? { vars: {} }
+  const ctx = ctxFull
   ctx.lastMenuChoice = pickedHandle
   ctx.lastUserInput = input
+  delete ctx.waiting
 
   const nextId = pickNextNodeId(node.id, pickedHandle, graph.edges)
   await prisma.flowExecution.update({
@@ -283,6 +319,159 @@ export async function handleIncomingFlowMessage(args: {
   return true
 }
 
+// ─── Retomada de nós que pausam (input, bot multi-turno) ─────────────────────
+
+/**
+ * Retoma um nó `input`: valida a resposta do cliente conforme `inputType`.
+ * Em sucesso grava `ctx.vars[varName]` e avança pela saída default.
+ * Em falha reenvia `retryMessage` até `maxRetries`; esgotado, segue handle 'invalid'.
+ */
+async function resumeInputNode(
+  exec: { id: string },
+  node: FlowNode,
+  ctx: FlowContext,
+  graph: FlowGraph,
+  args: { conversationId: string; messageBody: string },
+): Promise<boolean> {
+  const data = node.data as InputNodeData
+  const raw = args.messageBody.trim()
+  const parsed = validateInput(raw, data.inputType ?? 'text')
+
+  ctx.lastUserInput = raw
+
+  if (parsed.ok) {
+    ctx.vars[data.varName] = parsed.value
+    delete ctx.waiting
+    const nextId = pickNextNodeId(node.id, null, graph.edges)
+    await prisma.flowExecution.update({
+      where: { id: exec.id },
+      data: { currentNodeId: nextId, context: ctx as any, status: nextId ? 'RUNNING' : 'COMPLETED' },
+    })
+    if (nextId) await runFlow({ flowExecutionId: exec.id })
+    return true
+  }
+
+  // Inválido: conta tentativa
+  const attempts = (ctx.waiting?.attempts ?? 0) + 1
+  const maxRetries = data.maxRetries ?? 2
+  if (attempts <= maxRetries) {
+    ctx.waiting = { nodeId: node.id, kind: 'input', attempts }
+    await prisma.flowExecution.update({ where: { id: exec.id }, data: { context: ctx as any } })
+    await sendSystemMessage({
+      conversationId: args.conversationId,
+      template: data.retryMessage ?? '❌ Valor inválido, tente novamente.',
+      kind: 'agent-welcome',
+      userId: null,
+    })
+    return false
+  }
+
+  // Esgotou tentativas: segue saída 'invalid' (ou default se não houver)
+  delete ctx.waiting
+  const nextId = pickNextNodeId(node.id, 'invalid', graph.edges) ?? pickNextNodeId(node.id, null, graph.edges)
+  await prisma.flowExecution.update({
+    where: { id: exec.id },
+    data: { currentNodeId: nextId, context: ctx as any, status: nextId ? 'RUNNING' : 'COMPLETED' },
+  })
+  if (nextId) await runFlow({ flowExecutionId: exec.id })
+  return true
+}
+
+/**
+ * Retoma um nó `start_bot` em modo awaitReply: realimenta a resposta do cliente
+ * no agente. Continua aguardando se o agente devolver texto (pergunta); avança
+ * quando o agente não retorna mais texto (encerrou) ou bate o teto de turnos.
+ */
+async function resumeBotNode(
+  exec: { id: string; workspaceId: string },
+  node: FlowNode,
+  ctx: FlowContext,
+  graph: FlowGraph,
+  args: { conversationId: string; messageBody: string },
+): Promise<boolean> {
+  const data = node.data as StartBotNodeData & { maxTurns?: number }
+  ctx.lastUserInput = args.messageBody.trim()
+  const history = Array.isArray(ctx.vars._botHistory) ? (ctx.vars._botHistory as string[]) : []
+  history.push(args.messageBody.trim())
+  ctx.vars._botHistory = history
+  const maxTurns = data.maxTurns ?? 6
+
+  let advance = false
+  try {
+    const { runAgentWithTools } = await import('../ai/agents/runAgentWithTools.js')
+    const res = await runAgentWithTools({
+      workspaceId: exec.workspaceId,
+      agentId: data.agentId,
+      userMessage: args.messageBody.trim(),
+      triggerEvent: { kind: 'flow', conversationId: args.conversationId } as any,
+    })
+    if (res.text && res.text.trim().length > 0 && history.length < maxTurns) {
+      await sendSystemMessage({
+        conversationId: args.conversationId,
+        template: res.text,
+        kind: 'agent-welcome',
+        userId: null,
+      })
+    } else {
+      advance = true
+    }
+  } catch (err) {
+    logger.error({ err, agentId: data.agentId }, 'Erro ao retomar agente no flow')
+    advance = true
+  }
+
+  if (!advance) {
+    ctx.waiting = { nodeId: node.id, kind: 'bot' }
+    await prisma.flowExecution.update({ where: { id: exec.id }, data: { context: ctx as any } })
+    return false
+  }
+
+  delete ctx.waiting
+  delete ctx.vars._botHistory
+  const nextId = pickNextNodeId(node.id, null, graph.edges)
+  await prisma.flowExecution.update({
+    where: { id: exec.id },
+    data: { currentNodeId: nextId, context: ctx as any, status: nextId ? 'RUNNING' : 'COMPLETED' },
+  })
+  if (nextId) await runFlow({ flowExecutionId: exec.id })
+  return true
+}
+
+/** Valida/normaliza um valor de input conforme o tipo. */
+function validateInput(
+  raw: string,
+  type: 'text' | 'number' | 'email' | 'phone' | 'date' | 'url',
+): { ok: true; value: unknown } | { ok: false } {
+  const v = raw.trim()
+  if (!v) return { ok: false }
+  switch (type) {
+    case 'number': {
+      const n = Number(v.replace(',', '.'))
+      return Number.isFinite(n) ? { ok: true, value: n } : { ok: false }
+    }
+    case 'email':
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? { ok: true, value: v } : { ok: false }
+    case 'phone': {
+      const digits = v.replace(/\D/g, '')
+      return digits.length >= 8 ? { ok: true, value: digits } : { ok: false }
+    }
+    case 'date': {
+      const d = new Date(v)
+      return Number.isNaN(d.getTime()) ? { ok: false } : { ok: true, value: d.toISOString() }
+    }
+    case 'url':
+      try {
+        const u = new URL(v)
+        return u.protocol === 'http:' || u.protocol === 'https:' ? { ok: true, value: v } : { ok: false }
+      } catch {
+        return { ok: false }
+      }
+    case 'text':
+    default:
+      return { ok: true, value: v }
+  }
+}
+
 /**
  * Cancela qualquer flow ativo da conversa (ex: humano assumiu e quer interromper).
  */
@@ -295,11 +484,47 @@ export async function cancelActiveFlows(conversationId: string, reason: string) 
 
 // ─── Execução de cada tipo de nó ─────────────────────────────────────────────
 
+/**
+ * Envelopa `executeNode` com a política de erro/retry do nó (Fase 4).
+ * Nós sem `retry`/`onError` se comportam como antes (erro propaga = FAILED).
+ */
+async function executeNodeWithPolicy(
+  node: FlowNode,
+  conversationId: string,
+  workspaceId: string,
+  ctx: FlowContext,
+  scope: FlowScope,
+  graph: FlowGraph,
+): Promise<NodeResult> {
+  const policy = (node.data ?? {}) as { retry?: { max: number; delayMs?: number }; onError?: 'fail' | 'continue' | 'handle' }
+  const maxAttempts = (policy.retry?.max ?? 0) + 1
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await executeNode(node, conversationId, workspaceId, ctx, scope, graph)
+    } catch (err) {
+      lastErr = err
+      logger.warn({ err, nodeId: node.id, attempt }, 'Nó lançou erro')
+      if (attempt < maxAttempts && policy.retry?.delayMs) {
+        await new Promise((r) => setTimeout(r, policy.retry!.delayMs))
+      }
+    }
+  }
+  // Esgotou tentativas: aplica política
+  const onError = policy.onError ?? 'fail'
+  if (onError === 'continue') return { advance: true }
+  if (onError === 'handle') return { advance: true, nextHandle: 'error' }
+  logger.error({ err: lastErr, nodeId: node.id }, 'Nó falhou — execução abortada')
+  return { advance: false, status: 'FAILED' }
+}
+
 async function executeNode(
   node: FlowNode,
   conversationId: string,
   workspaceId: string,
   ctx: FlowContext,
+  scope: FlowScope,
+  graph: FlowGraph,
 ): Promise<NodeResult> {
   switch (node.type) {
     case 'start':
@@ -312,7 +537,7 @@ async function executeNode(
       const data = node.data as MessageNodeData
       await sendSystemMessage({
         conversationId,
-        template: data.text,
+        template: interpolate(data.text, scope),
         kind: 'agent-welcome',
         userId: null,
       })
@@ -324,16 +549,17 @@ async function executeNode(
       const optionsText = data.options.map((o) => `${o.label}`).join('\n')
       await sendSystemMessage({
         conversationId,
-        template: `${data.prompt}\n\n${optionsText}`,
+        template: `${interpolate(data.prompt, scope)}\n\n${optionsText}`,
         kind: 'agent-welcome',
         userId: null,
       })
+      ctx.waiting = { nodeId: node.id, kind: 'menu' }
       return { advance: false, status: 'WAITING_INPUT' }
     }
 
     case 'condition': {
       const data = node.data as ConditionNodeData
-      const ok = await evaluateCondition(data, conversationId, ctx)
+      const ok = evaluateCondition(data, scope)
       return { advance: true, nextHandle: ok ? 'true' : 'false' }
     }
 
@@ -409,14 +635,14 @@ async function executeNode(
     }
 
     case 'start_bot': {
-      const data = node.data as any
+      const data = node.data as StartBotNodeData
       try {
         const lastMsg = await prisma.message.findFirst({
           where: { conversationId, direction: 'INBOUND' },
           orderBy: { receivedAt: 'desc' }
         })
         const text = lastMsg?.body ?? '(conversação iniciada)'
-        
+
         const { runAgentWithTools } = await import('../ai/agents/runAgentWithTools.js')
         const res = await runAgentWithTools({
           workspaceId,
@@ -441,10 +667,97 @@ async function executeNode(
         targetType: 'conversation', targetId: conversationId,
         payload: { agentId: data.agentId },
       })
-      
-      // Se awaitReply estivesse implementado, pausaria, mas por hora avançamos.
+
+      // Modo multi-turno: pausa aguardando a resposta do cliente (retomado por resumeBotNode).
+      if (data.awaitReply) {
+        ctx.vars._botHistory = []
+        ctx.waiting = { nodeId: node.id, kind: 'bot' }
+        return { advance: false, status: 'WAITING_INPUT' }
+      }
       return { advance: true }
     }
+
+    case 'input': {
+      const data = node.data as InputNodeData
+      await sendSystemMessage({
+        conversationId,
+        template: interpolate(data.prompt, scope),
+        kind: 'agent-welcome',
+        userId: null,
+      })
+      ctx.waiting = { nodeId: node.id, kind: 'input', attempts: 0 }
+      return { advance: false, status: 'WAITING_INPUT' }
+    }
+
+    case 'http_request':
+      return executeHttpRequest(node.data as HttpRequestNodeData, ctx, scope)
+
+    case 'set_variable': {
+      const data = node.data as SetVariableNodeData
+      for (const a of data.assignments ?? []) {
+        ctx.vars[a.varName] = evalValueExpr(a.valueExpr, scope)
+      }
+      return { advance: true }
+    }
+
+    case 'code':
+      return executeCodeNode(node.data as CodeNodeData, ctx)
+
+    case 'switch': {
+      const data = node.data as SwitchNodeData
+      for (const c of data.clauses ?? []) {
+        if (evaluateCondition({ field: c.field, op: c.op, value: c.value }, scope)) {
+          return { advance: true, nextHandle: c.handle }
+        }
+      }
+      return { advance: true, nextHandle: data.defaultHandle ?? 'default' }
+    }
+
+    case 'loop':
+      return executeLoopNode(node, conversationId, workspaceId, ctx, scope, graph)
+
+    case 'call_flow':
+      return executeCallFlow(node.data as CallFlowNodeData, conversationId, workspaceId, ctx, scope)
+
+    case 'close_conversation': {
+      const data = node.data as CloseConversationNodeData
+      const finalizer = data.finalizerLabel?.trim() || 'Autoatendimento'
+      if (data.closingMessage?.trim()) {
+        await sendSystemMessage({
+          conversationId,
+          template: interpolate(data.closingMessage, scope),
+          kind: 'closing',
+          userId: null,
+        })
+      }
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { status: 'RESOLVED', resolvedAt: new Date() },
+      })
+      await createInternalEvent({
+        workspaceId,
+        conversationId,
+        kind: 'note',
+        body: `Atendimento finalizado pelo ${finalizer}`,
+        meta: { source: 'flow', finalizer, auto: true },
+      })
+      await eventBus.audit(workspaceId, 'conversation.status_changed', {
+        targetType: 'conversation',
+        targetId: conversationId,
+        payload: { status: 'RESOLVED', source: 'flow', finalizer, auto: true },
+      })
+      // Encerrar o atendimento também encerra o fluxo.
+      return { advance: false, status: 'COMPLETED' }
+    }
+
+    case 'ai_generate':
+      return executeAiGenerate(node.data as AiGenerateNodeData, workspaceId, ctx, scope)
+
+    case 'send_message':
+      return executeSendMessage(node.data as SendMessageNodeData, workspaceId, conversationId, ctx, scope)
+
+    case 'check_notified':
+      return executeCheckNotified(node.data as CheckNotifiedNodeData, workspaceId, scope)
 
     case 'wait_for_human': {
       const data = node.data as WaitForHumanNodeData
@@ -588,6 +901,357 @@ function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }
 
+// ─── Helpers dos nós de lógica/integração ────────────────────────────────────
+
+/**
+ * Avalia o valueExpr de set_variable. Se for exatamente `{{ expr }}` (uma única
+ * expressão), preserva o tipo resolvido; caso contrário interpola como string.
+ */
+function evalValueExpr(valueExpr: string, scope: FlowScope): unknown {
+  const m = valueExpr.match(/^\s*\{\{\s*([^}]+?)\s*\}\}\s*$/)
+  if (m) return resolveExpr(m[1], scope)
+  return interpolate(valueExpr, scope)
+}
+
+/** Verifica se um IP literal está em faixa privada/loopback/link-local. */
+function isPrivateIp(ip: string): boolean {
+  if (net.isIPv6(ip)) {
+    const low = ip.toLowerCase()
+    return low === '::1' || low.startsWith('fc') || low.startsWith('fd') || low.startsWith('fe80') || low.startsWith('::ffff:')
+  }
+  const parts = ip.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true
+  const [a, b] = parts
+  if (a === 10 || a === 127 || a === 0) return true
+  if (a === 169 && b === 254) return true // link-local + metadata 169.254.169.254
+  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 192 && b === 168) return true
+  return false
+}
+
+/** Bloqueia URLs que apontam pra rede interna (proteção SSRF). Lança em violação. */
+async function assertSafeUrl(rawUrl: string): Promise<URL> {
+  let u: URL
+  try {
+    u = new URL(rawUrl)
+  } catch {
+    throw new Error(`URL inválida: ${rawUrl}`)
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    throw new Error(`Protocolo não permitido: ${u.protocol}`)
+  }
+  const host = u.hostname.toLowerCase()
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) {
+    throw new Error(`Host interno bloqueado: ${host}`)
+  }
+  if (net.isIP(host)) {
+    if (isPrivateIp(host)) throw new Error(`IP interno bloqueado: ${host}`)
+    return u
+  }
+  // Hostname: resolve e valida todos os IPs.
+  const records = await dns.lookup(host, { all: true })
+  if (records.some((r) => isPrivateIp(r.address))) {
+    throw new Error(`Host resolve para IP interno: ${host}`)
+  }
+  return u
+}
+
+async function executeHttpRequest(
+  data: HttpRequestNodeData,
+  ctx: FlowContext,
+  scope: FlowScope,
+): Promise<NodeResult> {
+  const url = interpolate(data.url, scope)
+  const timeout = Math.min(data.timeoutMs ?? 10_000, 30_000)
+  const saveAs = data.saveAs ?? 'http'
+
+  // Interpola headers/query/body
+  const headers: Record<string, string> = {}
+  for (const [k, v] of Object.entries(data.headers ?? {})) headers[k] = interpolate(v, scope)
+  const params: Record<string, string> = {}
+  for (const [k, v] of Object.entries(data.query ?? {})) params[k] = interpolate(v, scope)
+  let body: unknown = data.body
+  if (typeof data.body === 'string') body = interpolate(data.body, scope)
+
+  try {
+    await assertSafeUrl(url)
+    const res = await axios.request({
+      method: data.method,
+      url,
+      headers,
+      params,
+      data: body,
+      timeout,
+      maxContentLength: 5 * 1024 * 1024, // 5 MB
+      maxBodyLength: 5 * 1024 * 1024,
+      validateStatus: () => true, // tratamos status manualmente
+    })
+    ctx.vars[saveAs] = { status: res.status, body: res.data }
+    const ok = res.status >= 200 && res.status < 300
+    return { advance: true, nextHandle: ok ? 'success' : 'error' }
+  } catch (err) {
+    logger.warn({ err, url }, 'http_request falhou')
+    ctx.vars[saveAs] = { status: 0, error: String((err as Error)?.message ?? err) }
+    return { advance: true, nextHandle: 'error' }
+  }
+}
+
+function executeCodeNode(data: CodeNodeData, ctx: FlowContext): NodeResult {
+  const timeout = Math.min(data.timeoutMs ?? 1000, 5000)
+  const sandbox: Record<string, unknown> = {
+    vars: JSON.parse(JSON.stringify(ctx.vars ?? {})),
+    result: undefined,
+  }
+  try {
+    const script = new vm.Script(`result = (function(vars){ "use strict"; ${data.code}\n })(vars)`)
+    const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } })
+    script.runInContext(context, { timeout })
+    const out = sandbox.result
+    if (data.saveAs) {
+      ctx.vars[data.saveAs] = out
+    } else if (out && typeof out === 'object') {
+      Object.assign(ctx.vars, out as Record<string, unknown>)
+    }
+    return { advance: true }
+  } catch (err) {
+    logger.warn({ err }, 'code node falhou')
+    throw err // deixa a política de erro (executeNodeWithPolicy) decidir
+  }
+}
+
+const MAX_FLOW_DEPTH = 5
+
+/**
+ * Executa uma sub-cadeia inline a partir de `startId`, no MESMO contexto.
+ * Limitação: só nós que avançam (sem pausa). Se encontrar um nó que pausaria
+ * (menu/input/bot), interrompe e loga — pausar dentro de loop/sub-flow não é
+ * suportado nesta versão.
+ */
+async function runInlineChain(
+  graph: FlowGraph,
+  startId: string | null,
+  conversationId: string,
+  workspaceId: string,
+  ctx: FlowContext,
+  scope: FlowScope,
+  maxSteps = MAX_STEPS_DEFAULT,
+): Promise<void> {
+  let currentId = startId
+  let steps = 0
+  while (currentId && steps < maxSteps) {
+    const node = graph.nodes.find((n) => n.id === currentId)
+    if (!node) break
+    const result = await executeNodeWithPolicy(node, conversationId, workspaceId, ctx, scope, graph)
+    if (!result.advance) {
+      if (ctx.waiting) {
+        logger.warn({ nodeId: node.id }, 'Nó que pausa dentro de loop/sub-flow não é suportado — interrompido')
+        delete ctx.waiting
+      }
+      break
+    }
+    currentId = pickNextNodeId(node.id, result.nextHandle ?? null, graph.edges)
+    steps += 1
+  }
+}
+
+async function executeLoopNode(
+  node: FlowNode,
+  conversationId: string,
+  workspaceId: string,
+  ctx: FlowContext,
+  scope: FlowScope,
+  graph: FlowGraph,
+): Promise<NodeResult> {
+  const data = node.data as LoopNodeData
+  const arr = resolveExpr(data.itemsVar, scope)
+  if (!Array.isArray(arr)) {
+    logger.warn({ itemsVar: data.itemsVar }, 'loop: var não é array — pula corpo')
+    return { advance: true }
+  }
+  const itemVar = data.itemVar ?? 'item'
+  const max = Math.min(data.maxIterations ?? 100, arr.length)
+  const bodyStart = pickNextNodeId(node.id, 'loop', graph.edges)
+  if (bodyStart) {
+    for (let i = 0; i < max; i++) {
+      ctx.vars[itemVar] = arr[i]
+      ctx.vars[`${itemVar}Index`] = i
+      await runInlineChain(graph, bodyStart, conversationId, workspaceId, ctx, scope)
+    }
+  }
+  return { advance: true } // segue pela saída default (pós-loop)
+}
+
+async function executeCallFlow(
+  data: CallFlowNodeData,
+  conversationId: string,
+  workspaceId: string,
+  ctx: FlowContext,
+  scope: FlowScope,
+): Promise<NodeResult> {
+  const depth = typeof ctx.vars._flowDepth === 'number' ? (ctx.vars._flowDepth as number) : 0
+  if (depth >= MAX_FLOW_DEPTH) {
+    logger.warn({ flowId: data.flowId }, 'call_flow: profundidade máxima atingida — abortado')
+    return { advance: true, nextHandle: 'error' }
+  }
+  const child = await prisma.flow.findFirst({
+    where: { id: data.flowId, workspaceId },
+    select: { graph: true },
+  })
+  if (!child) {
+    logger.warn({ flowId: data.flowId }, 'call_flow: sub-fluxo não encontrado')
+    return { advance: true, nextHandle: 'error' }
+  }
+  const childGraph = child.graph as unknown as FlowGraph
+  const childStart = childGraph.nodes.find((n) => n.type === 'start')
+  if (!childStart) return { advance: true, nextHandle: 'error' }
+
+  // Monta contexto do filho a partir do inputMapping
+  const childCtx: FlowContext = { vars: { _flowDepth: depth + 1 } }
+  for (const [childVar, parentExpr] of Object.entries(data.inputMapping ?? {})) {
+    childCtx.vars[childVar] = resolveExpr(parentExpr, scope)
+  }
+  const childScope: FlowScope = { ctx: childCtx, conv: scope.conv, contact: scope.contact }
+  await runInlineChain(childGraph, childStart.id, conversationId, workspaceId, childCtx, childScope)
+
+  // Devolve vars do filho pro pai conforme outputMapping
+  for (const [parentVar, childVar] of Object.entries(data.outputMapping ?? {})) {
+    ctx.vars[parentVar] = childCtx.vars[childVar]
+  }
+  return { advance: true }
+}
+
+// ─── Nós proativos (cron / sem conversa) ─────────────────────────────────────
+
+/** Gera texto com um agente de IA e grava em ctx.vars. Não envia nada. */
+async function executeAiGenerate(
+  data: AiGenerateNodeData,
+  workspaceId: string,
+  ctx: FlowContext,
+  scope: FlowScope,
+): Promise<NodeResult> {
+  const { runAgent } = await import('../ai/agents/runAgent.js')
+  const prompt = interpolate(data.promptTemplate, scope)
+  const res = await runAgent({
+    workspaceId,
+    agentId: data.agentId,
+    ...(data.systemPrompt ? { systemPrompt: interpolate(data.systemPrompt, scope) } : {}),
+    ...(data.provider ? { provider: data.provider } : {}),
+    ...(data.model ? { model: data.model } : {}),
+    messages: [{ role: 'user', content: prompt }],
+    responseFormat: 'text',
+  })
+  ctx.vars[data.saveAs ?? 'aiText'] = res.text
+  return { advance: true }
+}
+
+/** Envia mensagem (proativa via enqueueMessage, ou responde na conversa atual). */
+async function executeSendMessage(
+  data: SendMessageNodeData,
+  workspaceId: string,
+  conversationId: string,
+  ctx: FlowContext,
+  scope: FlowScope,
+): Promise<NodeResult> {
+  // Modo "responder na conversa atual" — usa sendSystemMessage (WhatsApp).
+  if (data.toMode === 'conversation' && conversationId) {
+    await sendSystemMessage({
+      conversationId,
+      template: interpolate(data.body, scope),
+      kind: 'agent-welcome',
+      userId: null,
+    })
+    return { advance: true, nextHandle: 'success' }
+  }
+
+  const to = interpolate(data.to, scope).trim()
+  if (!to) {
+    logger.warn('send_message sem destinatário — pulando')
+    return { advance: true, nextHandle: 'error' }
+  }
+  const contactId = data.contactId ? interpolate(data.contactId, scope).trim() || null : null
+  // Canal: explícito (com {{...}}) ou, se vazio, o canal que disparou (ctx.vars.channelId).
+  const resolvedChannelId = (data.channelId ? interpolate(data.channelId, scope).trim() : '')
+    || (typeof ctx.vars.channelId === 'string' ? (ctx.vars.channelId as string) : '')
+    || null
+  try {
+    const { enqueueMessage } = await import('../communication/communication.service.js')
+    const res = await enqueueMessage({
+      workspaceId,
+      channelType: data.channelType,
+      channelId: resolvedChannelId,
+      to,
+      subject: data.subject ? interpolate(data.subject, scope) : null,
+      body: interpolate(data.body, scope),
+      contactId,
+      source: data.source || 'flow',
+    })
+    ctx.vars._lastSend = { messageId: (res as any)?.messageId ?? null, to }
+    return { advance: true, nextHandle: 'success' }
+  } catch (err) {
+    logger.warn({ err, to }, 'send_message falhou ao enfileirar')
+    return { advance: true, nextHandle: 'error' }
+  }
+}
+
+/** Ramifica se já houve envio recente (dedup) consultando CommMessage. */
+async function executeCheckNotified(
+  data: CheckNotifiedNodeData,
+  workspaceId: string,
+  scope: FlowScope,
+): Promise<NodeResult> {
+  const value = interpolate(data.value, scope).trim()
+  if (!value) return { advance: true, nextHandle: 'not_notified' }
+  const withinDays = data.withinDays ?? 2
+  const since = new Date(Date.now() - withinDays * 24 * 60 * 60 * 1000)
+  const recent = await prisma.commMessage.findFirst({
+    where: {
+      workspaceId,
+      status: 'SENT',
+      source: data.source,
+      sentAt: { gte: since },
+      ...(data.matchBy === 'contactId' ? { contactId: value } : { to: value }),
+    },
+    select: { id: true },
+  })
+  return { advance: true, nextHandle: recent ? 'notified' : 'not_notified' }
+}
+
+/**
+ * Runner PROATIVO (sem conversa): executa um fluxo disparado por cron.
+ * Não cria FlowExecution nem conversa — roda o grafo em memória via
+ * runInlineChain. Só faz sentido com nós puros + proativos (ai_generate,
+ * send_message, http_request, loop, etc). Nós que dependem de conversa
+ * (message/menu/input/...) são no-op aqui.
+ */
+export async function runFlowDetached(args: { workspaceId: string; flowId: string; vars?: Record<string, unknown> }) {
+  const { workspaceId, flowId } = args
+  const flow = await prisma.flow.findFirst({
+    where: { id: flowId, workspaceId, isActive: true },
+    select: { id: true, graph: true },
+  })
+  if (!flow) {
+    logger.warn({ flowId, workspaceId }, 'runFlowDetached: flow não encontrado ou inativo')
+    return
+  }
+  const graph = flow.graph as unknown as FlowGraph
+  const start = graph.nodes.find((n) => n.type === 'start')
+  if (!start) {
+    logger.error({ flowId }, 'runFlowDetached: flow sem nó start')
+    return
+  }
+  const ctx: FlowContext = { vars: { ...(args.vars ?? {}) } }
+  const scope: FlowScope = { ctx, conv: null, contact: null }
+
+  await eventBus.audit(workspaceId, 'flow.cron_run', {
+    targetType: 'flow', targetId: flowId, payload: { startedAt: new Date().toISOString() },
+  })
+  try {
+    await runInlineChain(graph, start.id, '', workspaceId, ctx, scope)
+  } catch (err) {
+    logger.error({ err, flowId }, 'runFlowDetached: erro na execução')
+  }
+}
+
 function pickNextNodeId(fromNodeId: string, handle: string | null, edges: FlowEdge[]): string | null {
   // Procura edge com sourceHandle igual ao requerido; se handle null/undefined,
   // procura edge sem sourceHandle (saída default).
@@ -602,12 +1266,8 @@ function pickNextNodeId(fromNodeId: string, handle: string | null, edges: FlowEd
   return any?.target ?? null
 }
 
-async function evaluateCondition(
-  data: ConditionNodeData,
-  conversationId: string,
-  ctx: FlowContext,
-): Promise<boolean> {
-  const value = await resolveFieldValue(data.field, conversationId, ctx)
+function evaluateCondition(data: ConditionNodeData, scope: FlowScope): boolean {
+  const value = resolveExpr(data.field, scope)
   const target = data.value
   switch (data.op) {
     case 'eq':       return value === target
@@ -627,28 +1287,4 @@ async function evaluateCondition(
     default:
       return false
   }
-}
-
-async function resolveFieldValue(field: string, conversationId: string, ctx: FlowContext): Promise<unknown> {
-  if (field.startsWith('context.')) {
-    const key = field.slice('context.'.length)
-    if (key === 'lastUserInput') return ctx.lastUserInput
-    if (key === 'lastMenuChoice') return ctx.lastMenuChoice
-    return ctx.vars[key]
-  }
-  if (field.startsWith('contact.') || field.startsWith('conv.')) {
-    const conv = await prisma.conversation.findUnique({
-      where: { id: conversationId },
-      include: { contact: true },
-    })
-    if (!conv) return null
-    if (field === 'conv.isGroup') return conv.isGroup
-    if (field === 'contact.name') return conv.contact?.name ?? null
-    if (field === 'contact.companyId') return conv.contact?.companyId ?? null
-    if (field === 'contact.tags') {
-      const meta = (conv.contact?.metadata as Record<string, unknown> | null) ?? {}
-      return Array.isArray(meta.tags) ? meta.tags : []
-    }
-  }
-  return null
 }

@@ -6,14 +6,29 @@ import { eventBus } from '../../lib/eventBus.js'
 
 const channelTypeEnum = z.enum(['WHATSAPP', 'GMAIL', 'IMAP_SMTP', 'INTERNAL', 'META_WHATSAPP', 'META_INSTAGRAM', 'META_MESSENGER'])
 
+const timeWindowSchema = z.object({
+  start: z.string().regex(/^\d{2}:\d{2}$/),
+  end: z.string().regex(/^\d{2}:\d{2}$/),
+  days: z.array(z.number().int().min(0).max(6)).optional(),
+  tz: z.string().optional(),
+})
+
 const matcherSchema = z.object({
   channelIds: z.array(z.string()).optional(),
   channelTypes: z.array(channelTypeEnum).optional(),
   companyIds: z.array(z.string()).optional(),
   contactTagsAny: z.array(z.string()).optional(),
+  contactTagsAll: z.array(z.string()).optional(),
   keywordsAny: z.array(z.string()).optional(),
+  keywordMode: z.enum(['any', 'all', 'regex']).optional(),
   isGroup: z.boolean().optional(),
   businessHoursOnly: z.boolean().optional(),
+  contactIds: z.array(z.string()).optional(),
+  excludeContactIds: z.array(z.string()).optional(),
+  conversationExternalIds: z.array(z.string()).optional(),
+  phonePrefixes: z.array(z.string()).optional(),
+  timeWindow: timeWindowSchema.optional(),
+  cooldownMin: z.number().int().min(0).max(1440).optional(),
 }).strict()
 
 const actionSchema = z.discriminatedUnion('type', [
@@ -23,13 +38,23 @@ const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('add_tag'), tags: z.array(z.string()).min(1) }),
 ])
 
+/** Aceita uma ação única (compat) ou uma lista de ações. */
+const actionsField = z.union([actionSchema, z.array(actionSchema).min(1)])
+
+/** Extrai o teamId do 1º assign_team (para a coluna denormalizada assignTeamId). */
+function deriveAssignTeamId(action: z.infer<typeof actionsField>): string | null {
+  const arr = Array.isArray(action) ? action : [action]
+  const t = arr.find((a) => a.type === 'assign_team')
+  return t && t.type === 'assign_team' ? t.teamId : null
+}
+
 const triggerSchema = z.enum(['new_conversation', 'message_received', 'manual'])
 
 const baseFields = {
   name: z.string().min(1).max(120),
   description: z.string().max(500).nullable().optional(),
   matcher: matcherSchema,
-  action: actionSchema,
+  action: actionsField,
   priority: z.number().int().min(0).max(10000).optional(),
   isActive: z.boolean().optional(),
   triggers: z.array(triggerSchema).optional(),
@@ -62,7 +87,7 @@ export const routingRulesRoutes: FastifyPluginAsyncZod = async (app) => {
     async (req, reply) => {
       const { workspaceId } = req.user
       const body = req.body
-      const assignTeamId = body.action.type === 'assign_team' ? body.action.teamId : null
+      const assignTeamId = deriveAssignTeamId(body.action)
       const rule = await prisma.routingRule.create({
         data: {
           workspaceId,
@@ -109,7 +134,7 @@ export const routingRulesRoutes: FastifyPluginAsyncZod = async (app) => {
       if (body.matcher !== undefined) data.matcher = body.matcher
       if (body.action !== undefined) {
         data.action = body.action
-        data.assignTeamId = body.action.type === 'assign_team' ? body.action.teamId : null
+        data.assignTeamId = deriveAssignTeamId(body.action)
       }
       if (body.priority !== undefined) data.priority = body.priority
       if (body.isActive !== undefined) data.isActive = body.isActive

@@ -4,15 +4,19 @@ import { prisma } from '../../lib/prisma.js'
 import { requirePerm } from '../../lib/acl.js'
 import { eventBus } from '../../lib/eventBus.js'
 import { startFlowForConversation, cancelActiveFlows } from './flow.executor.js'
+import { syncFlowCron, removeFlowCron } from './flowCronSync.js'
 
 const triggerSchema = z.object({
-  type: z.enum(['new_conversation', 'message_received', 'manual']),
+  type: z.enum(['new_conversation', 'message_received', 'manual', 'webhook', 'cron']),
   filters: z.object({
     channelIds: z.array(z.string()).optional(),
     channelTypes: z.array(z.string()).optional(),
     keywordsAny: z.array(z.string()).optional(),
     companyIds: z.array(z.string()).optional(),
   }).optional(),
+  webhookToken: z.string().min(8).optional(),
+  schedule: z.string().min(1).optional(),
+  scheduleTz: z.string().min(1).optional(),
 })
 
 const positionSchema = z.object({ x: z.number(), y: z.number() }).optional()
@@ -24,6 +28,8 @@ const nodeSchema = z.object({
     'assign_team', 'assign_user', 'start_bot',
     'wait_for_human', 'tag', 'end',
     'check_company_hours', 'check_user_available', 'find_free_slots', 'create_appointment',
+    'input', 'http_request', 'set_variable', 'code', 'switch', 'loop', 'call_flow',
+    'close_conversation', 'ai_generate', 'send_message', 'check_notified',
   ]),
   position: positionSchema,
   data: z.record(z.string(), z.any()),
@@ -65,6 +71,35 @@ function validateGraph(graph: z.infer<typeof graphSchema>): string[] {
     if (!ids.has(e.target)) warnings.push(`Edge ${e.id}: target ${e.target} não existe`)
   }
   return warnings
+}
+
+/**
+ * Verifica referências do grafo/trigger contra o workspace de destino (usado no
+ * import). IDs de agente/setor/usuário/sub-fluxo/canal são específicos do
+ * workspace de origem — aqui avisamos quais não existem para reconfigurar.
+ */
+async function scanGraphRefs(graph: any, trigger: any, workspaceId: string): Promise<string[]> {
+  const w: string[] = []
+  const agentIds = new Set<string>(), teamIds = new Set<string>(), userIds = new Set<string>(), flowIds = new Set<string>()
+  for (const n of graph?.nodes ?? []) {
+    const d = (n.data ?? {}) as any
+    if (d.agentId) agentIds.add(d.agentId)
+    if ((n.type === 'assign_team' || n.type === 'wait_for_human') && d.teamId) teamIds.add(d.teamId)
+    if (d.userId) userIds.add(d.userId)
+    if (d.ownerId) userIds.add(d.ownerId)
+    if (n.type === 'call_flow' && d.flowId) flowIds.add(d.flowId)
+  }
+  const channelIds: string[] = Array.isArray(trigger?.filters?.channelIds) ? trigger.filters.channelIds : []
+
+  const check = async (ids: Iterable<string>, exists: (id: string) => Promise<boolean>, label: string) => {
+    for (const id of ids) if (!(await exists(id))) w.push(`${label} "${id}" não existe neste workspace — reconfigure no editor.`)
+  }
+  await check(agentIds, async (id) => !!(await prisma.agent.findFirst({ where: { id, workspaceId }, select: { id: true } })), 'Agente')
+  await check(teamIds, async (id) => !!(await prisma.team.findFirst({ where: { id, workspaceId }, select: { id: true } })), 'Setor')
+  await check(userIds, async (id) => !!(await prisma.user.findFirst({ where: { id }, select: { id: true } })), 'Usuário')
+  await check(flowIds, async (id) => !!(await prisma.flow.findFirst({ where: { id, workspaceId }, select: { id: true } })), 'Sub-fluxo')
+  await check(channelIds, async (id) => !!(await prisma.channel.findFirst({ where: { id, workspaceId }, select: { id: true } })), 'Canal (filtro do gatilho)')
+  return w
 }
 
 export const flowsRoutes: FastifyPluginAsyncZod = async (app) => {
@@ -126,6 +161,80 @@ export const flowsRoutes: FastifyPluginAsyncZod = async (app) => {
         actorUserId: req.user.sub, targetType: 'flow', targetId: flow.id,
         payload: { name: flow.name },
       })
+      void syncFlowCron(flow.id)
+      return reply.code(201).send({ ...flow, warnings })
+    },
+  )
+
+  // ── Exportar fluxo (JSON portável) ───────────────────────────────────────
+  app.get(
+    '/flows/:id/export',
+    {
+      onRequest: [app.authenticate, requirePerm('flows.manage')],
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const flow = await prisma.flow.findFirst({
+        where: { id: req.params.id, workspaceId },
+        select: { name: true, description: true, trigger: true, graph: true },
+      })
+      if (!flow) return reply.notFound('Flow não encontrado')
+      const trigger = { ...((flow.trigger as Record<string, unknown> | null) ?? {}) }
+      delete (trigger as any).webhookToken // não exporta segredo do webhook
+      return {
+        _type: 'aiwa.flow',
+        _version: 1,
+        exportedAt: new Date().toISOString(),
+        name: flow.name,
+        description: flow.description,
+        trigger,
+        graph: flow.graph,
+      }
+    },
+  )
+
+  // ── Importar fluxo ───────────────────────────────────────────────────────
+  app.post(
+    '/flows/import',
+    {
+      onRequest: [app.authenticate, requirePerm('flows.manage')],
+      schema: {
+        body: z.object({
+          _type: z.string().optional(),
+          _version: z.number().optional(),
+          exportedAt: z.string().optional(),
+          name: z.string().min(1).max(120).optional(),
+          description: z.string().nullable().optional(),
+          trigger: triggerSchema.optional(),
+          graph: graphSchema,
+        }).passthrough(),
+      },
+    },
+    async (req, reply) => {
+      const { workspaceId } = req.user
+      const body = req.body
+      const warnings = validateGraph(body.graph)
+      warnings.push(...(await scanGraphRefs(body.graph, body.trigger, workspaceId)))
+
+      const trigger = { ...((body.trigger as Record<string, unknown> | undefined) ?? { type: 'manual' }) }
+      delete (trigger as any).webhookToken // segredo não vem no import
+
+      const flow = await prisma.flow.create({
+        data: {
+          workspaceId,
+          name: body.name?.trim() || 'Fluxo importado',
+          description: body.description ?? null,
+          trigger: trigger as any,
+          graph: body.graph as any,
+          isActive: false, // importado sempre inativo — revise e publique
+          priority: 100,
+        },
+      })
+      await eventBus.audit(workspaceId, 'flow.imported', {
+        actorUserId: req.user.sub, targetType: 'flow', targetId: flow.id,
+        payload: { name: flow.name, warnings: warnings.length },
+      })
       return reply.code(201).send({ ...flow, warnings })
     },
   )
@@ -165,6 +274,8 @@ export const flowsRoutes: FastifyPluginAsyncZod = async (app) => {
         where: { id: req.params.id },
         data,
       })
+      // Trigger/isActive podem ter mudado → re-sincroniza o cron
+      void syncFlowCron(flow.id)
       return { ...flow, warnings }
     },
   )
@@ -189,6 +300,7 @@ export const flowsRoutes: FastifyPluginAsyncZod = async (app) => {
         data: { status: 'CANCELLED', completedAt: new Date() },
       })
       await prisma.flow.delete({ where: { id: req.params.id } })
+      void removeFlowCron(req.params.id)
       return reply.code(204).send()
     },
   )
@@ -224,6 +336,45 @@ export const flowsRoutes: FastifyPluginAsyncZod = async (app) => {
         conversationId: conv.id,
       })
       return { ok: true, executionId: exec?.id ?? null }
+    },
+  )
+
+  // ── Trigger por webhook externo (público, validado por token) ────────────
+  // Inicia o fluxo numa conversa existente, com o payload do webhook em
+  // ctx.vars.webhook. Conversa é obrigatória pois o engine é conversation-bound.
+  app.post(
+    '/flows/:id/webhook/:token',
+    {
+      schema: {
+        params: z.object({ id: z.string(), token: z.string() }),
+        body: z.object({ conversationId: z.string() }).passthrough(),
+      },
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    },
+    async (req, reply) => {
+      const flow = await prisma.flow.findFirst({
+        where: { id: req.params.id, isActive: true },
+        select: { id: true, workspaceId: true, trigger: true },
+      })
+      if (!flow) return reply.notFound('Flow ativo não encontrado')
+      const trigger = (flow.trigger as { type?: string; webhookToken?: string } | null) ?? {}
+      if (trigger.type !== 'webhook' || !trigger.webhookToken || trigger.webhookToken !== req.params.token) {
+        return reply.unauthorized('Token de webhook inválido')
+      }
+      const { conversationId, ...payload } = req.body as Record<string, unknown> & { conversationId: string }
+      const conv = await prisma.conversation.findFirst({
+        where: { id: conversationId, workspaceId: flow.workspaceId },
+        select: { id: true },
+      })
+      if (!conv) return reply.notFound('Conversa não encontrada')
+
+      const exec = await startFlowForConversation({
+        workspaceId: flow.workspaceId,
+        flowId: flow.id,
+        conversationId: conv.id,
+        initialContext: { vars: { webhook: payload } },
+      })
+      return reply.code(202).send({ ok: true, executionId: exec?.id ?? null })
     },
   )
 

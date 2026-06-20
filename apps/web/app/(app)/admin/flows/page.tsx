@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Plus, Pencil, Trash2, Power, GitBranch, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, Power, GitBranch, X, Download, Upload } from 'lucide-react'
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { AdminPageLayout } from '@/components/admin/AdminPageLayout'
 
@@ -86,10 +86,48 @@ export default function FlowsPage() {
   const queryClient = useQueryClient()
   const confirm = useConfirm()
   const [creating, setCreating] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { data: flows = [] } = useQuery<Flow[]>({
     queryKey: ['flows'],
     queryFn: () => apiFetch('/flows'),
+  })
+
+  async function exportFlow(id: string, name: string) {
+    try {
+      const data = await apiFetch<Record<string, unknown>>(`/flows/${id}/export`)
+      const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase().replace(/^-|-$/g, '') || 'fluxo'
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${slug}.flow.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Falha ao exportar')
+    }
+  }
+
+  const importFlow = useMutation({
+    mutationFn: async (file: File) => {
+      const text = await file.text()
+      let json: unknown
+      try { json = JSON.parse(text) } catch { throw new Error('Arquivo não é um JSON válido') }
+      return apiFetch<{ id: string; name: string; warnings: string[] }>('/flows/import', {
+        method: 'POST', body: JSON.stringify(json),
+      })
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['flows'] })
+      if (res.warnings?.length) {
+        toast.warning(`Importado com avisos — revise no editor:\n${res.warnings.join('\n')}`, { duration: 9000 })
+      } else {
+        toast.success('Fluxo importado (inativo) — revise e publique')
+      }
+      window.location.href = `/admin/flows/${res.id}/edit`
+    },
+    onError: (e: any) => toast.error(e?.message ?? 'Falha ao importar fluxo'),
   })
 
   const remove = useMutation({
@@ -116,10 +154,22 @@ export default function FlowsPage() {
         icon={GitBranch}
         description="Crie jornadas com menus, condições e direcionamento automático."
         action={
-          <button onClick={() => setCreating(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium">
-            <Plus className="h-3.5 w-3.5" /> Novo fluxo
-          </button>
+          <div className="flex items-center gap-2">
+            <input ref={fileInputRef} type="file" accept="application/json,.json" className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) importFlow.mutate(file)
+                e.target.value = '' // permite reimportar o mesmo arquivo
+              }} />
+            <button onClick={() => fileInputRef.current?.click()} disabled={importFlow.isPending}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium hover:bg-accent disabled:opacity-50">
+              <Upload className="h-3.5 w-3.5" /> {importFlow.isPending ? 'Importando...' : 'Importar'}
+            </button>
+            <button onClick={() => setCreating(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium">
+              <Plus className="h-3.5 w-3.5" /> Novo fluxo
+            </button>
+          </div>
         }
       >
         {flows.length === 0 ? (
@@ -153,6 +203,10 @@ export default function FlowsPage() {
                     className={`p-2 rounded hover:bg-accent ${f.isActive ? 'text-green-600' : 'text-muted-foreground'}`}
                     title={f.isActive ? 'Despublicar' : 'Publicar'}>
                     <Power className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => exportFlow(f.id, f.name)}
+                    className="p-2 rounded hover:bg-accent text-muted-foreground" title="Exportar (JSON)">
+                    <Download className="h-3.5 w-3.5" />
                   </button>
                   <Link href={`/admin/flows/${f.id}/edit`} className="p-2 rounded hover:bg-accent text-muted-foreground" title="Editar">
                     <Pencil className="h-3.5 w-3.5" />
