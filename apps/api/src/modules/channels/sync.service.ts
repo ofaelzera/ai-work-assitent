@@ -482,19 +482,38 @@ export async function syncWhatsAppChannel(
         if (created) counts.newContacts++
       }
 
-      await prisma.message.create({
-        data: {
-          workspaceId: channel.workspaceId,
-          conversationId: targetConvId,
-          direction: fromMe ? 'OUTBOUND' : 'INBOUND',
-          externalId: externalMsgId,
-          fromContactId,
-          body,
-          sentAt,
-          attachments: mediaInfo ? [mediaInfo] as any : undefined,
-        },
-      })
-      // (contadores já incrementados quando o destino foi decidido)
+      try {
+        await prisma.message.create({
+          data: {
+            workspaceId: channel.workspaceId,
+            conversationId: targetConvId,
+            direction: fromMe ? 'OUTBOUND' : 'INBOUND',
+            externalId: externalMsgId,
+            fromContactId,
+            body,
+            sentAt,
+            attachments: mediaInfo ? [mediaInfo] as any : undefined,
+          },
+        })
+        // (contadores já incrementados quando o destino foi decidido)
+      } catch (err) {
+        logger.error({ err, externalMsgId, remoteJid }, 'Falha ao criar mensagem no sync.service (tentando fallback para evitar loop)')
+        try {
+          await prisma.message.create({
+            data: {
+              workspaceId: channel.workspaceId,
+              conversationId: targetConvId,
+              direction: fromMe ? 'OUTBOUND' : 'INBOUND',
+              externalId: externalMsgId,
+              fromContactId,
+              body: '[Erro de Sincronização: Conteúdo Inválido]',
+              sentAt,
+            }
+          })
+        } catch (fallbackErr) {
+          logger.error({ err: fallbackErr, externalMsgId }, 'Falha crítica ao criar mensagem de fallback')
+        }
+      }
     }
 
     // Atualiza lastMessageAt da conv LIVE se chegaram novas mensagens

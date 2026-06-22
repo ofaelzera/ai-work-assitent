@@ -687,8 +687,13 @@ export default function ConversationSidebar({ view = 'conversations' }: { view?:
       // Força a refetch de todas as listas onde a conversa pode ter entrado/saído
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
       // Força o refetch da conversa específica, para que se o usuário clicar nela
-      // não use uma versão em cache sem a nova mensagem
-      queryClient.invalidateQueries({ queryKey: ['conversation', payload.conversationId] })
+      // não use uma versão em cache sem a nova mensagem.
+      // Porém, se ela estiver ativa E a janela não tiver foco, não invalidamos
+      // agora para não marcá-la como lida automaticamente (via refetch).
+      const query = queryClient.getQueryCache().find({ queryKey: ['conversation', payload.conversationId] })
+      if (!query?.isActive() || document.hasFocus()) {
+        queryClient.invalidateQueries({ queryKey: ['conversation', payload.conversationId] })
+      }
     } else if (
       event.type === 'conversation.read' ||
       event.type === 'conversation.status_changed' ||

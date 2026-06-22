@@ -1303,6 +1303,13 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
       queryClient.invalidateQueries({ queryKey: ['conversations'] })
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
     },
+    onError: (_err: any, variables) => {
+      setText(variables.text)
+      if (variables.quotedMsgId && variables.quotedBody && variables.quotedSender) {
+        setReplyTo({ msgId: variables.quotedMsgId, body: variables.quotedBody, sender: variables.quotedSender })
+      }
+      toast.error(_err?.message ?? 'Erro ao enviar mensagem. Tente novamente.')
+    },
   })
 
   const sendMediaMutation = useMutation({
@@ -1517,8 +1524,10 @@ export default function WhatsappView({ conversationId, conv, messages, isLoading
           }
         }
       })
-      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
-      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      if (document.hasFocus()) {
+        queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+      }
+
     }
 
     if (

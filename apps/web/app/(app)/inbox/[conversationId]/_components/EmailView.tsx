@@ -679,8 +679,9 @@ export default function EmailView({ conversationId, conv, messages, isLoading }:
           }
         }
       })
-      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
-      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      if (document.hasFocus()) {
+        queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+      }
     }
   })
 
