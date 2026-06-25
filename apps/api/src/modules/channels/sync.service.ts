@@ -371,35 +371,7 @@ export async function syncWhatsAppChannel(
             orderBy: { createdAt: 'asc' },
           })
 
-          // Antes de criar nova, tenta REABRIR a conv RESOLVED mais recente
-          // (modelo chat-contínuo: cliente respondendo após finalização reabre o mesmo ticket).
-          // Importante: chegamos aqui pq a `msg` em curso passou o filtro de cursor
-          // (sentAt > último salvo), então sabemos que é mensagem genuinamente nova.
-          if (!liveConv) {
-            const resolvedToReopen = await prisma.conversation.findFirst({
-              where: { channelId, externalId: remoteJid, source: 'LIVE', status: 'RESOLVED' },
-              orderBy: { lastMessageAt: 'desc' },
-            })
-            if (resolvedToReopen) {
-              // Volta pra fila pública — atendente que finalizou não fica novamente
-              // responsável automaticamente.
-              liveConv = await prisma.conversation.update({
-                where: { id: resolvedToReopen.id },
-                data: {
-                  status: 'OPEN',
-                  resolvedAt: null,
-                  assigneeId: null,
-                  claimedAt: null,
-                  reopenCount: { increment: 1 },
-                  lastMessageAt: sentAt,
-                  unreadCount: remoteUnread,
-                },
-              })
-              logger.info({ conversationId: liveConv.id, remoteJid }, 'Conv RESOLVED reaberta no sync — voltou pra fila')
-            }
-          }
-
-          // Se nem ativa nem RESOLVED — primeira vez do chat, cria nova
+          // Nova mensagem sem conv ativa → sempre cria novo ticket (reabertura é só manual via UI)
           if (!liveConv) {
             liveConv = await prisma.conversation.create({
               data: {
