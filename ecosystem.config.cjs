@@ -30,7 +30,7 @@ module.exports = {
       watch: false,
       env: {
         NODE_ENV: 'production',
-        PORT: 3000,
+        PORT: 3090,
       },
       out_file: './logs/aiwa-web.out.log',
       error_file: './logs/aiwa-web.err.log',
