@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { RefreshCw, Ban, Plus, Paperclip, X, FileText } from 'lucide-react'
+import { RefreshCw, Ban, Plus, Paperclip, X, FileText, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CommMessage, CommStatus, Channel, CommChannel, STATUS_COLORS, STATUS_LABELS, channelMatches } from './types'
 import { Modal, Field, inputCls, formatBytes } from './ui'
@@ -16,6 +16,7 @@ export function MessageQueue() {
   const qc = useQueryClient()
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [composeOpen, setComposeOpen] = useState(false)
+  const [detailId, setDetailId] = useState<string | null>(null)
 
   const { data: messages = [], isLoading } = useQuery({
     queryKey: ['comm-messages', statusFilter],
@@ -67,7 +68,8 @@ export function MessageQueue() {
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                {['FAILED', 'CANCELED'].includes(m.status) && (
+                <button title="Detalhes" onClick={() => setDetailId(m.id)} className="p-1.5 rounded-lg hover:bg-muted"><Info className="h-4 w-4 text-muted-foreground" /></button>
+                {['PENDING', 'FAILED', 'CANCELED'].includes(m.status) && (
                   <button title="Tentar de novo" onClick={() => retryMutation.mutate(m.id)} className="p-1.5 rounded-lg hover:bg-muted"><RefreshCw className="h-4 w-4 text-primary" /></button>
                 )}
                 {['PENDING', 'SCHEDULED'].includes(m.status) && (
@@ -80,8 +82,115 @@ export function MessageQueue() {
       )}
 
       {composeOpen && <ComposeModal onClose={() => { setComposeOpen(false); invalidate() }} />}
+      {detailId && <MessageDetailModal messageId={detailId} onClose={() => setDetailId(null)} onChanged={invalidate} />}
     </div>
   )
+}
+
+interface MessageDetail {
+  id: string
+  channelType: CommChannel
+  to: string
+  subject: string | null
+  body: string
+  status: CommStatus
+  attempts: number
+  lastError: string | null
+  externalId: string | null
+  source: string
+  scheduledAt: string | null
+  sentAt: string | null
+  createdAt: string
+  logs: { id: string; type: string; detail: any; createdAt: string }[]
+  attachments: { id: string; filename: string; mimeType: string; sizeBytes: number }[]
+}
+
+const LOG_LABELS: Record<string, string> = {
+  CREATED: 'Criada', PROCESSING: 'Processando', PROVIDER_OK: 'Enviada ao provedor',
+  PROVIDER_ERROR: 'Erro do provedor', RETRY: 'Reenfileirada', CANCELED: 'Cancelada', RECEIVED: 'Recebida',
+}
+
+function MessageDetailModal({ messageId, onClose, onChanged }: { messageId: string; onClose: () => void; onChanged: () => void }) {
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['comm-message', messageId],
+    queryFn: () => apiFetch<MessageDetail>(`/comm/messages/${messageId}`),
+    refetchInterval: 3000,
+  })
+
+  const retryMutation = useMutation({
+    mutationFn: () => apiFetch(`/comm/messages/${messageId}/retry`, { method: 'POST' }),
+    onSuccess: () => { refetch(); onChanged(); toast.success('Reenfileirada') },
+    onError: (e: any) => toast.error(e?.message ?? 'Erro'),
+  })
+
+  return (
+    <Modal onClose={onClose} title="Detalhes da mensagem">
+      {isLoading || !data ? (
+        <p className="text-sm text-muted-foreground">Carregando…</p>
+      ) : (
+        <div className="space-y-4 text-sm">
+          <div className="flex items-center gap-2">
+            <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', STATUS_COLORS[data.status])}>{STATUS_LABELS[data.status]}</span>
+            <span className="text-muted-foreground text-xs">{data.channelType === 'WHATSAPP' ? 'WhatsApp' : 'E-mail'} · origem: {data.source}</span>
+            {['PENDING', 'FAILED', 'CANCELED'].includes(data.status) && (
+              <button onClick={() => retryMutation.mutate()} className="ml-auto flex items-center gap-1 text-xs text-primary hover:underline"><RefreshCw className="h-3.5 w-3.5" /> Tentar de novo</button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <Info2 label="Destinatário" value={data.to} />
+            {data.subject && <Info2 label="Assunto" value={data.subject} />}
+            <Info2 label="Tentativas" value={String(data.attempts)} />
+            <Info2 label="ID externo" value={data.externalId ?? '—'} />
+            <Info2 label="Criada" value={new Date(data.createdAt).toLocaleString('pt-BR')} />
+            <Info2 label="Enviada" value={data.sentAt ? new Date(data.sentAt).toLocaleString('pt-BR') : '—'} />
+            {data.scheduledAt && <Info2 label="Agendada" value={new Date(data.scheduledAt).toLocaleString('pt-BR')} />}
+          </div>
+
+          {data.lastError && (
+            <div className="rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/20 dark:border-red-900 p-3">
+              <p className="text-xs font-medium text-red-700 dark:text-red-400 mb-1">Último erro</p>
+              <p className="text-xs text-red-800 dark:text-red-300 break-words">{data.lastError}</p>
+            </div>
+          )}
+
+          {data.attachments.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">Anexos</p>
+              <div className="space-y-1">
+                {data.attachments.map((a) => (
+                  <div key={a.id} className="flex items-center gap-2 text-xs"><FileText className="h-3.5 w-3.5 text-muted-foreground" /> {a.filename} <span className="text-muted-foreground">({formatBytes(a.sizeBytes)})</span></div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1.5">Histórico</p>
+            <div className="space-y-1.5">
+              {data.logs.map((l) => (
+                <div key={l.id} className="flex items-start gap-2 text-xs">
+                  <span className="text-muted-foreground shrink-0 w-32">{new Date(l.createdAt).toLocaleString('pt-BR')}</span>
+                  <span className="font-medium shrink-0">{LOG_LABELS[l.type] ?? l.type}</span>
+                  {l.detail?.error && <span className="text-red-600 break-words">— {String(l.detail.error).slice(0, 120)}</span>}
+                  {l.detail?.attempt && !l.detail?.error && <span className="text-muted-foreground">— tentativa {l.detail.attempt}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1">Conteúdo</p>
+            <pre className="rounded-lg border bg-black/5 dark:bg-white/5 p-3 text-xs whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{data.body}</pre>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function Info2({ label, value }: { label: string; value: string }) {
+  return <div><span className="text-muted-foreground">{label}: </span><span className="break-words">{value}</span></div>
 }
 
 function fileToBase64(file: File): Promise<string> {

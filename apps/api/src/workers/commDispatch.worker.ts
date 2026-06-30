@@ -31,16 +31,18 @@ export function startCommDispatchWorker() {
         where: { OR: attOr },
         select: { filename: true, mimeType: true, storageKey: true },
       })
-      // Cancelada entre o enqueue e o processamento → pula
-      if (msg.status === 'CANCELED' || msg.status === 'SENT') {
-        return
-      }
-
+      // Claim atômico: só processa se ainda estiver PENDING. Isso impede envio em
+      // dobro quando a mesma mensagem é re-enfileirada (retry manual ou rede de
+      // segurança do scheduler) — apenas UM job ganha o claim.
       const attemptNo = msg.attempts + 1
-      await prisma.commMessage.update({
-        where: { id: msg.id },
+      const claim = await prisma.commMessage.updateMany({
+        where: { id: msg.id, status: 'PENDING' },
         data: { status: 'PROCESSING', attempts: attemptNo },
       })
+      if (claim.count === 0) {
+        logger.info({ messageId, status: msg.status }, 'commDispatch: mensagem já processada/cancelada por outro job — pulando')
+        return
+      }
       await prisma.commMessageLog.create({
         data: { commMessageId: msg.id, type: 'PROCESSING', detail: { attempt: attemptNo } },
       })

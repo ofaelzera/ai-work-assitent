@@ -97,6 +97,25 @@ export async function enqueueMessage(input: EnqueueInput): Promise<EnqueueResult
 }
 
 /**
+ * Rede de segurança: re-enfileira mensagens "presas" em PENDING há muito tempo
+ * (job perdido no Redis, criadas em versão antiga, restart no meio, etc.). O
+ * claim atômico no worker garante que não há envio em dobro caso ainda exista um
+ * job vivo. O update re-carimba `updatedAt` pra não re-pegar a cada varredura.
+ */
+export async function requeueStuckPending(olderThanMs = 5 * 60 * 1000, now: Date = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - olderThanMs)
+  const stuck = await prisma.commMessage.findMany({
+    where: { status: 'PENDING', updatedAt: { lt: cutoff } },
+    select: { id: true, priority: true },
+  })
+  for (const m of stuck) {
+    const res = await prisma.commMessage.updateMany({ where: { id: m.id, status: 'PENDING' }, data: { status: 'PENDING' } })
+    if (res.count > 0) await queueDispatch(m.id, m.priority)
+  }
+  return stuck.length
+}
+
+/**
  * Varredura de mensagens agendadas: promove as SCHEDULED cujo horário já chegou
  * para PENDING e as enfileira. Roda em intervalo fixo no scheduler — robusto a
  * reagendamentos e quedas do servidor.

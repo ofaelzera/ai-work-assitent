@@ -1,5 +1,5 @@
 import { logger } from '../lib/logger.js'
-import { sweepScheduledMessages } from '../modules/communication/communication.service.js'
+import { sweepScheduledMessages, requeueStuckPending } from '../modules/communication/communication.service.js'
 import { sweepScheduledCampaigns, campaignDispatchQueue } from '../modules/communication/campaigns.service.js'
 
 const SWEEP_INTERVAL_MS = 30_000 // 30s
@@ -22,9 +22,13 @@ export function startCommScheduler() {
 
   async function tick() {
     try {
-      const [msgs, camps] = await Promise.all([sweepScheduledMessages(), sweepScheduledCampaigns()])
-      if (msgs > 0 || camps > 0) {
-        logger.info({ messages: msgs, campaigns: camps }, 'commScheduler: itens agendados disparados')
+      const [msgs, camps, stuck] = await Promise.all([
+        sweepScheduledMessages(),
+        sweepScheduledCampaigns(),
+        requeueStuckPending(),
+      ])
+      if (msgs > 0 || camps > 0 || stuck > 0) {
+        logger.info({ messages: msgs, campaigns: camps, requeued: stuck }, 'commScheduler: itens disparados/recuperados')
       }
     } catch (err: any) {
       logger.error({ err: err?.message }, 'commScheduler tick falhou')
