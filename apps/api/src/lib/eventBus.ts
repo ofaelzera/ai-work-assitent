@@ -25,6 +25,16 @@ class EventBus extends EventEmitter {
   }
 
   /**
+   * Emite SSE SEM persistir no EventLog. Use quando a fonte da verdade já está
+   * em outra tabela (ex.: `notification.new` — a Notification já é persistida)
+   * e o EventLog só geraria ruído de auditoria.
+   */
+  emitSSE(workspaceId: string, type: string, payload: unknown): void {
+    this.emit(type, { workspaceId, type, payload })
+    this.emit('*', { workspaceId, type, payload } as SSEEvent)
+  }
+
+  /**
    * Emite SSE + persiste EventLog com actor (quem fez) e target (no que).
    * Use pra ações de usuário: claim, status_changed, card.created, etc.
    */

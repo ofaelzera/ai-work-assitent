@@ -9,6 +9,7 @@ import { startWhatsappGroupsSyncWorker } from './whatsappGroupsSync.worker.js'
 import { startCommDispatchWorker } from './commDispatch.worker.js'
 import { startCampaignDispatchWorker } from './campaignDispatch.worker.js'
 import { startCommScheduler } from './commScheduler.js'
+import { startRemindersScheduler } from './remindersScheduler.js'
 import { syncAllCronAgents } from '../modules/ai/cronSync.js'
 import { syncAllCronFlows } from '../modules/flows/flowCronSync.js'
 import { logger } from '../lib/logger.js'
@@ -30,6 +31,9 @@ export function startWorkers() {
 
   // Scheduler da Central de Comunicação (varredura de agendados a cada 30s)
   startCommScheduler()
+
+  // Scheduler de lembretes/notificações (Task/Card/CalendarEvent a cada 60s)
+  startRemindersScheduler()
 
   // Sweep inicial dos crons de agente (alinha BullMQ com o DB)
   syncAllCronAgents().catch((err) => logger.error({ err }, 'syncAllCronAgents inicial falhou'))

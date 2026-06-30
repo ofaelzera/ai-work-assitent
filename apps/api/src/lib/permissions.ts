@@ -62,6 +62,9 @@ export const PERMISSIONS = {
   // ── Relatórios ────────────────────────────────────────────────────────────
   'reports.view':              'Acessar relatórios e métricas',
 
+  // ── Notificações ──────────────────────────────────────────────────────────
+  'notifications.manage':      'Configurar regras de disparo e galeria de sons de notificações',
+
   // ── Campanhas / Central de Comunicação ────────────────────────────────────
   'campaigns.view':            'Acessar o módulo de Campanhas e Central de Comunicação',
   'campaigns.manage':          'Criar / editar / disparar campanhas, listas e API keys de envio',
@@ -129,6 +132,7 @@ export const SYSTEM_ROLES: SystemRoleTemplate[] = [
       'teams.view', 'teams.viewAll', 'teams.manage',
       'flows.manage',
       'reports.view',
+      'notifications.manage',
       'campaigns.view', 'campaigns.manage',
       'calendar.view', 'calendar.viewOthers', 'calendar.createForOthers',
       'calendar.editOthers', 'calendar.cancelOthers', 'calendar.manageWorkingHours',

@@ -1,12 +1,19 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { toast } from 'sonner'
+import { NOTIFICATION_SSE, type NotificationNewPayload } from '@aiwa/shared'
 import { useSSE } from '@/lib/sse'
+import { apiFetch } from '@/lib/api'
+import { useAuthStore } from '@/store/auth'
 import { isDesktop, notifyNative, setUnreadBadge } from '@/lib/desktop'
+import { playNotificationSound } from '@/lib/notification-sound'
 
 export function NotificationManager() {
   const pathname = usePathname()
+  const router = useRouter()
+  const currentUserId = useAuthStore((s) => s.user?.sub)
   const originalTitleRef = useRef<string>('')
   const blinkIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -153,6 +160,52 @@ export function NotificationManager() {
         // Opcional: navegar direto para a conversa, mas como isso é global, precisaria usar o router do Next. 
         // Mas a pessoa já clicou na notificação, a aba ganhou foco.
         notification.close()
+      }
+    }
+  })
+
+  // ── Notificações da central (lembretes, eventos, kanban, IA) ──────────────
+  useSSE((ev) => {
+    if (ev.type !== NOTIFICATION_SSE.NEW) return
+    const p = ev.payload as NotificationNewPayload | undefined
+    if (!p) return
+
+    // Só notifica o destinatário.
+    if (currentUserId && p.userId && p.userId !== currentUserId) return
+
+    // Modo não-perturbe (DND) ou som desligado: a central já registrou a
+    // notificação (o sino atualiza via SSE); aqui não tocamos som nem toast.
+    if (p.silent) return
+
+    // 1. Som distinto por categoria (≠ som de novas mensagens).
+    void playNotificationSound(p.soundId, p.category)
+
+    // 2. Toast por prioridade, com ação de abrir o item relacionado.
+    const opts = {
+      description: p.body ?? undefined,
+      ...(p.link
+        ? { action: { label: 'Abrir', onClick: () => router.push(p.link as string) } }
+        : {}),
+    }
+    if (p.priority === 'CRITICAL' || p.priority === 'HIGH') toast.warning(p.title, opts)
+    else toast.info(p.title, opts)
+
+    // 3. Notificação de SO (desktop/navegador) quando a aba não está focada.
+    const isWindowActive = document.visibilityState === 'visible' && document.hasFocus()
+    if (!isWindowActive) {
+      if (isDesktop()) {
+        notifyNative(p.title, p.body ?? '')
+      } else if ('Notification' in window && Notification.permission === 'granted') {
+        const notification = new Notification(p.title, {
+          body: p.body ?? '',
+          icon: '/favicon.ico',
+          tag: `notif-${p.id}`,
+        })
+        notification.onclick = () => {
+          window.focus()
+          if (p.link) router.push(p.link)
+          notification.close()
+        }
       }
     }
   })

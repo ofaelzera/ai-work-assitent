@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { Save, UserRound, MessageSquare, KeyRound, Calendar as CalendarIcon, Plug, Trash2, Camera, Upload, Clock, LayoutDashboard } from 'lucide-react'
+import { Save, UserRound, MessageSquare, KeyRound, Calendar as CalendarIcon, Plug, Trash2, Camera, Upload, Clock, LayoutDashboard, Bell } from 'lucide-react'
 import MessageTemplateField from '@/components/MessageTemplateField'
 import { WeeklyHoursEditor, type HoursRow } from '@/components/WeeklyHoursEditor'
 import { useAuthStore } from '@/store/auth'
@@ -549,6 +549,109 @@ function WorkingHoursPanel({ userId }: { userId: string }) {
   return <WeeklyHoursEditor rows={rows} onSave={(r) => save.mutate(r)} saving={save.isPending} />
 }
 
+// ─── Preferências de notificação ─────────────────────────────────────────────
+interface NotifPrefs {
+  inAppEnabled: boolean
+  emailEnabled: boolean
+  whatsappEnabled: boolean
+  soundEnabled: boolean
+  dndEnabled: boolean
+  dndStart: string | null
+  dndEnd: string | null
+}
+
+function NotificationPrefsPanel() {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery<NotifPrefs>({
+    queryKey: ['notif-settings-me'],
+    queryFn: () => apiFetch('/notifications/settings/me'),
+  })
+
+  const [prefs, setPrefs] = useState<NotifPrefs | null>(null)
+  useEffect(() => {
+    if (data) setPrefs(data)
+  }, [data])
+
+  const save = useMutation({
+    mutationFn: (patch: Partial<NotifPrefs>) =>
+      apiFetch('/notifications/settings/me', { method: 'PUT', body: JSON.stringify(patch) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notif-settings-me'] })
+      toast.success('Preferências salvas')
+    },
+    onError: () => toast.error('Erro ao salvar'),
+  })
+
+  if (isLoading || !prefs) return <p className="text-sm text-muted-foreground">Carregando...</p>
+
+  const set = (patch: Partial<NotifPrefs>) => setPrefs({ ...prefs, ...patch })
+
+  return (
+    <div className="space-y-4">
+      <Toggle
+        label="Notificações no sistema"
+        description="Mostrar lembretes e alertas no sino e em toasts"
+        value={prefs.inAppEnabled}
+        onChange={(v) => set({ inAppEnabled: v })}
+      />
+      <Toggle
+        label="Som das notificações"
+        description="Tocar um som ao receber uma notificação (distinto do som de mensagens)"
+        value={prefs.soundEnabled}
+        onChange={(v) => set({ soundEnabled: v })}
+      />
+      <Toggle
+        label="Receber por e-mail"
+        description="Quando o evento tiver e-mail habilitado nas regras"
+        value={prefs.emailEnabled}
+        onChange={(v) => set({ emailEnabled: v })}
+      />
+      <Toggle
+        label="Receber por WhatsApp"
+        description="Quando o evento tiver WhatsApp habilitado nas regras"
+        value={prefs.whatsappEnabled}
+        onChange={(v) => set({ whatsappEnabled: v })}
+      />
+
+      <div className="border-t pt-4 space-y-3">
+        <Toggle
+          label="Não perturbe"
+          description="Silencia som e toasts no intervalo definido (a notificação ainda aparece no sino)"
+          value={prefs.dndEnabled}
+          onChange={(v) => set({ dndEnabled: v })}
+        />
+        {prefs.dndEnabled && (
+          <div className="flex items-center gap-2 pl-12">
+            <input
+              type="time"
+              className="rounded-lg border bg-transparent px-3 py-2 text-sm"
+              value={prefs.dndStart ?? ''}
+              onChange={(e) => set({ dndStart: e.target.value || null })}
+            />
+            <span className="text-sm text-muted-foreground">até</span>
+            <input
+              type="time"
+              className="rounded-lg border bg-transparent px-3 py-2 text-sm"
+              value={prefs.dndEnd ?? ''}
+              onChange={(e) => set({ dndEnd: e.target.value || null })}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="flex justify-end border-t pt-2">
+        <button
+          onClick={() => save.mutate(prefs)}
+          disabled={save.isPending}
+          className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          <Save className="h-4 w-4" /> Salvar preferências
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function ProfilePage() {
   // Mount guard: evita hydration mismatch — várias subseções dependem de estado
   // assíncrono (auth, queries, OAuth account list) que diverge entre SSR e CSR.
@@ -626,6 +729,11 @@ export default function ProfilePage() {
           {isLoading || !profile
             ? <p className="text-sm text-muted-foreground">Carregando...</p>
             : <WorkingHoursPanel userId={profile.id} />}
+        </Section>
+
+        <Section title="Notificações" icon={Bell}
+          description="Escolha como receber lembretes e alertas, sons e horário de não perturbe.">
+          <NotificationPrefsPanel />
         </Section>
 
         <Section title="Personalizar dashboard" icon={LayoutDashboard}

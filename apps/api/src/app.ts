@@ -40,6 +40,7 @@ import { systemSettingsRoutes } from './modules/system-settings/system-settings.
 import { integrationsRoutes } from './modules/integrations/integrations.routes.js'
 import { communicationRoutes } from './modules/communication/communication.routes.js'
 import { commPublicApiRoutes } from './modules/communication/comm-public-api.routes.js'
+import { notificationsRoutes } from './modules/notifications/notifications.routes.js'
 import type { JwtPayload } from '@aiwa/shared'
 
 declare module '@fastify/jwt' {
@@ -231,6 +232,7 @@ export async function buildApp() {
   await app.register(integrationsRoutes)
   await app.register(communicationRoutes)
   await app.register(commPublicApiRoutes)
+  await app.register(notificationsRoutes)
 
   return app
 }

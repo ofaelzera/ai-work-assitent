@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { eventBus } from '../../../lib/eventBus.js'
+import { aiLevelToPriority } from '@aiwa/shared'
+import { dispatch } from '../../notifications/notification.service.js'
 import type { ToolDef } from './types.js'
 
 const paramsSchema = z.object({
@@ -25,18 +26,17 @@ export const notifyTool: ToolDef<typeof paramsSchema> = {
     },
   },
   async execute(ctx, params) {
-    await eventBus.audit(ctx.workspaceId, 'notification', {
-      actorUserId: null,
-      targetType: 'workspace',
-      targetId: ctx.workspaceId,
-      payload: {
-        title: params.title,
-        body: params.body ?? null,
-        link: params.link ?? null,
-        level: params.level ?? 'info',
-        source: 'ai-agent',
-        agentId: ctx.agentId ?? null,
-      },
+    // Passa pela central de notificações (persiste, aplica regras/canais/sons e
+    // emite SSE). Notificação de IA é workspace-wide.
+    await dispatch({
+      workspaceId: ctx.workspaceId,
+      eventType: 'AI_NOTIFICATION',
+      scope: 'workspace',
+      title: params.title,
+      body: params.body ?? null,
+      link: params.link ?? null,
+      priority: aiLevelToPriority(params.level),
+      metadata: { source: 'ai-agent', agentId: ctx.agentId ?? null, level: params.level ?? 'info' },
     })
     return { ok: true, result: { delivered: true } }
   },

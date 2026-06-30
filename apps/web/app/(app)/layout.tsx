@@ -27,7 +27,8 @@ import {
   Mails,
   PieChart,
   ListChecks,
-  Radio
+  Radio,
+  Bell
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
@@ -38,6 +39,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSSE } from '@/lib/sse'
 import { useTheme } from 'next-themes'
 import { NotificationManager } from '@/components/providers/NotificationManager'
+import { NotificationBell } from '@/components/NotificationBell'
 import { DesktopBridge } from '@/components/providers/DesktopBridge'
 
 /**
@@ -119,6 +121,7 @@ const navGroups: NavGroup[] = [
       { href: '/admin/users', label: 'Usuários', icon: Users, perm: 'admin.users' },
       { href: '/admin/roles', label: 'Roles e permissões', icon: Lock, perm: 'admin.users' },
       { href: '/admin/teams', label: 'Setores', icon: Building2, perm: 'teams.manage' },
+      { href: '/admin/notifications', label: 'Notificações', icon: Bell, perm: 'notifications.manage' },
       { href: '/admin/settings', label: 'Configurações', icon: Settings, perm: 'admin.settings' },
     ]
   }
@@ -451,7 +454,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 </>
               )}
             </div>
-            <ThemeToggle />
+            <div className="flex items-center gap-0.5">
+              <NotificationBell />
+              <ThemeToggle />
+            </div>
           </div>
         </div>
 

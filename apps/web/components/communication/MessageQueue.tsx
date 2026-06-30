@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
-import { RefreshCw, Ban, Plus, Paperclip, X, FileText } from 'lucide-react'
+import { RefreshCw, Ban, Plus, Paperclip, X, FileText, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CommMessage, CommStatus, Channel, CommChannel, STATUS_COLORS, STATUS_LABELS, channelMatches } from './types'
 import { Modal, Field, inputCls, formatBytes } from './ui'
@@ -16,6 +16,7 @@ export function MessageQueue() {
   const qc = useQueryClient()
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [composeOpen, setComposeOpen] = useState(false)
+  const [detailId, setDetailId] = useState<string | null>(null)
 
   const { data: messages = [], isLoading } = useQuery({
     queryKey: ['comm-messages', statusFilter],
@@ -67,7 +68,8 @@ export function MessageQueue() {
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                {['FAILED', 'CANCELED'].includes(m.status) && (
+                <button title="Detalhes" onClick={() => setDetailId(m.id)} className="p-1.5 rounded-lg hover:bg-muted"><Info className="h-4 w-4 text-muted-foreground" /></button>
+                {['PENDING', 'FAILED', 'CANCELED'].includes(m.status) && (
                   <button title="Tentar de novo" onClick={() => retryMutation.mutate(m.id)} className="p-1.5 rounded-lg hover:bg-muted"><RefreshCw className="h-4 w-4 text-primary" /></button>
                 )}
                 {['PENDING', 'SCHEDULED'].includes(m.status) && (

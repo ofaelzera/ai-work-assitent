@@ -51,6 +51,10 @@ model Workspace {
   commMessages          CommMessage[]
   commAttachments       CommAttachment[]
   commApiKeys           CommApiKey[]
+  notifications         Notification[]
+  notificationRules     NotificationTriggerRule[]
+  notificationSettings  UserNotificationSettings[]
+  notificationSounds    NotificationSound[]
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -87,6 +91,8 @@ model User {
   transfersFrom         ConversationTransfer[]    @relation("TransferFromUser")
   transfersTo           ConversationTransfer[]    @relation("TransferToUser")
   transfersBy           ConversationTransfer[]    @relation("TransferActor")
+  notifications         Notification[]            @relation("UserNotifications")
+  notificationSettings  UserNotificationSettings[] @relation("UserNotifSettings")
 
   @@index([workspaceId])
   @@index([customRoleId])
@@ -1531,5 +1537,124 @@ model CommApiKey {
   workspace Workspace @relation(fields: [workspaceId], references: [id])
 
   @@unique([prefix])
+  @@index([workspaceId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Central de Lembretes e Notificações
+// Arquitetura desacoplada: EventType (catálogo em packages/shared) + canais
+// plugáveis + regras de disparo (TriggerRule) + preferências por usuário.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum NotificationPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// Instância persistida de uma notificação entregue a UM usuário (in-app).
+// Permanece visível até ser lida ou dispensada.
+model Notification {
+  id          String               @id @default(cuid())
+  workspaceId String
+  userId      String // destinatário
+  eventType   String // chave do catálogo (TASK_DUE_SOON, AI_NOTIFICATION, ...)
+  category    String // agrupamento visual/sonoro (task, card, calendar, system)
+  priority    NotificationPriority @default(MEDIUM)
+  title       String
+  body        String?              @db.Text
+  link        String? // URL relativa pra abrir o item (ex: /tasks, /kanban/abc)
+  soundId     String? // som da galeria a tocar (null = som padrão da categoria)
+  metadata    Json? // { taskId?, cardId?, eventId?, contactId?, ... }
+  readAt      DateTime?
+  dismissedAt DateTime?
+  createdAt   DateTime             @default(now())
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id])
+  user      User               @relation("UserNotifications", fields: [userId], references: [id])
+  sound     NotificationSound? @relation(fields: [soundId], references: [id])
+
+  @@index([workspaceId, userId, readAt])
+  @@index([workspaceId, userId, dismissedAt])
+}
+
+// Regra de disparo por tipo de evento, no escopo do workspace.
+model NotificationTriggerRule {
+  id                  String               @id @default(cuid())
+  workspaceId         String
+  eventType           String
+  enabled             Boolean              @default(true)
+  leadTimeMinutes     Int? // antecedência do aviso (5, 60, 1440, ...); null = no momento
+  channels            Json                 @default("[\"in_app\"]") // ["in_app","email","whatsapp"]
+  recipientContactIds Json? // contatos a notificar via canais externos
+  externalChannelId   String? // Channel.id usado p/ envio externo (null = resolver padrão)
+  soundId             String? // som da galeria associado a este evento
+  priority            NotificationPriority @default(MEDIUM)
+  dndStart            String? // "HH:MM" início do não-perturbe
+  dndEnd              String? // "HH:MM" fim do não-perturbe
+  dndWeekdays         Json? // [0..6] dias com DND ativo (0=domingo)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id])
+  sound     NotificationSound? @relation("RuleSound", fields: [soundId], references: [id])
+
+  @@unique([workspaceId, eventType])
+  @@index([workspaceId])
+}
+
+// Preferências de notificação por usuário (override pessoal das regras).
+model UserNotificationSettings {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  userId          String
+  inAppEnabled    Boolean  @default(true)
+  emailEnabled    Boolean  @default(false)
+  whatsappEnabled Boolean  @default(false)
+  soundEnabled    Boolean  @default(true)
+  dndEnabled      Boolean  @default(false)
+  dndStart        String? // "HH:MM"
+  dndEnd          String? // "HH:MM"
+  dndWeekdays     Json? // [0..6]
+  perCategory     Json? // { task: { inApp, email, ... }, calendar: {...} }
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  user      User      @relation("UserNotifSettings", fields: [userId], references: [id])
+
+  @@unique([workspaceId, userId])
+}
+
+// Galeria de sons (CRUD + upload). Arquivos em env.STORAGE_PATH.
+model NotificationSound {
+  id          String   @id @default(cuid())
+  workspaceId String
+  label       String
+  category    String? // associação opcional a uma categoria/eventType
+  storageKey  String // caminho relativo dentro de STORAGE_PATH
+  mimeType    String
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  workspace     Workspace                 @relation(fields: [workspaceId], references: [id])
+  notifications Notification[]
+  rules         NotificationTriggerRule[] @relation("RuleSound")
+
+  @@index([workspaceId])
+}
+
+// Log de idempotência: garante que um lembrete não dispare em dobro.
+model ReminderDispatchLog {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  eventType       String
+  entityType      String // task | card | event
+  entityId        String
+  leadTimeMinutes Int      @default(0)
+  sentAt          DateTime @default(now())
+
+  @@unique([entityType, entityId, eventType, leadTimeMinutes])
   @@index([workspaceId])
 }

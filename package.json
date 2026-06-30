@@ -25,8 +25,5 @@
   "engines": {
     "node": ">=20",
     "pnpm": ">=9"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "argon2", "esbuild", "msgpackr-extract", "prisma"]
   }
 }
