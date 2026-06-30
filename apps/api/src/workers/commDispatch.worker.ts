@@ -94,7 +94,11 @@ export function startCommDispatchWorker() {
         throw err
       }
     },
-    { connection: redis, concurrency: 10 },
+    // Sequencial (1 por vez): envia uma mensagem, depois a próxima, e assim por
+    // diante — mais previsível e mais seguro contra bloqueio do WhatsApp por
+    // disparo em massa. Mensagens agendadas entram na fila quando vencem e
+    // seguem a mesma ordem.
+    { connection: redis, concurrency: 1 },
   )
 
   worker.on('failed', (job, err) => {
