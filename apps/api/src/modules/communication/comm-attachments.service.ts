@@ -34,6 +34,9 @@ function sanitizeName(name: string): string {
 
 /** Grava um buffer no storage local e devolve os metadados normalizados. */
 async function persist(workspaceId: string, filename: string, mimeType: string, buffer: Buffer): Promise<StoredAttachment> {
+  if (buffer.byteLength === 0) {
+    throw new Error(`Anexo "${filename}" está vazio`)
+  }
   if (buffer.byteLength > MAX_ATTACHMENT_BYTES) {
     throw new Error(`Anexo "${filename}" excede o limite de 25 MB`)
   }

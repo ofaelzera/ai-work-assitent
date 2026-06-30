@@ -78,10 +78,15 @@ export const commPublicApiRoutes: FastifyPluginAsync = async (app) => {
         if (part.type === 'file') {
           const chunks: Buffer[] = []
           for await (const chunk of part.file) chunks.push(chunk)
+          const buffer = Buffer.concat(chunks)
+          // Rejeita anexo vazio (ex.: referência de arquivo não resolvida no cliente).
+          if (buffer.byteLength === 0) {
+            return reply.code(400).send({ success: false, error: `Anexo "${part.filename ?? 'arquivo'}" está vazio — verifique se o arquivo foi enviado corretamente.` })
+          }
           attachments.push({
             tipo: 'buffer',
             nome: part.filename ?? 'arquivo',
-            buffer: Buffer.concat(chunks),
+            buffer,
             mime_type: part.mimetype,
           })
         } else {
@@ -106,8 +111,9 @@ export const commPublicApiRoutes: FastifyPluginAsync = async (app) => {
       agendarPara = b.agendar_para
       if (Array.isArray(b.anexos)) {
         for (const a of b.anexos) {
-          if (a?.tipo === 'url') attachments.push({ tipo: 'url', nome: a.nome, arquivo: a.arquivo, mime_type: a.mime_type })
-          else if (a?.tipo === 'base64') attachments.push({ tipo: 'base64', nome: a.nome, arquivo: a.arquivo, mime_type: a.mime_type })
+          if (a?.tipo === 'url' && a.arquivo) attachments.push({ tipo: 'url', nome: a.nome, arquivo: a.arquivo, mime_type: a.mime_type })
+          else if (a?.tipo === 'base64' && a.arquivo) attachments.push({ tipo: 'base64', nome: a.nome, arquivo: a.arquivo, mime_type: a.mime_type })
+          else return reply.code(400).send({ success: false, error: 'Anexo inválido: informe "tipo" (url|base64) e "arquivo".' })
         }
       }
     }
@@ -138,7 +144,7 @@ export const commPublicApiRoutes: FastifyPluginAsync = async (app) => {
       })
     } catch (err: any) {
       logger.error({ err: err?.message, workspaceId: auth.workspaceId }, 'Falha ao enfileirar mensagem via API pública')
-      return reply.code(500).send({ success: false, error: 'Falha ao enfileirar mensagem' })
+      return reply.code(500).send({ success: false, error: err?.message ?? 'Falha ao enfileirar mensagem' })
     }
   })
 }

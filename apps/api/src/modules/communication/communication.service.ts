@@ -11,8 +11,9 @@ import { storeAttachments, type AttachmentInput } from './comm-attachments.servi
 export const commDispatchQueue = new Queue('commDispatch', { connection: redis })
 
 const DEFAULT_JOB_OPTS = {
-  attempts: 3,
-  backoff: { type: 'exponential' as const, delay: 30_000 },
+  attempts: 5,
+  // 1ª re-tentativa rápida (cobre lag de read-after-write); depois cresce.
+  backoff: { type: 'exponential' as const, delay: 5_000 },
   removeOnComplete: 1000,
   removeOnFail: 5000,
 }
@@ -102,7 +103,7 @@ export async function enqueueMessage(input: EnqueueInput): Promise<EnqueueResult
  * claim atômico no worker garante que não há envio em dobro caso ainda exista um
  * job vivo. O update re-carimba `updatedAt` pra não re-pegar a cada varredura.
  */
-export async function requeueStuckPending(olderThanMs = 5 * 60 * 1000, now: Date = new Date()): Promise<number> {
+export async function requeueStuckPending(olderThanMs = 90 * 1000, now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - olderThanMs)
   const stuck = await prisma.commMessage.findMany({
     where: { status: 'PENDING', updatedAt: { lt: cutoff } },

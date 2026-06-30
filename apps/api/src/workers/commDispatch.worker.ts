@@ -17,10 +17,20 @@ export function startCommDispatchWorker() {
     async (job) => {
       const { messageId } = job.data as { messageId: string }
 
-      const msg = await prisma.commMessage.findUnique({ where: { id: messageId } })
+      // Read-after-write: o job costuma chegar antes da linha estar visível pra
+      // esta conexão (lag de réplica). Tenta algumas vezes em ~2s antes de devolver
+      // ao BullMQ — resolve o lag pequeno (caso comum) quase na hora.
+      let msg = await prisma.commMessage.findUnique({ where: { id: messageId } })
+      for (let i = 0; i < 4 && !msg; i++) {
+        await new Promise((r) => setTimeout(r, 500))
+        msg = await prisma.commMessage.findUnique({ where: { id: messageId } })
+      }
       if (!msg) {
-        logger.warn({ messageId }, 'commDispatch: mensagem não encontrada — ignorada')
-        return
+        // Ainda não visível após ~2s: lança pra re-tentar com backoff (próximo
+        // retry quase sempre já enxerga). Se a mensagem realmente não existir,
+        // esgota as tentativas e o job é descartado.
+        logger.warn({ messageId, attempt: job.attemptsMade + 1 }, 'commDispatch: mensagem ainda não visível (lag de leitura) — vai re-tentar')
+        throw new Error(`Mensagem ${messageId} não encontrada (retry por lag de leitura)`)
       }
 
       // Anexos: os da própria mensagem + os de nível de campanha (compartilhados
